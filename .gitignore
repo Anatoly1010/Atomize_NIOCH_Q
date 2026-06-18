@@ -16,3 +16,12 @@ atomize/temp.csv
 instructions.out
 test
 test.param
+libs/treatment_buffer.csv
+libs/treatment_lastdir.txt
+libs/excitation_lastdir.txt
+libs/script_lastdir.txt
+libs/data_lastdir.txt
+libs/phase_lastdir.txt
+libs/phase_awg_lastdir.txt
+libs/status
+libs/*.param
