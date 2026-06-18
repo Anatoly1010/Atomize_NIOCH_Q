@@ -414,6 +414,53 @@ class Keysight_2000_Xseries:
                     xs = np.arange( len(array_y) ) * ( 10**(-6) * self.oscilloscope_time_resolution() )
                     return xs, array_y, integ
 
+    def oscilloscope_iq(self, arr_i, arr_q, freq, ph, ph1, ph2, integral = False):
+        """
+        IQ demodulation + phase correction of the acquired data. Mirrors
+        Spectrum_M4I_4450_X8.digitizer_iq, but the sampling step comes from the
+        Keysight scope timebase (oscilloscope_time_resolution(), in us/point)
+        instead of a fixed digitizer sample rate.
+
+        arr_i / arr_q : in-phase / quadrature data (CH1 / CH2; 1D oscillogram or
+                        2D points x delays); freq in MHz; ph/ph1/ph2 the zero/
+                        first/second order phase-correction coefficients.
+        Returns the demodulated (I, Q); with integral = True (2D input) returns
+        the windowed integral over [win_left:win_right] for each delay column.
+        """
+        if np.isnan(arr_i).any() or np.isnan(arr_q).any():
+            return arr_i, arr_q
+
+        signal = arr_i + 1j * arr_q
+        timeaxis = signal.shape[0]
+
+        dt = self.oscilloscope_time_resolution()    # us per point
+        fs = 1e6 / dt                               # sampling frequency, Hz
+        t = np.arange(timeaxis) / fs
+        f_offset = freq * 1e6
+
+        if (ph1 != 0.0) or (ph2 != 0.0):
+            correction = np.exp(-1j * (2 * np.pi * f_offset * t + ph + ph1 * t + ph2 * t**2) )
+        else:
+            correction = np.exp(-1j * (2 * np.pi * f_offset * t + ph) )
+
+        new_shape = (timeaxis,) + (1,) * (signal.ndim - 1)
+        corrected_signal = signal * correction.reshape(new_shape)
+
+        if not integral:
+            return corrected_signal.real, corrected_signal.imag
+        elif (integral) and len(signal.shape) == 2:
+
+            scale = dt * 1000                       # ns per point
+            window = corrected_signal[self.win_left : self.win_right, :]
+
+            res_i = np.sum(window.real, axis=0) * scale
+            res_q = np.sum(window.imag, axis=0) * scale
+
+            return res_i, res_q
+
+        else:
+            raise ValueError("Incorrect dimension of the array")
+
     def oscilloscope_sensitivity(self, *channel):
         if self.test_flag != 'test':
             if len(channel) == 2:
