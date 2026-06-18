@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import QWidget, QFileDialog
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt
 import atomize.general_modules.general_functions as general
-import atomize.device_modules.PB_ESR_500_pro as pb_pro
+import atomize.device_modules.PB_Micran as pb_pro
 ###import atomize.device_modules.BH_15 as bh
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -36,7 +36,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Load the UI Page
         uic.loadUi(gui_path, self)                                          # Design file
 
-        self.pb = pb_pro.PB_ESR_500_Pro()
+        self.pb = pb_pro.PB_Micran()
         ###self.bh15 = bh.BH_15()
         
         # Phase correction
@@ -737,8 +737,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def check_length(self, length):
         self.errors.clear()
 
-        if int( length ) != 0 and int( length ) < 12:
-            self.errors.appendPlainText( 'Pulse should be longer than 12 ns' )
+        if int( length ) != 0 and int( length ) < 8:
+            self.errors.appendPlainText( 'Pulse should be longer than 8 ns' )
 
         return length
 
@@ -771,8 +771,8 @@ class MainWindow(QtWidgets.QMainWindow):
         A function to set pulse 1 start
         """
         self.p1_start = self.P1_st.value()
-        if self.p1_start % 2 != 0:
-            self.p1_start = self.p1_start + 1
+        if self.p1_start % 4 != 0:
+            self.p1_start = self.p1_start + (4 - (self.p1_start % 4))
             self.P1_st.setValue( self.p1_start )
 
         self.p1_start = self.add_ns( self.P1_st.value() )
@@ -782,8 +782,8 @@ class MainWindow(QtWidgets.QMainWindow):
         A function to set pulse 2 start
         """
         self.p2_start = self.P2_st.value()
-        if self.p2_start % 2 != 0:
-            self.p2_start = self.p2_start + 1
+        if self.p2_start % 4 != 0:
+            self.p2_start = self.p2_start + (4 - (self.p2_start % 4))
             self.P2_st.setValue( self.p2_start )
 
         self.p2_start = self.add_ns( self.P2_st.value() )
@@ -793,8 +793,8 @@ class MainWindow(QtWidgets.QMainWindow):
         A function to set pulse 3 start
         """
         self.p3_start = self.P3_st.value()
-        if self.p3_start % 2 != 0:
-            self.p3_start = self.p3_start + 1
+        if self.p3_start % 4 != 0:
+            self.p3_start = self.p3_start + (4 - (self.p3_start % 4))
             self.P3_st.setValue( self.p3_start )
 
         self.p3_start = self.add_ns( self.P3_st.value() )
@@ -804,8 +804,8 @@ class MainWindow(QtWidgets.QMainWindow):
         A function to set pulse 4 start
         """
         self.p4_start = self.P4_st.value()
-        if self.p4_start % 2 != 0:
-            self.p4_start = self.p4_start + 1
+        if self.p4_start % 4 != 0:
+            self.p4_start = self.p4_start + (4 - (self.p4_start % 4))
             self.P4_st.setValue( self.p4_start )
 
         self.p4_start = self.add_ns( self.P4_st.value() )
@@ -815,8 +815,8 @@ class MainWindow(QtWidgets.QMainWindow):
         A function to set pulse 5 start
         """
         self.p5_start = self.P5_st.value()
-        if self.p5_start % 2 != 0:
-            self.p5_start = self.p5_start + 1
+        if self.p5_start % 4 != 0:
+            self.p5_start = self.p5_start + (4 - (self.p5_start % 4))
             self.P5_st.setValue( self.p5_start )
 
         self.p5_start = self.add_ns( self.P5_st.value() )
@@ -826,8 +826,8 @@ class MainWindow(QtWidgets.QMainWindow):
         A function to set pulse 6 start
         """
         self.p6_start = self.P6_st.value()
-        if self.p6_start % 2 != 0:
-            self.p6_start = self.p6_start + 1
+        if self.p6_start % 4 != 0:
+            self.p6_start = self.p6_start + (4 - (self.p6_start % 4))
             self.P6_st.setValue( self.p6_start )
 
         self.p6_start = self.add_ns( self.P6_st.value() )
@@ -837,8 +837,8 @@ class MainWindow(QtWidgets.QMainWindow):
         A function to set pulse 7 start
         """
         self.p7_start = self.P7_st.value()
-        if self.p7_start % 2 != 0:
-            self.p7_start = self.p7_start + 1
+        if self.p7_start % 4 != 0:
+            self.p7_start = self.p7_start + (4 - (self.p7_start % 4))
             self.P7_st.setValue( self.p7_start )
 
         self.p7_start = self.add_ns( self.P7_st.value() )
@@ -848,8 +848,8 @@ class MainWindow(QtWidgets.QMainWindow):
         A function to change a pulse 1 length
         """
         self.p1_length = self.P1_len.value()
-        if self.p1_length % 2 != 0:
-            self.p1_length = self.p1_length + 1
+        if self.p1_length % 4 != 0:
+            self.p1_length = self.p1_length + (4 - (self.p1_length % 4))
             self.P1_len.setValue( self.p1_length )
 
         pl = self.check_length( self.P1_len.value() )
@@ -860,8 +860,8 @@ class MainWindow(QtWidgets.QMainWindow):
         A function to change a pulse 2 length
         """
         self.p2_length = self.P2_len.value()
-        if self.p2_length % 2 != 0:
-            self.p2_length = self.p2_length + 1
+        if self.p2_length % 4 != 0:
+            self.p2_length = self.p2_length + (4 - (self.p2_length % 4))
             self.P2_len.setValue( self.p2_length )
 
         pl = self.check_length( self.P2_len.value() )
@@ -872,8 +872,8 @@ class MainWindow(QtWidgets.QMainWindow):
         A function to change a pulse 3 length
         """
         self.p3_length = self.P3_len.value()
-        if self.p3_length % 2 != 0:
-            self.p3_length = self.p3_length + 1
+        if self.p3_length % 4 != 0:
+            self.p3_length = self.p3_length + (4 - (self.p3_length % 4))
             self.P3_len.setValue( self.p3_length )
 
         pl = self.check_length( self.P3_len.value() )
@@ -884,8 +884,8 @@ class MainWindow(QtWidgets.QMainWindow):
         A function to change a pulse 4 length
         """
         self.p4_length = self.P4_len.value()
-        if self.p4_length % 2 != 0:
-            self.p4_length = self.p4_length + 1
+        if self.p4_length % 4 != 0:
+            self.p4_length = self.p4_length + (4 - (self.p4_length % 4))
             self.P4_len.setValue( self.p4_length )
 
         pl = self.check_length( self.P4_len.value() )
@@ -896,8 +896,8 @@ class MainWindow(QtWidgets.QMainWindow):
         A function to change a pulse 5 length
         """
         self.p5_length = self.P5_len.value()
-        if self.p5_length % 2 != 0:
-            self.p5_length = self.p5_length + 1
+        if self.p5_length % 4 != 0:
+            self.p5_length = self.p5_length + (4 - (self.p5_length % 4))
             self.P5_len.setValue( self.p5_length )
 
         pl = self.check_length( self.P5_len.value() )
@@ -908,8 +908,8 @@ class MainWindow(QtWidgets.QMainWindow):
         A function to change a pulse 6 length
         """
         self.p6_length = self.P6_len.value()
-        if self.p6_length % 2 != 0:
-            self.p6_length = self.p6_length + 1
+        if self.p6_length % 4 != 0:
+            self.p6_length = self.p6_length + (4 - (self.p6_length % 4))
             self.P6_len.setValue( self.p6_length )
 
         pl = self.check_length( self.P6_len.value() )
@@ -920,8 +920,8 @@ class MainWindow(QtWidgets.QMainWindow):
         A function to change a pulse 7 length
         """
         self.p7_length = self.P7_len.value()
-        if self.p7_length % 2 != 0:
-            self.p7_length = self.p7_length + 1
+        if self.p7_length % 4 != 0:
+            self.p7_length = self.p7_length + (4 - (self.p7_length % 4))
             self.P7_len.setValue( self.p7_length )
 
         pl = self.check_length( self.P7_len.value() )
@@ -1131,11 +1131,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.errors.clear()
             self.errors.appendPlainText( 'Incorrect pulse setting. Check that your pulses:\n' + \
                                         '1. Not overlapped\n' + \
-                                        '2. Distance between MW pulses is more than 42 ns\n' + \
-                                        '3. Pulses are longer or equal to 12 ns\n' + \
-                                        '4. Field Controller is stucked\n' + \
-                                        '5. LASER pulse should not be in 208-232; 152-182; 102-126; <76 ns from first MW\n' + \
-                                        '6. Phase sequence does not have equal length for all pulses with nonzero length\n' + \
+                                        '2. Distance between MW pulses is more than 40 ns\n' + \
+                                        '3. Pulses are longer or equal to 8 ns\n' + \
+                                        '4. Phase sequence does not have equal length for all pulses with nonzero length\n' + \
                                         '\nPulser is stopped')
 
     def pulser_test(self, conn, flag):
@@ -1281,19 +1279,19 @@ class Worker(QWidget):
         import numpy as np
         import atomize.general_modules.general_functions as general
         ##import atomize.device_modules.Spectrum_M4I_4450_X8 as spectrum
-        import atomize.device_modules.Keysight_2000_Xseries as key
-        import atomize.device_modules.PB_ESR_500_pro as pb_pro
+        import atomize.device_modules.Keysight_3000_Xseries as key
+        import atomize.device_modules.PB_Micran as pb_pro
         import atomize.math_modules.fft as fft_module
-        import atomize.device_modules.ITC_FC as itc
+        #import atomize.device_modules.ITC_FC as itc
 
-        pb = pb_pro.PB_ESR_500_Pro()
+        pb = pb_pro.PB_Micran()
         fft = fft_module.Fast_Fourier()
-        bh15 = itc.ITC_FC()
-        bh15.magnet_setup( p15, 1 )
+        #bh15 = itc.ITC_FC()
+        #bh15.magnet_setup( p15, 1 )
 
         process = 'None'
         ##dig = spectrum.Spectrum_M4I_4450_X8()
-        a2012 = key.Keysight_2000_Xseries()
+        t3104 = key.Keysight_3000_Xseries()
         # parameters for initial initialization
         #points_value =      p1
         ##dig.digitizer_number_of_points( p1 )
@@ -1362,21 +1360,21 @@ class Worker(QWidget):
 
         pb.pulser_update()
 
-        a2012.oscilloscope_trigger_channel('Ext')
-        a2012.oscilloscope_record_length(4000)
-        a2012.oscilloscope_acquisition_type('Average')
-        a2012.oscilloscope_stop()
+        t3104.oscilloscope_trigger_channel('Ext')
+        t3104.oscilloscope_record_length(5000)
+        t3104.oscilloscope_acquisition_type('Average')
+        t3104.oscilloscope_stop()
 
         # Oscilloscopes bug
-        a2012.oscilloscope_number_of_averages(2)
-        a2012.oscilloscope_start_acquisition()
+        t3104.oscilloscope_number_of_averages(2)
+        t3104.oscilloscope_start_acquisition()
 
-        y = a2012.oscilloscope_get_curve('CH1')
+        y = t3104.oscilloscope_get_curve('CH1')
 
-        real_length = a2012.oscilloscope_record_length( )
-        t_res = round( a2012.oscilloscope_timebase() / real_length, 5 )    # in us
+        real_length = t3104.oscilloscope_record_length( )
+        t_res = round( t3104.oscilloscope_timebase() / real_length, 5 )    # in us
 
-        a2012.oscilloscope_number_of_averages(p3)
+        t3104.oscilloscope_number_of_averages(p3)
 
         cycle_data_x = np.zeros( (len(p6[3]), int(real_length)) )
         cycle_data_y = np.zeros( (len(p6[3]), int(real_length)) )
@@ -1390,39 +1388,42 @@ class Worker(QWidget):
         while self.command != 'exit':
             # always test our self.command attribute for stopping the script when neccessary
 
+            pb.pulser_update()
+            
             if self.command[0:2] == 'PO':            
                 points_value = int( self.command[2:] )
-                a2012.oscilloscope_stop()
-                a2012.oscilloscope_timebase( str(points_value) + ' ns' )
-                a2012.oscilloscope_run()
+                t3104.oscilloscope_stop()
+                t3104.oscilloscope_timebase( str(points_value) + ' ns' )
+                t3104.oscilloscope_run_stop()
 
                 # Oscilloscopes bug
-                a2012.oscilloscope_number_of_averages(2)
-                a2012.oscilloscope_start_acquisition()
+                #t3104.oscilloscope_number_of_averages(2)
+                #t3104.oscilloscope_start_acquisition()
 
-                y = a2012.oscilloscope_get_curve('CH1')
-                a2012.oscilloscope_number_of_averages(num_ave)
-                a2012.oscilloscope_stop()
+                #y = t3104.oscilloscope_get_curve('CH1')
+                #t3104.oscilloscope_number_of_averages(num_ave)
+                #t3104.oscilloscope_stop()
 
             elif self.command[0:2] == 'HO':
                 posstrigger_value = int( self.command[2:] )
-                a2012.oscilloscope_stop()
-                a2012.oscilloscope_horizontal_offset( str(posstrigger_value) + ' ns' )
-                a2012.oscilloscope_run()
+                t3104.oscilloscope_stop()
+                t3104.oscilloscope_horizontal_offset( str(posstrigger_value) + ' ns' )
+                t3104.oscilloscope_run_stop()
 
                 # Oscilloscopes bug
-                a2012.oscilloscope_number_of_averages(2)
-                a2012.oscilloscope_start_acquisition()
+                #t3104.oscilloscope_number_of_averages(2)
+                #t3104.oscilloscope_start_acquisition()
 
-                y = a2012.oscilloscope_get_curve('CH1')
-                a2012.oscilloscope_number_of_averages(num_ave)
-                a2012.oscilloscope_stop()
+                #y = t3104.oscilloscope_get_curve('CH1')
+
+                #t3104.oscilloscope_number_of_averages(num_ave)
+                #t3104.oscilloscope_stop()
 
             elif self.command[0:2] == 'NA':
                 num_ave = int( self.command[2:] )
-                a2012.oscilloscope_stop()
-                a2012.oscilloscope_number_of_averages(num_ave)
-                a2012.oscilloscope_run()
+                t3104.oscilloscope_stop()
+                t3104.oscilloscope_number_of_averages(num_ave)
+                t3104.oscilloscope_run_stop()
                 #dig.digitizer_stop()
                 #dig.digitizer_number_of_averages( num_ave )
                 #dig.digitizer_setup()
@@ -1435,7 +1436,7 @@ class Worker(QWidget):
                 pb.pulser_repetition_rate( str(p14) + ' Hz' )
             elif self.command[0:2] == 'FI':
                 p15 = float( self.command[2:] )
-                bh15.magnet_field( p15 )
+                #bh15.magnet_field( p15 )
             elif self.command[0:2] == 'FF':
                 p16 = int( self.command[2:] )
             elif self.command[0:2] == 'QC':
@@ -1449,8 +1450,8 @@ class Worker(QWidget):
             elif self.command[0:2] == 'PD':
                 p21 = int( self.command[2:] )
 
-            real_length = a2012.oscilloscope_record_length( )
-            t_res = round( a2012.oscilloscope_timebase() / real_length, 6 )    # in us
+            real_length = t3104.oscilloscope_record_length( )
+            t_res = round( t3104.oscilloscope_timebase() / real_length, 6 )    # in us
 
             cycle_data_x = np.zeros( (len(p6[3]), int(real_length)) )
             cycle_data_y = np.zeros( (len(p6[3]), int(real_length)) )
@@ -1469,26 +1470,26 @@ class Worker(QWidget):
             while k < len( p6[3] ):
 
                 pb.pulser_next_phase()
-                a2012.oscilloscope_start_acquisition()
-                cycle_data_x[k], cycle_data_y[k] = a2012.oscilloscope_get_curve('CH1'), a2012.oscilloscope_get_curve('CH2')
+                t3104.oscilloscope_start_acquisition()
+                cycle_data_x[k], cycle_data_y[k] = t3104.oscilloscope_get_curve('CH1'), t3104.oscilloscope_get_curve('CH2')
                 k += 1
 
             if p16 == 0:
                 # acquisition cycle
                 data_x, data_y = pb.pulser_acquisition_cycle(cycle_data_x, cycle_data_y , acq_cycle = p6[3])
-                process = general.plot_1d('Digitizer', x_axis, ( data_x, data_y ), label = 'ch', xscale = 'us', yscale = 'V', \
-                                            vline = (p4 * t_res, p5 * t_res), pr = process )
+                general.plot_1d('3104T', x_axis, ( data_x, data_y ), label = 'ch', xscale = 'us', yscale = 'V', \
+                                            vline = (p4 * t_res, p5 * t_res) )
 
             else:
                 # acquisition cycle
                 data_x, data_y = pb.pulser_acquisition_cycle(cycle_data_x, cycle_data_y , acq_cycle = p6[3])
-                process = general.plot_1d('Digitizer', x_axis, ( data_x, data_y ), label = 'ch', xscale = 'us', yscale = 'V', \
-                                    vline = (p4 * t_res, p5 * t_res), pr = process )
+                general.plot_1d('3104T', x_axis, ( data_x, data_y ), label = 'ch', xscale = 'us', yscale = 'V', \
+                                    vline = (p4 * t_res, p5 * t_res))
                 if p17 == 0:
                     freq_axis, abs_values = fft.fft(x_axis, data_x, data_y, t_res * 1000)
                     m_val = round( np.amax( abs_values ), 2 )
-                    process = general.plot_1d('FFT', freq_axis, abs_values, xname = 'Freq Offset', label = 'FFT', xscale = 'MHz', \
-                                              yscale = 'Arb. U.', text = 'Max ' + str(m_val), pr = process)
+                    general.plot_1d('FFT', freq_axis, abs_values, xname = 'Freq Offset', label = 'FFT', xscale = 'MHz', \
+                                              yscale = 'Arb. U.', text = 'Max ' + str(m_val)) #, pr = process
                 else:
                     if p21 > len( data_x ) - 2:
                         p21 = len( data_x ) - 4
@@ -1496,13 +1497,12 @@ class Worker(QWidget):
                     # fixed resolution of digitizer; 2 ns
                     freq, fft_x, fft_y = fft.fft( x_axis[p21:], data_x[p21:], data_y[p21:], t_res * 1000, re = 'True' )
                     data = fft.ph_correction( freq, fft_x, fft_y, p18, p19, p20 )
-                    process = general.plot_1d('FFT', freq, ( data[0], data[1] ), xname = 'Freq Offset', xscale = 'MHz', \
-                                              yscale = 'Arb. U.', label = 'FFT', pr = process)
+                    general.plot_1d('FFT', freq, ( data[0], data[1] ), xname = 'Freq Offset', xscale = 'MHz', \
+                                              yscale = 'Arb. U.', label = 'FFT')
 
             self.command = 'start'
             pb.pulser_pulse_reset()
             ###time.sleep( 0.2 )
-
             # poll() checks whether there is data in the Pipe to read
             # we use it to stop the script if the exit command was sent from the main window
             # we read data by conn.recv() only when there is the data to read
@@ -1515,8 +1515,8 @@ class Worker(QWidget):
             #dig.digitizer_close()
             # ?
             #pb.pulser_clear()
-            a2012.oscilloscope_stop()
-            pb.pulser_stop()
+            t3104.oscilloscope_stop()
+            general.wait('300 ms')
             pb.pulser_pulse_reset()
 
 

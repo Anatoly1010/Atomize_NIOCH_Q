@@ -144,15 +144,21 @@ class MainWindow(QtWidgets.QMainWindow):
         #print(self.cur_start_field)
 
     def start_freq(self):
-        self.cur_st_freq = int( self.box_st_freq.value() )
+        self.cur_st_freq = self.box_st_freq.value() // 5 
+        self.box_st_freq.setValue( int(self.cur_st_freq * 5) ) 
+        
         #print(self.cur_lock_ampl)
 
     def end_freq(self):
-        self.cur_end_freq = int( self.box_end_freq.value() )
+        self.cur_end_freq = self.box_end_freq.value() // 5 
+        self.box_end_freq.setValue( int(self.cur_end_freq * 5) ) 
+
         #print(self.cur_lock_ampl)
 
     def step_freq(self):
-        self.cur_step_freq = int( self.box_step_freq.value() )
+        self.cur_step_freq = self.box_step_freq.value() // 5 
+        self.box_step_freq.setValue( int(self.cur_step_freq * 5) ) 
+
         #print(self.cur_lock_ampl)
 
     def scan(self):
@@ -249,19 +255,20 @@ class Worker(QWidget):
 
         # should be inside dig_on() function;
         # freezing after digitizer restart otherwise
-        import random
         import sys
         import numpy as np
         import atomize.general_modules.general_functions as general
-        import atomize.device_modules.Keysight_2000_Xseries as a2012
-        import atomize.device_modules.Mikran_X_band_MW_bridge_v2 as mwBridge
+        import atomize.device_modules.Keysight_3000_Xseries as a2012
+        import atomize.device_modules.Micran_Q_band_MW_bridge as mwBridge
         ###import atomize.device_modules.Spectrum_M4I_4450_X8 as spectrum
-        import atomize.device_modules.PB_ESR_500_pro as pb_pro
+        import atomize.device_modules.PB_Micran as pb_pro
 
-        a2012 = a2012.Keysight_2000_Xseries()
-        pb = pb_pro.PB_ESR_500_Pro()
-        mw = mwBridge.Mikran_X_band_MW_bridge_v2()
+        a2012 = a2012.Keysight_3000_Xseries()
+        pb = pb_pro.PB_Micran()
+        mw = mwBridge.Micran_Q_band_MW_bridge()
         ###dig4450 = spectrum.Spectrum_M4I_4450_X8()
+
+        mw.mw_bridge_open()
 
         ### Experimental parameters
         START_FREQ = p5
@@ -300,7 +307,7 @@ class Worker(QWidget):
         ###dig4450.digitizer_number_of_averages(AVERAGES)
         ###real_length = int (dig4450.digitizer_number_of_points( ) )
 
-        a2012.oscilloscope_record_length( 1000 )
+        a2012.oscilloscope_record_length( 5000 )
         real_length = a2012.oscilloscope_record_length( )
 
         points = int( (END_FREQ - START_FREQ) / STEP ) + 1
@@ -312,7 +319,7 @@ class Worker(QWidget):
         mw.mw_bridge_synthesizer( START_FREQ )
         general.wait('200 ms')
         a2012.oscilloscope_start_acquisition()
-        a2012.oscilloscope_get_curve('CH2')
+        a2012.oscilloscope_get_curve('CH3')
 
         # the idea of automatic and dynamic changing is
         # sending a new value of repetition rate via self.command
@@ -327,24 +334,24 @@ class Worker(QWidget):
                 i = 0
                 freq = START_FREQ
                 mw.mw_bridge_synthesizer( freq )
-                general.wait('300 ms')
+                general.wait('200 ms')
                 
                 a2012.oscilloscope_start_acquisition()
-                a2012.oscilloscope_get_curve('CH2')
+                a2012.oscilloscope_get_curve('CH3')
 
                 while freq <= END_FREQ:
                     
                     mw.mw_bridge_synthesizer( freq )
 
                     a2012.oscilloscope_start_acquisition()
-                    y = a2012.oscilloscope_get_curve('CH2')
-                    general.wait('300 ms')
+                    y = a2012.oscilloscope_get_curve('CH3')
+                    general.wait('200 ms')
                     ###x, y, z = dig4450.digitizer_get_curve( )
                     ##y = np.random.normal(3, 2.5, size = (real_length)) 
                     
                     data[i] = ( data[i] * (j - 1) + y ) / j
 
-                    process = general.plot_2d(p2, np.transpose( data ), start_step = ( (0, 1), (START_FREQ*1000000, STEP*1000000) ),\
+                    process = general.plot_2d(p2, np.transpose( data ), start_step = ( (0, 1), (START_FREQ*1000000*5, STEP*1000000*5) ),\
                                      xname = 'Time', xscale = 's', yname = 'Frequency', yscale = 'Hz', zname = 'Intensity', zscale = 'V', \
                                      pr = process, text = 'Scan / Frequency: ' + str(j) + ' / ' + str(freq))
                     

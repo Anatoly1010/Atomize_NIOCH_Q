@@ -117,10 +117,13 @@
          <bool>false</bool>
         </property>
         <property name="minimum">
-         <number>1</number>
+         <number>5</number>
         </property>
         <property name="maximum">
-         <number>50</number>
+         <number>100</number>
+        </property>
+        <property name="singleStep">
+         <number>5</number>
         </property>
        </widget>
       </item>
@@ -174,13 +177,16 @@
          <bool>false</bool>
         </property>
         <property name="minimum">
-         <number>9000</number>
+         <number>33000</number>
         </property>
         <property name="maximum">
-         <number>10000</number>
+         <number>36000</number>
+        </property>
+        <property name="singleStep">
+         <number>5</number>
         </property>
         <property name="value">
-         <number>9750</number>
+         <number>36000</number>
         </property>
        </widget>
       </item>
@@ -263,13 +269,16 @@
          <bool>false</bool>
         </property>
         <property name="minimum">
-         <number>9000</number>
+         <number>33000</number>
         </property>
         <property name="maximum">
-         <number>10000</number>
+         <number>36000</number>
+        </property>
+        <property name="singleStep">
+         <number>5</number>
         </property>
         <property name="value">
-         <number>9250</number>
+         <number>33000</number>
         </property>
        </widget>
       </item>
@@ -327,13 +336,13 @@
          <bool>false</bool>
         </property>
         <property name="minimum">
-         <number>10</number>
+         <number>8</number>
         </property>
         <property name="maximum">
          <number>1900</number>
         </property>
         <property name="singleStep">
-         <number>2</number>
+         <number>4</number>
         </property>
         <property name="value">
          <number>100</number>

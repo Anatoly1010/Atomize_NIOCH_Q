@@ -2,7 +2,7 @@ import time
 import numpy as np
 from math import pi
 import atomize.general_modules.general_functions as general
-#import atomize.device_modules.PB_ESR_500_pro as pb_pro
+#import atomize.device_modules.PB_Micran as pb_pro
 import atomize.device_modules.Spectrum_M4I_6631_X8 as spectrum
 
 # Phase
@@ -14,32 +14,49 @@ x = 2*pi*(init_distance + 0.8)*200/1000
 # 0.8 is sample rate (we calculate the phase for the next point); /1000 is MHz to GHz
 
 
-#pb = pb_pro.PB_ESR_500_Pro()
-#pb.pulser_pulse(name = 'P0', channel = 'TRIGGER_AWG', start = '0 ns', length = '100 ns')
-
-#pb.pulser_repetition_rate('2000 Hz')
-#pb.pulser_update()
-
-# A possible use in an experimental script
+#pb = pb_pro.PB_Micran()
 awg = spectrum.Spectrum_M4I_6631_X8()
 
-##awg.awg_pulse(name = 'P0', channel = 'CH0', func = 'SINE', frequency = '200 MHz', phase = 0, delta_phase = pi/2, length = '80 ns', sigma = '16 ns', start = '300 ns')
-awg.awg_pulse(name = 'P1', channel = 'CH0', func = 'WURST', frequency = ('0 MHz', '191 MHz'), phase = 0, length = '200 ns', sigma = '200 ns', start = '0 ns', delta_start = '2 ns', n = 10)
+#pb.pulser_pulse(name = 'P0', channel = 'TRIGGER_AWG', start = '0 ns', length = '100 ns')
+#pb.pulser_pulse(name = 'P1', channel = 'AWG', start = '400 ns', length = '100 ns')
+#pb.pulser_pulse(name = 'P2', channel = 'TRIGGER', start = '0 ns', length = '100 ns')
+
+# A possible use in an experimental script
+
+awg.awg_pulse(name = 'P0', channel = 'CH0', func = 'SINE', frequency = '10 MHz', phase = 0, length = '80 ns', start = '0 ns', phase_list = ['+x','-x'])
+#awg.awg_pulse(name = 'P1', channel = 'CH0', func = 'WURST', frequency = ('0 MHz', '191 MHz'), phase = 0, length = '200 ns', sigma = '200 ns', start = '0 ns', delta_start = '2 ns', n = 10)
 #awg.awg_pulse(name = 'P2', channel = 'CH0', func = 'SINC', frequency = '200 MHz', phase = 0, length = '64 ns', sigma = '16 ns', start = '500 ns', increment = '2 ns')
 
-awg.awg_pulse(name = 'P3', channel = 'CH1', func = 'GAUSS', frequency = '200 MHz', phase = pi/2, length = '64 ns', sigma = '16 ns', increment = '10 ns')
+#awg.awg_pulse(name = 'P3', channel = 'CH1', func = 'GAUSS', frequency = '200 MHz', phase = pi/2, length = '64 ns', sigma = '16 ns', increment = '10 ns')
 ##awg.awg_pulse(name = 'P4', channel = 'CH1', func = 'SINE', frequency = '200 MHz', phase = 0, delta_phase = pi/2, length = '64 ns', sigma = '16 ns')
 #awg.awg_pulse(name = 'P5', channel = 'CH1', func = 'SINE', frequency = '200 MHz', phase = 0, length = '64 ns', sigma = '16 ns')
 
+
+#pb.pulser_repetition_rate('1000 Hz')
+#pb.pulser_update()
+
 awg.awg_channel('CH0', 'CH1')
-awg.awg_card_mode('Single')
-awg.awg_number_of_segments(1)
+#awg.awg_card_mode('Single')
+#awg.awg_number_of_segments(1)
 #awg.awg_channel('CH0')
-#awg.awg_card_mode('Single Joined')
+awg.awg_sample_rate(1250)
+awg.awg_card_mode('Single Joined')
+awg.awg_trigger_channel('Software')
+awg.awg_clock_mode('External')
+awg.awg_reference_clock(100)
 #awg.awg_card_mode('Single')
 
 awg.awg_visualize()
+awg.awg_setup()
 
+general.wait('10 s')
+awg.awg_update()
+
+general.wait('10 s')
+
+awg.awg_stop()
+awg.awg_close()
+#pb.pulser_stop()
 """
 awg.awg_setup()
 

@@ -28,7 +28,7 @@ from PyQt6 import QtWidgets, uic, QtCore, QtGui
 from pyqtgraph.dockarea import DockArea
 import atomize.main.messenger_socket_server as socket_server
 ###AWG
-sys.path.append('/home/fel/sources/AWG/Examples/python')
+sys.path.append('/home/qband/Sources/AWG/Examples/python')
 
 from pyspcm import *
 from spcm_tools import *
@@ -106,10 +106,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.process = QtCore.QProcess(self)
         self.process_text_editor = QtCore.QProcess(self)
         self.process_python = QtCore.QProcess(self)
-        self.process_tr = QtCore.QProcess(self)
         self.process_osc = QtCore.QProcess(self)
-        self.process_osc2 = QtCore.QProcess(self)
-        self.process_cw = QtCore.QProcess(self)
         self.process_temp = QtCore.QProcess(self)
         self.process_field = QtCore.QProcess(self)
         self.process_mw = QtCore.QProcess(self)
@@ -127,10 +124,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.process_text_editor.setProgram(str(config['DEFAULT']['editorW']))
             self.process.setProgram('python.exe')
             self.process_python.setProgram('python.exe')
-            self.process_tr.setProgram('python.exe')
             self.process_osc.setProgram('python.exe')
-            self.process_osc2.setProgram('python.exe')
-            self.process_cw.setProgram('python.exe')
             self.process_temp.setProgram('python.exe')
             self.process_field.setProgram('python.exe')
             self.process_mw.setProgram('python.exe')
@@ -149,10 +143,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.process_text_editor.setProgram(str(config['DEFAULT']['editor']))
             self.process.setProgram('python3')
             self.process_python.setProgram('python3')
-            self.process_tr.setProgram('python3')
             self.process_osc.setProgram('python3')
-            self.process_osc2.setProgram('python3')
-            self.process_cw.setProgram('python3')
             self.process_temp.setProgram('python3')
             self.process_field.setProgram('python3')
             self.process_mw.setProgram('python3')
@@ -461,20 +452,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.button_field.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(63, 63, 97);\
          border-style: outset; color: rgb(193, 202, 227); font-weight: bold; }\
           QPushButton:pressed {background-color: rgb(211, 194, 78); border-style: inset; font-weight: bold; }")
-        self.button_osc2.clicked.connect(self.start_osc_control_2)
-        self.button_osc2.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(63, 63, 97);\
-         border-style: outset; color: rgb(193, 202, 227); font-weight: bold; }\
-          QPushButton:pressed {background-color: rgb(211, 194, 78); border-style: inset; font-weight: bold; }")
-        self.button_cw.clicked.connect(self.start_cw)
-        self.button_cw.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(63, 63, 97);\
-         border-style: outset; color: rgb(193, 202, 227); font-weight: bold; }\
-          QPushButton:pressed {background-color: rgb(211, 194, 78); border-style: inset; font-weight: bold; }")
         self.button_temp.clicked.connect(self.start_temp_control)
         self.button_temp.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(63, 63, 97);\
-         border-style: outset; color: rgb(193, 202, 227); font-weight: bold; }\
-          QPushButton:pressed {background-color: rgb(211, 194, 78); border-style: inset; font-weight: bold; }")
-        self.button_tr.clicked.connect(self.start_tr_control)
-        self.button_tr.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(63, 63, 97);\
          border-style: outset; color: rgb(193, 202, 227); font-weight: bold; }\
           QPushButton:pressed {background-color: rgb(211, 194, 78); border-style: inset; font-weight: bold; }")
         self.button_mw.clicked.connect(self.start_mw_control)
@@ -525,10 +504,7 @@ class MainWindow(QtWidgets.QMainWindow):
         A function to do some actions when the main window is closing.
         """
         self.process_python.close()
-        self.process_tr.close()
         self.process_osc.close()
-        self.process_osc2.close()
-        self.process_cw.close()
         self.process_temp.close()
         self.process_field.close()
         self.process_mw.close()
@@ -548,10 +524,7 @@ class MainWindow(QtWidgets.QMainWindow):
         A function to quit the programm
         """
         self.process_python.terminate()
-        self.process_tr.terminate()
         self.process_osc.terminate()
-        self.process_osc2.terminate()
-        self.process_cw.terminate()
         self.process_temp.terminate()
         self.process_field.terminate()
         self.process_mw.terminate()
@@ -649,13 +622,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.process_mw.setArguments(['atomize/control_center/mw_bridge_control.py'])
         self.process_mw.start()
 
-    def start_tr_control(self):
-        """
-        A function to run an pulse_creator.
-        """
-        self.process_tr.setArguments(['atomize/control_center/tr_control.py'])
-        self.process_tr.start()
-    
     def start_osc_control(self):
         """
         A function to run an Keysight control.
@@ -669,20 +635,6 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         self.process_field.setArguments(['atomize/control_center/field_control.py'])
         self.process_field.start()
-
-    def start_osc_control_2(self):
-        """
-        A function to run an Keysight control.
-        """
-        self.process_osc2.setArguments(['atomize/control_center/osc_control_2.py'])
-        self.process_osc2.start()
-
-    def start_cw(self):
-        """
-        A function to run an Keysight control.
-        """
-        self.process_cw.setArguments(['atomize/control_center/cw_control.py'])
-        self.process_cw.start()
 
     def start_temp_control(self):
         """
@@ -698,7 +650,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def text_to_script_name(self, text_to_parse):
 
         if text_to_parse == ' Tuning':
-            return os.path.join(self.path_to_main, 'atomize/tests/pulse_epr/01_resonator_tuning.py')
+            return os.path.join(self.path_to_main, 'atomize/tests/pulse_epr/01_resonator_tuning_keysight.py')
         elif text_to_parse == ' T2 Echo Shape':
             return os.path.join(self.path_to_main, 'atomize/tests/pulse_epr/keysight/02_t2_baseline_echo_shape.py')
         elif text_to_parse == ' ED Spectrum':
@@ -888,34 +840,32 @@ class MainWindow(QtWidgets.QMainWindow):
         if data == 'Script stopped':
 
             #path_to_main = os.path.abspath(os.getcwd())
-            lib_path = os.path.join(self.path_to_main, 'atomize/general_modules', 'libspinapi.so')
-            lib_path2 = os.path.join(self.path_to_main, 'atomize/general_modules', 'spinapi64.dll')
+            
+            self.process_python.terminate()
+            time.sleep(5)
 
-            if os.path.exists(lib_path) == False and os.path.exists(lib_path2) == False:
-                self.process_python.close()
-            else:
-                # check on windows?!
-                import atomize.device_modules.PB_ESR_500_pro as pb_pro
+            # keysight check?!
+            import atomize.device_modules.PB_Micran as pb_pro
+            pb = pb_pro.PB_Micran()
+            pb.pulser_full_stop()
+
+            #self.process_python.terminate()
+
+            # AWG
+            hCard1 = spcm_hOpen (create_string_buffer (b'/dev/spcm0'))
+            spcm_dwSetParam_i32 (hCard1, SPC_M2CMD, M2CMD_CARD_STOP)
+            # clean up
+            spcm_vClose (hCard1)
+
+            #hCard2 = spcm_hOpen (create_string_buffer (b'/dev/spcm1'))
+            #spcm_dwSetParam_i32 (hCard2, SPC_M2CMD, M2CMD_CARD_STOP)
+            # clean up
+            #spcm_vClose (hCard2)
+
+            ###
+
+            #self.process_python.close()
                 
-                pb = pb_pro.PB_ESR_500_Pro()
-                pb.pulser_stop()
-
-                #self.process_python.terminate()
-
-                # AWG
-                hCard1 = spcm_hOpen (create_string_buffer (b'/dev/spcm0'))
-                spcm_dwSetParam_i32 (hCard1, SPC_M2CMD, M2CMD_CARD_STOP)
-                # clean up
-                spcm_vClose (hCard1)
-
-                #hCard2 = spcm_hOpen (create_string_buffer (b'/dev/spcm1'))
-                #spcm_dwSetParam_i32 (hCard2, SPC_M2CMD, M2CMD_CARD_STOP)
-                # clean up
-                #spcm_vClose (hCard2)
-
-                ###
-
-                self.process_python.close()
 
 class NameList(QDockWidget):
     def __init__(self, window):

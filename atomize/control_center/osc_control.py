@@ -60,7 +60,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.label_5.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
         self.label_6.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
         self.label_7.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
+        self.label_8.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
         self.label_9.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
+        self.label_10.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
+        self.label_11.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
+        self.label_12.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
 
         # Spinboxes
         self.Hor_offset.valueChanged.connect(self.hor_offset)
@@ -75,6 +79,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.Ch2_scale.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); }")
         self.Ch2_offset.valueChanged.connect(self.ch2_offset)
         self.Ch2_offset.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); }")
+
+        self.Ch3_scale.valueChanged.connect(self.ch3_scale)
+        self.Ch3_scale.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); }")
+        self.Ch3_offset.valueChanged.connect(self.ch3_offset)
+        self.Ch3_offset.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); }")
+        self.Ch4_scale.valueChanged.connect(self.ch4_scale)
+        self.Ch4_scale.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); }")
+        self.Ch4_offset.valueChanged.connect(self.ch4_offset)
+        self.Ch4_offset.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); }")
+
         self.Acq_number.valueChanged.connect(self.acq_number)
         self.Acq_number.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); }")
 
@@ -108,14 +122,13 @@ class MainWindow(QtWidgets.QMainWindow):
         MESSAGE = b':TRIG:EDGE:SOUR ' + trig_ch.encode() + b'\n'
         self.telnet.write( MESSAGE )
 
-
     def hor_offset(self):
         """
         A function to change a horizontal offset
         """
 
         param = str( self.Hor_offset.value() )
-        MESSAGE = b':TIM:POS ' + param.encode() + b'e-6\n'
+        MESSAGE = b':TIM:POS ' + param.encode() + b'e-9\n'
         self.telnet.write( MESSAGE )
 
     def wind(self):
@@ -124,7 +137,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """
 
         param = str( self.Wind.value() )
-        MESSAGE = b':TIM:RANG ' + param.encode() + b'e-6\n'
+        MESSAGE = b':TIM:RANG ' + param.encode() + b'e-9\n'
         self.telnet.write( MESSAGE )
 
     def ch1_scale(self):
@@ -161,6 +174,42 @@ class MainWindow(QtWidgets.QMainWindow):
 
         param = str( self.Ch2_offset.value() )
         MESSAGE = b':CHAN2:OFFS ' + param.encode() + b'e-3\n'
+        self.telnet.write( MESSAGE )
+
+    def ch3_scale(self):
+        """
+        A function to send a CH3 scale
+        """
+
+        param = str( self.Ch3_scale.value() )
+        MESSAGE = b':CHAN3:SCAL ' + param.encode() + b'e-3\n'
+        self.telnet.write( MESSAGE )
+
+    def ch3_offset(self):
+        """
+        A function to send a CH3 offset
+        """
+
+        param = str( self.Ch3_offset.value() )
+        MESSAGE = b':CHAN3:OFFS ' + param.encode() + b'e-3\n'
+        self.telnet.write( MESSAGE )
+
+    def ch4_scale(self):
+        """
+        A function to send a CH4 scale
+        """
+
+        param = str( self.Ch4_scale.value() )
+        MESSAGE = b':CHAN4:SCAL ' + param.encode() + b'e-3\n'
+        self.telnet.write( MESSAGE )
+
+    def ch4_offset(self):
+        """
+        A function to send a CH4 offset
+        """
+
+        param = str( self.Ch4_offset.value() )
+        MESSAGE = b':CHAN4:OFFS ' + param.encode() + b'e-3\n'
         self.telnet.write( MESSAGE )
 
     def acq_number(self):

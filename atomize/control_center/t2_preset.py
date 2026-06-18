@@ -82,12 +82,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.box_delta.valueChanged.connect(self.delta)
         self.box_delta.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); }")
         self.cur_delta = int( self.box_delta.value() )
-        self.box_delta.lineEdit().setReadOnly( True )
+        #self.box_delta.lineEdit().setReadOnly( True )
         
         self.box_length.valueChanged.connect(self.pulse_length)
         self.box_length.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); }")
         self.cur_length = int( self.box_length.value() )
-        self.box_length.lineEdit().setReadOnly( True )
+        #self.box_length.lineEdit().setReadOnly( True )
 
         self.box_time_step.valueChanged.connect(self.time_step)
         self.box_time_step.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); }")
@@ -147,6 +147,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def delta(self):
         self.cur_delta = int( self.box_delta.value() )
+        if round( self.cur_delta % 4, 1) != 0:
+            self.cur_delta = self.round_to_closest( self.cur_delta, 4 )
+            self.box_delta.setValue( self.cur_delta )
+
         if self.cur_delta - self.cur_length < 40:
             self.cur_delta = self.cur_length + 40
             self.box_delta.setValue( self.cur_delta )
@@ -158,19 +162,24 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def pulse_length(self):
         self.cur_length = int( self.box_length.value() )
+
+        if round( self.cur_length % 4, 1) != 0:
+            self.cur_length = self.round_to_closest( self.cur_length, 4 )
+            self.box_length.setValue( self.cur_length )
+
         if self.cur_delta - self.cur_length < 40:
             self.cur_delta = self.cur_length + 40
             self.box_delta.setValue( self.cur_delta )
         # trigger
-        if self.cur_delta - self.cur_length * 2 < 12:
-            self.cur_delta = self.cur_length * 2 + 12
+        if self.cur_delta - self.cur_length * 2 < 8:
+            self.cur_delta = self.cur_length * 2 + 8
             self.box_delta.setValue( self.cur_delta )
         #print(self.cur_start_field)
 
     def time_step(self):
         self.cur_step = int( self.box_time_step.value() )
         if self.cur_step % 4 != 0:
-            self.cur_step = self.cur_step + self.cur_step % 4
+            self.cur_step = self.round_to_closest( self.cur_step, 4 )
             self.box_time_step.setValue( self.cur_step )
         #print(self.cur_start_field)
 
@@ -267,6 +276,12 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             sock.send(str(text).encode())
             sock.close()
+    
+    def round_to_closest(self, x, y):
+        """
+        A function to round x to divisible by y
+        """
+        return round( y * ( ( x // y) + (x % y > 0) ), 1 )
 
 # The worker class that run the digitizer in a different thread
 class Worker(QWidget):
@@ -291,21 +306,23 @@ class Worker(QWidget):
         import datetime
         import numpy as np
         import atomize.general_modules.general_functions as general
-        import atomize.device_modules.PB_ESR_500_pro as pb_pro
-        import atomize.device_modules.Keysight_2000_Xseries as key
-        import atomize.device_modules.Mikran_X_band_MW_bridge_v2 as mwBridge
+        import atomize.device_modules.PB_Micran as pb_pro
+        import atomize.device_modules.Keysight_3000_Xseries as key
+        import atomize.device_modules.Micran_Q_band_MW_bridge as mwBridge
         #import atomize.device_modules.Spectrum_M4I_4450_X8 as spectrum
-        import atomize.device_modules.Lakeshore_335 as ls
-        import atomize.device_modules.ITC_FC as itc
+        ###import atomize.device_modules.Lakeshore_335 as ls
+        ###import atomize.device_modules.ITC_FC as itc
         import atomize.general_modules.csv_opener_saver_tk_kinter as openfile
 
         file_handler = openfile.Saver_Opener()
-        ls335 = ls.Lakeshore_335()
-        mw = mwBridge.Mikran_X_band_MW_bridge_v2()
-        pb = pb_pro.PB_ESR_500_Pro()
-        bh15 = itc.ITC_FC()
-        a2012 = key.Keysight_2000_Xseries()
+        ###ls335 = ls.Lakeshore_335()
+        mw = mwBridge.Micran_Q_band_MW_bridge()
+        pb = pb_pro.PB_Micran()
+        ###bh15 = itc.ITC_FC()
+        a2012 = key.Keysight_3000_Xseries()
         #dig4450 = spectrum.Spectrum_M4I_4450_X8()
+
+        mw.mw_bridge_open()
 
         # parameters for initial initialization
         POINTS = p9
@@ -314,7 +331,6 @@ class Worker(QWidget):
         AVERAGES = p10
         SCANS = p7
         process = 'None'
-
 
         # PULSES
         REP_RATE = str(p6) + ' Hz'
@@ -332,13 +348,13 @@ class Worker(QWidget):
         x_axis = np.linspace(0, (POINTS - 1)*STEP, num = POINTS) 
         ###
 
-        bh15.magnet_setup(FIELD, 1)
-        bh15.magnet_field(FIELD)
+        ###bh15.magnet_setup(FIELD, 1)
+        ###bh15.magnet_field(FIELD)
         general.wait('4000 ms')
 
         # Setting oscilloscope
         a2012.oscilloscope_trigger_channel('Ext')
-        a2012.oscilloscope_record_length(4000)
+        a2012.oscilloscope_record_length(5000)
         a2012.oscilloscope_acquisition_type('Average')
         a2012.oscilloscope_number_of_averages(AVERAGES)
         a2012.oscilloscope_stop()
@@ -349,8 +365,8 @@ class Worker(QWidget):
         #dig4450.digitizer_number_of_averages(AVERAGES)
 
         # Setting pulses
-        pb.pulser_pulse(name = 'P0', channel = 'MW', start = PULSE_1_START, length = PULSE_1_LENGTH, phase_list = ['+x', '-x'])
-        pb.pulser_pulse(name = 'P1', channel = 'MW', start = PULSE_2_START, length = PULSE_2_LENGTH, delta_start = str(int(STEP/2)) + ' ns', phase_list = ['+x', '+x'])
+        pb.pulser_pulse(name = 'P0', channel = 'MW', start = PULSE_1_START, length = PULSE_1_LENGTH, phase_list = ['+x'])
+        pb.pulser_pulse(name = 'P1', channel = 'MW', start = PULSE_2_START, length = PULSE_2_LENGTH, delta_start = str(int(STEP/2)) + ' ns', phase_list = ['+x'])
         pb.pulser_pulse(name = 'P2', channel = 'TRIGGER', start = PULSE_SIGNAL_START, length = '100 ns', delta_start = str(STEP) + ' ns')
 
         pb.pulser_repetition_rate( REP_RATE )
@@ -368,7 +384,7 @@ class Worker(QWidget):
                 for i in range(POINTS):
                     # phase cycle
                     k = 0
-                    while k < 2:
+                    while k < 1:
 
                         pb.pulser_next_phase()
                         
@@ -380,7 +396,7 @@ class Worker(QWidget):
                         k += 1
 
                     # acquisition cycle [+, -]
-                    x, y = pb.pulser_acquisition_cycle(cycle_data_x, cycle_data_y, acq_cycle = ['+', '-'])
+                    x, y = pb.pulser_acquisition_cycle(cycle_data_x, cycle_data_y, acq_cycle = ['+'])
                     data_x[i] = ( data_x[i] * (j - 1) + x ) / j
                     data_y[i] = ( data_y[i] * (j - 1) + y ) / j
 
@@ -422,9 +438,9 @@ class Worker(QWidget):
                       str(mw.mw_bridge_att_prm()) + '\n' + str(mw.mw_bridge_att2_prm()) + '\n' + str(mw.mw_bridge_att1_prd()) + '\n' + str(mw.mw_bridge_synthesizer()) + '\n' + \
                       'Repetition Rate: ' + str(pb.pulser_repetition_rate()) + '\n' + 'Number of Scans: ' + str(SCANS) + '\n' +\
                       'Averages: ' + str(AVERAGES) + '\n' + 'Points: ' + str(POINTS) + '\n' + 'Window: ' + str(tb) + ' ns\n' \
-                      + 'Horizontal Resolution: ' + str(STEP) + ' ns\n' + 'Temperature: ' + str(ls335.tc_temperature('B')) + ' K\n' +\
+                      + 'Horizontal Resolution: ' + str(STEP) + ' ns\n' + 'Temperature: ' + str(44) + ' K\n' +\
                       'Pulse List: ' + '\n' + str(pb.pulser_pulse_list()) + 'Time (trig. delta_start), X (V*s), Y (V*s) '
-
+                      #ls335.tc_temperature('B')
             file_data, file_param = file_handler.create_file_parameters('.param')
             file_handler.save_header(file_param, header = header, mode = 'w')
 

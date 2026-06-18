@@ -3,20 +3,14 @@
 
 import os
 import sys
-import datetime
-import struct
-import socket
-import configparser
 from math import exp, sqrt
+import datetime
 from threading import Thread
-#import time
-#import numpy as np
-#from PyQt5.QtWidgets import QListView, QAction
 from PyQt6 import QtWidgets, uic #, QtCore, QtGui
 from PyQt6.QtWidgets import QWidget 
 from PyQt6.QtGui import QIcon
 import atomize.general_modules.general_functions as general
-import atomize.device_modules.ECC_15K as ecc
+import atomize.device_modules.Micran_Q_band_MW_bridge as mwBridge
 
 class MainWindow(QtWidgets.QMainWindow):
     """
@@ -28,8 +22,6 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         super(MainWindow, self).__init__(*args, **kwargs)
         
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) # SOCK_DGRAM is UDP
-
         self.destroyed.connect(lambda: self._on_destroyed())         # connect some actions to exit
         # Load the UI Page
         path_to_main = os.path.dirname(os.path.abspath(__file__))
@@ -40,17 +32,10 @@ class MainWindow(QtWidgets.QMainWindow):
         uic.loadUi(gui_path, self)                        # Design file
 
         # configuration data
-        path_config_file = os.path.join(path_to_main,'mw_config.ini')
-        config = configparser.ConfigParser()
-        config.read(path_config_file)
-
-        self.ecc15k = ecc.ECC_15K()
-
-        self.UDP_IP = str(config['DEFAULT']['UDP_IP'])
-        self.UDP_PORT = int(config['DEFAULT']['UDP_PORT'])
+        self.mw = mwBridge.Micran_Q_band_MW_bridge()
 
         # Connection of different action to different Menus and Buttons
-        self.button_initialize.clicked.connect(self.initialize)
+        self.button_initialize.clicked.connect(self.reset_flags)
         self.button_initialize.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(63, 63, 97);\
          border-style: outset; color: rgb(193, 202, 227); font-weight: bold; }\
           QPushButton:pressed {background-color: rgb(211, 194, 78); ; border-style: inset}")
@@ -66,16 +51,11 @@ class MainWindow(QtWidgets.QMainWindow):
         # text labels
         self.label.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
         self.label_2.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_3.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_4.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
         self.label_5.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
         self.label_6.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
         self.label_7.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
         self.label_8.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
         self.label_9.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_10.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_11.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_12.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
 
         self.telemetry_text.setStyleSheet("QPlainTextEdit { color : rgb(211, 194, 78); }") # rgb(193, 202, 227)
         
@@ -83,15 +63,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.Att1_prd.valueChanged.connect(self.att1_prd)
         self.Att1_prd.lineEdit().setReadOnly( True )   # block input from keyboard
         self.Att1_prd.setStyleSheet("QDoubleSpinBox { color : rgb(193, 202, 227); }")
-        self.Att2_prd.valueChanged.connect(self.att2_prd)
-        self.Att2_prd.lineEdit().setReadOnly( True )
-        self.Att2_prd.setStyleSheet("QDoubleSpinBox { color : rgb(193, 202, 227); }")
-        self.Fv_ctrl.valueChanged.connect(self.fv_ctrl)
-        self.Fv_ctrl.lineEdit().setReadOnly( True )
-        self.Fv_ctrl.setStyleSheet("QDoubleSpinBox { color : rgb(193, 202, 227); }")
-        self.Fv_prm.valueChanged.connect(self.fv_prm)
-        self.Fv_prm.lineEdit().setReadOnly( True )
-        self.Fv_prm.setStyleSheet("QDoubleSpinBox { color : rgb(193, 202, 227); }")
+        self.Att2_pin.valueChanged.connect(self.att2_pin)
+        #self.Att2_pin.lineEdit().setReadOnly( True )
+        self.Att2_pin.setStyleSheet("QDoubleSpinBox { color : rgb(193, 202, 227); }")
         self.Att1_prm.valueChanged.connect(self.att1_prm)
         self.Att1_prm.lineEdit().setReadOnly( True )
         self.Att1_prm.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); }")
@@ -100,19 +74,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.Att2_prm.setStyleSheet("QDoubleSpinBox { color : rgb(193, 202, 227); }")
         self.Synt.valueChanged.connect(self.synt)
         self.Synt.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); }")
-
-        self.Synt2.valueChanged.connect(self.synt2)
-        self.Synt2.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); }")
-        freq2 = int( self.Synt2.value() )
-        self.ecc15k.synthetizer_frequency(freq2)
-
-        self.Synt2_power.valueChanged.connect(self.synt2_power)
-        self.Synt2_power.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); }")
-        power2 = int( self.Synt2_power.value() )
-        self.ecc15k.synthetizer_power(power2)
-
-        self.Synt2_state.setStyleSheet("QComboBox { color : rgb(193, 202, 227); selection-color: rgb(211, 194, 78); }")
-        self.Synt2_state.currentIndexChanged.connect(self.synt2_state)
 
         self.Rot_vane.valueChanged.connect(self.rot_vane)
         #self.Rot_vane.lineEdit().setReadOnly( True )
@@ -125,39 +86,28 @@ class MainWindow(QtWidgets.QMainWindow):
         self.prev_dB = 60
         self.p1 = 'None'
 
-        #self.synt()
+        text_open = self.mw.mw_bridge_open()
+        self.telemetry_text.appendPlainText( text_open )
+        self.mw.mw_bridge_reset()
+        self.mw.mw_bridge_initialize(state = 'On')
+
         self.initialize()
-        self.telemetry()
-
-    def synt2(self):
-        freq2 = int( self.Synt2.value() )
-        self.ecc15k.synthetizer_frequency(freq2)
-        self.telemetry_text.appendPlainText( f'Synt2 Freq: {self.ecc15k.synthetizer_frequency().split(" ")[0]}')
-    
-    def synt2_power(self):
-        power2 = int( self.Synt2_power.value() )
-        self.ecc15k.synthetizer_power(power2)
-        self.telemetry_text.appendPlainText( f'Synt2 Power Level: {self.ecc15k.synthetizer_power()}')
-
-    def synt2_state(self):
-        txt = str( self.Synt2_state.currentText() )
-        self.ecc15k.synthetizer_state(txt)
-        self.telemetry_text.appendPlainText( f'Synt2 State: {self.ecc15k.synthetizer_state()}')
+        
+        text_init = self.mw.mw_bridge_telemetry()
+        self.telemetry_text.appendPlainText( text_init )
 
     def _on_destroyed(self):
         """
         A function to do some actions when the main window is closing.
         """    
         self.initialize_at_exit()
-        self.sock.close()
+        general.wait('300 ms')
+        self.mw.mw_bridge_close()
         
         try:
             self.p1.join()
         except ( AttributeError, NameError, TypeError ):
             pass
-
-        #sock.shutdown(socket.SHUT_RDWR)
-        #sock.close()
 
     def quit(self):
         """
@@ -170,266 +120,70 @@ class MainWindow(QtWidgets.QMainWindow):
         except ( AttributeError, NameError, TypeError ):
             pass
 
-        #sock.shutdown(socket.SHUT_RDWR)
-        self.sock.close()
+        general.wait('300 ms')
+        self.mw.mw_bridge_close()
         sys.exit()
 
     def att1_prd(self):
         """
         A function to send a value to the attenuator 1 in the PRD channel
         """
-
         param = self.Att1_prd.value()
-        temp = 2*param
-        MESSAGE = b'\x15' + b'\x01' + struct.pack(">B", int(temp))
-        # all variants give the same result. Struct.pack is the fastest
-        #print( (int(temp)).to_bytes(1, byteorder='big') )
-        #print( struct.pack(">B", int(temp)) )
-        
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        data_raw, addr = self.sock.recvfrom(3)
+        self.mw.mw_bridge_att1_prd( param )
+        answer = self.mw.mw_bridge_att1_prd()
+        self.telemetry_text.appendPlainText( answer )
 
-        # get attenuation
-        MESSAGE = b'\x1f' + b'\x01' + b'\x00'
-
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        data_raw, addr = self.sock.recvfrom(3)
-
-        self.telemetry_text.appendPlainText( 'Att. RECT: ' + str(data_raw[2] / 2) + ' dB')
-
-    def att2_prd(self):
+    def att2_pin(self):
         """
         A function to send a value to the attenuator 2 in the PRD channel
         """
-
-        param = self.Att2_prd.value()
-        temp = 2*param
-        MESSAGE = b'\x16' + b'\x01' + struct.pack(">B", int(temp))
-        
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        data_raw, addr = self.sock.recvfrom(3)
-
-        # get attenuation
-        MESSAGE = b'\x20' + b'\x01' + b'\x00'
-
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        data_raw, addr = self.sock.recvfrom(3)
-
-        self.telemetry_text.appendPlainText( 'Att. AWG: ' + str(data_raw[2]/2) + ' dB')
-
-    def fv_ctrl(self):
-        """
-        A function to send a value to the phase shifter in the CTRL channel
-        """
-
-        param = self.Fv_ctrl.value()
-        
-        # cycling
-        if param == 360:
-            self.Fv_ctrl.setValue(0.0)
-            param = self.Fv_ctrl.value()
-        else:
-            pass
-
-        if param == -5.625:
-            self.Fv_ctrl.setValue(360.0 - 5.625)
-            param = self.Fv_ctrl.value()
-        else:
-            pass
-
-        temp = param/5.625
-        MESSAGE = b'\x17' + b'\x01' + struct.pack(">B", int(temp))
-        
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        data_raw, addr = self.sock.recvfrom(3)
-
-        # get phase
-        MESSAGE = b'\x21' + b'\x01' + b'\x00'
-
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        data_raw, addr = self.sock.recvfrom(3)
-
-        self.telemetry_text.appendPlainText( 'Test Phase: ' + str(data_raw[2]*5.625) + ' deg')
-
-    def fv_prm(self):
-        """
-        A function to send a value to the phase shifter in the PRM channel
-        """
-
-        param = self.Fv_prm.value()
-        
-        # cycling
-        if param == 360:
-            self.Fv_prm.setValue(0.0)
-            param = self.Fv_prm.value()
-        else:
-            pass
-
-        if param == -5.625:
-            self.Fv_prm.setValue(360.0 - 5.625)
-            param = self.Fv_prm.value()
-        else:
-            pass
-
-        temp = param/5.625
-        MESSAGE = b'\x19' + b'\x01' + struct.pack(">B", int(temp))
-        
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        data_raw, addr = self.sock.recvfrom(3)
-
-        # get phase
-        MESSAGE = b'\x23' + b'\x01' + b'\x00'
-
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        data_raw, addr = self.sock.recvfrom(3)
-
-        self.telemetry_text.appendPlainText( 'Phase: ' + str(data_raw[2]*5.625) + ' deg')
+        param = self.Att2_pin.value()
+        self.mw.mw_bridge_att_pin( param )
+        answer = self.mw.mw_bridge_att_pin()
+        self.telemetry_text.appendPlainText( answer )
 
     def att1_prm(self):
         """
         A function to send a value to the attenuator 1 in the PRM channel
         """
-
         param = self.Att1_prm.value()
-        temp = param/2
-        MESSAGE = b'\x1c' + b'\x01' + struct.pack(">B", int(temp))
-        
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        data_raw, addr = self.sock.recvfrom(3)
-
-        # get attenuation
-        MESSAGE = b'\x26' + b'\x01' + b'\x00'
-
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        data_raw, addr = self.sock.recvfrom(3)
-
-        self.telemetry_text.appendPlainText( 'Video Att. 1: ' + str(data_raw[2]*2) + ' dB')
+        self.mw.mw_bridge_att_prm( param )
+        answer = self.mw.mw_bridge_att_prm()
+        self.telemetry_text.appendPlainText( answer )
 
     def att2_prm(self):
         """
         A function to send a value to the attenuator 2 in the PRM channel
         """
-
         param = self.Att2_prm.value()
-        temp = 2*param
-        MESSAGE = b'\x1a' + b'\x01' + struct.pack(">B", int(temp))
-        
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        data_raw, addr = self.sock.recvfrom(3)
-
-        # get amplification
-        MESSAGE = b'\x24' + b'\x01' + b'\x00'
-
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        data_raw, addr = self.sock.recvfrom(3)
-
-        self.telemetry_text.appendPlainText( 'Video Att. 2: ' + str(data_raw[2]/2) + ' dB')
+        self.mw.mw_bridge_att2_prm( param )
+        answer = self.mw.mw_bridge_att2_prm()
+        self.telemetry_text.appendPlainText( answer )
 
     def cutoff_changed(self):
         """
         A function to change the bandwidth of the video amplifier
         """
-        txt = str( self.Cuttoff_box.currentText() )
+        txt_raw = str( self.Cuttoff_box.currentText() )
+        txt = txt_raw.split(" ")[0]
 
-        if txt == '300 MHz':
-            MESSAGE = b'\x1b' + b'\x01' + b'\x02'
-
-            self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-            data_raw, addr = self.sock.recvfrom(3)
-
-            # get cutt-off
-            MESSAGE = b'\x25' + b'\x01' + b'\x00'
-
-            self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-            data_raw, addr = self.sock.recvfrom(3)
-
-            if data_raw[2] == 0:
-                freq = 30
-            elif data_raw[2] == 1:
-                freq = 105
-            elif data_raw[2] == 2:
-                freq = 300
-
-            self.telemetry_text.appendPlainText( f'Cut-off: {freq} MHz')
-        
-        elif txt == '105 MHz':
-            MESSAGE = b'\x1b' + b'\x01' + b'\x01'
-
-            self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-            data_raw, addr = self.sock.recvfrom(3)
-
-            # get cutt-off
-            MESSAGE = b'\x25' + b'\x01' + b'\x00'
-
-            self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-            data_raw, addr = self.sock.recvfrom(3)
-
-            if data_raw[2] == 0:
-                freq = 30
-            elif data_raw[2] == 1:
-                freq = 105
-            elif data_raw[2] == 2:
-                freq = 300
-
-            self.telemetry_text.appendPlainText( f'Cut-off: {freq} MHz')
-        
-        elif txt == '30 MHz':
-            MESSAGE = b'\x1b' + b'\x01' + b'\x00'
-
-            self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-            data_raw, addr = self.sock.recvfrom(3)
-
-            # get cutt-off
-            MESSAGE = b'\x25' + b'\x01' + b'\x00'
-
-            self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-            data_raw, addr = self.sock.recvfrom(3)
-
-            if data_raw[2] == 0:
-                freq = 30
-            elif data_raw[2] == 1:
-                freq = 105
-            elif data_raw[2] == 2:
-                freq = 300
-
-            self.telemetry_text.appendPlainText(f'Cut-off: {freq} MHz')
+        self.mw.mw_bridge_cut_off( txt )
+        answer = self.mw.mw_bridge_cut_off()
+        self.telemetry_text.appendPlainText( answer )
 
     def synt(self):
         """
         A function to change the frequency
         """
 
-        param = self.Synt.value()
+        param = int( self.Synt.value() / 5 )
+        self.Synt.setValue( int(param * 5) ) 
         temp = str(param)
-        if len( temp ) == 4:
-            temp = '0' + temp
-        elif len( temp ) == 5:
-            temp = temp
 
-        MESSAGE = b'\x04' + b'\x08' + b'\x00' + b'\x00' + b'\x00' + temp.encode()
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        data_raw, addr = self.sock.recvfrom(10)
-
-
-        # get frequency
-        MESSAGE = b'\x1e' + b'\x08' + (0).to_bytes(8, byteorder='big')
-
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        data_raw, addr = self.sock.recvfrom(10)
-
-        if chr(data_raw[4]) == '1':
-            state = 'ON'
-        elif chr(data_raw[4]) == '0':
-            state = 'OFF'
-
-        if chr(data_raw[5]) == '0':
-            freq = chr(data_raw[6]) + chr(data_raw[7])\
-                + chr(data_raw[8]) + chr(data_raw[9])
-        else:
-            freq = chr(data_raw[5]) + chr(data_raw[6]) + chr(data_raw[7])\
-                + chr(data_raw[8]) + chr(data_raw[9])
-
-        self.telemetry_text.appendPlainText( 'Frequency: ' + freq )
+        self.mw.mw_bridge_synthesizer( param )
+        answer_raw = int( self.mw.mw_bridge_synthesizer().split(" ")[1] ) * 5
+        answer = 'Frequency: ' + str( answer_raw ) + ' MHz'
+        self.telemetry_text.appendPlainText( str(answer) )
 
     def pause_and_label(self, time):
         self.label_9.setStyleSheet("QLabel { color : rgb(255, 0, 0); font-weight: bold; }")
@@ -445,6 +199,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         param = self.Rot_vane.value()
         self.curr_dB = round( float( param ), 1 )
+    
         step = int( self.calibration( self.curr_dB ) ) - int( self.calibration( self.prev_dB ) )
 
         try:
@@ -452,96 +207,62 @@ class MainWindow(QtWidgets.QMainWindow):
         except ( AttributeError, NameError, TypeError ):
             pass
 
-        MESSAGE = b'\x0e' + b'\x04' + b'\x01' + b'\x02' + ( step ).to_bytes( 2, byteorder = 'big', signed = True )
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        # 6 bytes to recieve
+        self.mw.mw_bridge_rotary_vane(self.curr_dB, mode = 'Arbitrary')
 
-        # 36 is a manual calibration
-        time_to_wait = abs( 36 * step )
+        # 60 is a manual calibration
+        time_to_wait = abs( 60 * step )
 
         self.p1 = Thread(target = self.pause_and_label, args = (str(time_to_wait) + ' ms', ) )
         self.p1.start()
         
-        data_raw, addr = self.sock.recvfrom(6)
-        
-        self.telemetry_text.appendPlainText( 'Rotary Vane: ' + str( self.curr_dB ) + ' dB')
+        answer = self.mw.mw_bridge_rotary_vane( )
+        self.telemetry_text.appendPlainText( answer )
 
         self.prev_dB = self.curr_dB
+
+    def reset_flags(self):
+        """
+        A function to initialize a bridge.
+        """
+        self.mw.mw_bridge_reset()
 
     def initialize(self):
         """
         A function to initialize a bridge.
         """
-
-        #MESSAGE = b'\x27' + b'\x01' + b'\x00'
-
-        #self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        #data_raw, addr = self.sock.recvfrom(3)
-
         self.synt()
 
-        # 300 MHz BW
-        MESSAGE = b'\x1b' + b'\x01' + b'\x02'
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        data_raw, addr = self.sock.recvfrom(3)
-
-        # 15 and 20 dB
-        temp = 2*self.Att1_prd.value()
-        MESSAGE = b'\x15' + b'\x01' + struct.pack(">B", int(temp))
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        data_raw, addr = self.sock.recvfrom(3)
-
-        temp = 2*self.Att2_prd.value()
-        MESSAGE = b'\x16' + b'\x01' + struct.pack(">B", int(temp))
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        data_raw, addr = self.sock.recvfrom(3)
-
-        #0.0 dB video2
-        temp = 2*self.Att2_prm.value()
-        MESSAGE = b'\x1a' + b'\x01' + struct.pack(">B", int(temp))
-        
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        data_raw, addr = self.sock.recvfrom(3)
-
-        # get amplification
-        MESSAGE = b'\x24' + b'\x01' + b'\x00'
-
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-        data_raw, addr = self.sock.recvfrom(3)
+        self.cutoff_changed()
+        self.att1_prd()
+        self.att2_pin()
+        self.att1_prm()
+        self.att2_prm()
 
         # Rotary vane to 60 dB
-        MESSAGE = b'\x0e' + b'\x04' + b'\x01' + b'\x01' + (3).to_bytes( 2, byteorder = 'big', signed = False )
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
+        self.mw.mw_bridge_rotary_vane(60, mode = 'Limit')
 
         self.p1 = Thread(target = self.pause_and_label, args = ( '5 s', ) )
         self.p1.start()
-        
-        data_raw, addr = self.sock.recvfrom(6)
-        
+            
         self.curr_dB = 60
         self.prev_dB = 60
 
-        self.telemetry_text.appendPlainText( 'Initialization done' )
-    
     def initialize_at_exit(self):
         """
         A function to initialize a bridge.
         """
 
-        self.ecc15k.synthetizer_state('Off')
-        
         # Rotary vane to 60 dB
         step = int( self.calibration( 60 ) ) - int( self.calibration( self.prev_dB ) )
         
-        MESSAGE = b'\x0e' + b'\x04' + b'\x01' + b'\x02' + ( step ).to_bytes( 2, byteorder = 'big', signed = True )
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
+        self.mw.mw_bridge_rotary_vane( 60, mode = 'Arbitrary')
 
-        time_to_wait = abs( 36 * step )
+        self.mw.mw_bridge_initialize(state = 'Off')
+
+        time_to_wait = abs( 60 * step )
 
         self.p1 = Thread(target = self.pause_and_label_exit, args = ( str(time_to_wait) + ' ms', ) )
         self.p1.start()
-        
-        data_raw, addr = self.sock.recvfrom(6)
         
         self.curr_dB = 60
         self.prev_dB = 60
@@ -556,23 +277,8 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         A function to get the telemetry.
         """
-
-        MESSAGE = b'\x0d' + b'\x08' + (0).to_bytes(8, byteorder='big')
-        self.sock.sendto( MESSAGE, (self.UDP_IP, self.UDP_PORT) )
-
-        data_raw, addr = self.sock.recvfrom(10)
-
-        data = data_raw #.decode()
-        if int(data[4]) == 1:
-            state = 'INIT'
-        elif int(data[4]) == 2:
-            state = 'WORK'
-        elif int(data[4]) == 3:
-            state = 'FAIL'
-
-        self.telemetry_text.appendPlainText( str(datetime.datetime.now().strftime("%d %b %Y %H:%M:%S")) + '\n' +\
-             'Temperature: ' + str(data[8]) + '\n' \
-             + 'State: ' + state)
+        text = self.mw.mw_bridge_telemetry() 
+        self.telemetry_text.appendPlainText( text )
 
     def help(self):
         """

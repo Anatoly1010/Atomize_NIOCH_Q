@@ -16,15 +16,15 @@ class Keysight_3000_Xseries:
         #### Inizialization
         # setting path to *.ini file
         self.path_current_directory = os.path.dirname(__file__)
-        self.path_config_file = os.path.join(self.path_current_directory, 'config','Keysight_3034t_config.ini')
+        self.path_config_file = os.path.join(self.path_current_directory, 'config','Keysight_3104t_config.ini')
 
         # configuration data
         self.config = cutil.read_conf_util(self.path_config_file)
         self.specific_parameters = cutil.read_specific_parameters(self.path_config_file)
 
         # auxilary dictionaries
-        self.points_list = [100, 250, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000]
-        self.points_list_average = [100, 250, 500, 1000, 2000, 4000, 8000, 16000]
+        self.points_list = [100, 250, 500, 1000, 2500, 5000, 10000, 20000, 50000, 100000, 200000, 500000]
+        self.points_list_average = [100, 250, 500, 1000, 2500, 5000, 10000, 20000]
         # Number of point is different for Average mode and three other modes
 
         self.channel_dict = {'CH1': 'CHAN1', 'CH2': 'CHAN2', 'CH3': 'CHAN3', 'CH4': 'CHAN4',}
@@ -314,7 +314,7 @@ class Keysight_3000_Xseries:
         if self.test_flag != 'test':
             #start_time = datetime.now()
             self.device_write(':WAVeform:FORMat WORD')
-            self.device_query('*ESR?;:DIGitize;*OPC?') # return 1, if everything is ok;
+            a = self.device_query(':DIGitize;*OPC?') # return 1, if everything is ok; ;*OPC?
             # the whole sequence is the following 1-binary format; 2-clearing; 3-digitizing; 4-checking of the completness
             #end_time=datetime.now()
             #general.message('Acquisition completed')

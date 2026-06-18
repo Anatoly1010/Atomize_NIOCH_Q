@@ -1,4640 +1,7529 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-import os
-import sys
-import gc
-import random
-###AWG
-#sys.path.append('/home/pulseepr/Sources/AWG/Examples/python')
-###sys.path.append('/home/anatoly/AWG/spcm_examples/python')
-#sys.path.append('/home/anatoly/awg_files/python')
-#sys.path.append('C:/Users/User/Desktop/Examples/python')
-sys.path.append('/home/fel/sources/AWG/Examples/python')
-from math import sin, pi, exp, log2
-from itertools import groupby, chain
-from copy import deepcopy
-import numpy as np
-import atomize.device_modules.config.config_utils as cutil
-import atomize.general_modules.general_functions as general
-
-from pyspcm import *
-from spcm_tools import *
-
-class Spectrum_M4I_6631_X8:
-    def __init__(self):
-
-        #### Inizialization
-        # setting path to *.ini file
-        self.path_current_directory = os.path.dirname(__file__)
-        self.path_config_file = os.path.join(self.path_current_directory, 'config','Spectrum_M4I_6631_X8_config.ini')
-
-        # configuration data
-        #config = cutil.read_conf_util(self.path_config_file)
-        self.specific_parameters = cutil.read_specific_parameters(self.path_config_file)
-
-        # Channel assignments
-        #ch0 = self.specific_parameters['ch0'] # TRIGGER
-
-        self.timebase_dict = {'ms': 1000000, 'us': 1000, 'ns': 1, }
-        self.channel_dict = {'CH0': 0, 'CH1': 1, }
-        self.function_dict = {'SINE': 0, 'GAUSS': 1, 'SINC': 2, 'BLANK': 3, 'WURST': 4, 'SECH/TANH': 5, 'TEST': 6, 'TEST2': 7, 'TEST3': 8, }
-
-        # Limits and Ranges (depends on the exact model):
-        #clock = float(self.specific_parameters['clock'])
-        self.max_pulse_length = int(float(self.specific_parameters['max_pulse_length'])) # in ns
-        self.min_pulse_length = int(float(self.specific_parameters['min_pulse_length'])) # in ns
-        self.max_freq = int(float(self.specific_parameters['max_freq'])) # in MHz
-        self.min_freq = int(float(self.specific_parameters['min_freq'])) # in MHz
-        self.phase_shift_ch1_seq_mode = float(self.specific_parameters['ch1_phase_shift']) # in radians
-
-        ###self.phase_x = np.pi/2
-
-        # Delays and restrictions
-        # MaxDACValue corresponds to the amplitude of the output signal; MaxDACValue - Amplitude and so on
-        # lMaxDACValue = int32 (0)
-        # spcm_dwGetParam_i32 (hCard, SPC_MIINST_MAXADCVALUE, byref(lMaxDACValue))
-        # lMaxDACValue.value = lMaxDACValue.value - 1
-        self.maxCAD = 32767 # MaxCADValue of the AWG card - 1
-        self.amplitude_max = 2500 # mV
-        self.amplitude_min = 80 # mV
-        self.sample_rate_max = 1250 # MHz
-        self.sample_rate_min = 50 # MHz
-        self.sample_ref_clock_max = 1000 # MHz
-        self.sample_ref_clock_min = 10 # MHz
-        self.loop_max = 100000
-        self.delay_max = 8589934560
-        self.delay_min = 0
-        self.gc_collect_limit = 250*10**6
-
-        # Test run parameters
-        # These values are returned by the modules in the test run 
-        if len(sys.argv) > 1:
-            self.test_flag = sys.argv[1]
-        else:
-            self.test_flag = 'None'
-
-        if self.test_flag != 'test':
-
-            # Collect all parameters for AWG settings
-            self.sample_rate = 1250 # MHz
-            self.clock_mode = 1 # 1 is Internal; 32 is External
-            self.reference_clock = 100 # MHz
-            self.card_mode = 32768 # 32768 is Single; 512 is Multi; 262144 is Sequence
-            self.trigger_ch = 2 # 1 is Software; 2 is External
-            self.trigger_mode = 1 # 1 is Positive; 2 is Negative; 8 is High; 10 is Low
-            self.loop = 0 # 0 is infinity
-            self.delay = 0 # in sample rate; step is 32; rounded
-            self.channel = 3 # 1 is CH0; 2 is CH1; 3 is CH0 + CH1
-            self.enable_out_0 = 1 # 1 means ON; 0 means OFF
-            self.enable_out_1 = 1 # 1 means ON; 0 means OFF
-            self.amplitude_0 = 300 # amlitude for CH0 in mV
-            self.amplitude_1 = 300 # amlitude for CH0 in mV; 533
-            self.num_segments = 1 # number of segments for 'Multi mode'
-            self.memsize = 64 # full card memory
-            self.buffer_size = 2*self.memsize # two bytes per sample
-            self.segment_memsize = 32 # segment card memory
-            self.single_joined = 0
-            # sequence mode
-            self.sequence_mode = 0
-            self.full_buffer = 0
-            self.full_buffer_pointer = 0
-            self.sequence_segments = 2
-            self.sequence_loop = 1
-            self.qwBufferSize = uint64 (2 *2)  # buffer size
-            self.sequence_mode_count = 0
-            # pulse settings
-            self.reset_count = 0
-            self.shift_count = 0
-            self.increment_count = 0
-            self.setting_change_count = 0
-            self.pulse_array = []
-            self.pulse_array_init = []
-            self.pulse_name_array = []
-            self.pulse_ch0_array = []
-            self.pulse_ch1_array = []
-            # phase list
-            self.current_phase_index = 0
-            self.phase_array_length_0 = []
-            self.phase_array_length_1 = []
-
-            # state counter
-            self.state = 0
-
-            # to get rid of memory leak
-            self.pnBuffer = c_void_p()
-            self.pvBuffer = pvAllocMemPageAligned (self.qwBufferSize.value)
-            self.pnBuffer = cast (self.pvBuffer, ptr16)
-
-            # update and visualize counters
-            self.update_counter = 0
-            self.visualize_counter = 0
-
-            # correction
-            self.bl = 1
-            self.a1 = 0
-            self.x1 = 0
-            self.w1 = 1
-            self.a2 = 0
-            self.x2 = 0
-            self.w2 = 1
-            self.a3 = 0
-            self.x3 = 0
-            self.w3 = 1
-            self.pi2flag = 1
-            # in MHz
-            self.low_level = 16
-            self.limit = 23
-
-        elif self.test_flag == 'test':
-            self.test_sample_rate = '1250 MHz'
-            self.test_clock_mode = 'Internal'
-            self.test_ref_clock = 100
-            self.test_card_mode = 'Single'
-            self.test_trigger_ch = 'External'
-            self.test_trigger_mode = 'Positive'
-            self.test_loop = 0
-            self.test_delay = 0
-            self.test_channel = 'CH0'
-            self.test_amplitude = '300 mV'
-            self.test_num_segments = 1
-            
-            # Collect all parameters for AWG settings
-            self.sample_rate = 1250 
-            self.clock_mode = 1
-            self.reference_clock = 100
-            self.card_mode = 32768
-            self.trigger_ch = 2
-            self.trigger_mode = 1
-            self.loop = 0
-            self.delay = 0
-            self.channel = 3
-            self.enable_out_0 = 1
-            self.enable_out_1 = 1
-            self.amplitude_0 = 300
-            self.amplitude_1 = 300
-            self.num_segments = 1
-            self.memsize = 64 # full card memory
-            self.buffer_size = 2*self.memsize # two bytes per sample
-            self.segment_memsize = 32 # segment card memory
-            self.single_joined = 0
-            # sequence mode
-            self.sequence_mode = 0
-            self.full_buffer = 0
-            self.full_buffer_pointer = 0
-            self.sequence_segments = 2
-            self.sequence_loop = 1
-            self.qwBufferSize = uint64 (2 *2)  # buffer size
-            self.sequence_mode_count = 0
-            # pulse settings
-            self.reset_count = 0
-            self.shift_count = 0
-            self.increment_count = 0
-            self.setting_change_count = 0
-            self.pulse_array = []
-            self.pulse_array_init = []
-            self.pulse_name_array = []
-            self.pulse_ch0_array = []
-            self.pulse_ch1_array = []
-            # phase list
-            self.current_phase_index = 0
-            self.phase_array_length_0 = []
-            self.phase_array_length_1 = []
-
-            # state counter
-            self.state = 0
-
-            # to get rid of memory leak
-            self.pnBuffer = c_void_p()
-            self.pvBuffer = pvAllocMemPageAligned (self.qwBufferSize.value)
-            self.pnBuffer = cast (self.pvBuffer, ptr16)
-            
-            # update and visualize counters
-            self.update_counter = 0
-            self.visualize_counter = 0
-            
-            # correction
-            self.bl = 1
-            self.a1 = 0
-            self.x1 = 0
-            self.w1 = 1
-            self.a2 = 0
-            self.x2 = 0
-            self.w2 = 1
-            self.a3 = 0
-            self.x3 = 0
-            self.w3 = 1
-            self.pi2flag = 1
-
-            # in MHz
-            self.low_level = 16
-            self.limit = 23
-
-    # Module functions
-    def awg_name(self):
-        answer = 'Spectrum M4I.6631-X8'
-        return answer
-
-    def awg_setup(self):
-        """
-        Write settings to the AWG card. No argument; No output
-        Everything except the buffer will be write to the AWG card
-
-        This function should be called after all functions that change settings are called
-        """
-        if self.test_flag != 'test':
-            
-            if self.state == 0:
-                # open card
-                self.hCard = spcm_hOpen ( create_string_buffer (b'/dev/spcm0') )
-                self.state = 1
-                if self.hCard == None:
-                    general.message("No card found...")
-                    sys.exit()
-            else:
-                pass
-
-            spcm_dwSetParam_i32 (self.hCard, SPC_TIMEOUT, 10000)
-            # general parameters of the card; internal/external clock
-            if self.clock_mode == 1:
-                spcm_dwSetParam_i64 (self.hCard, SPC_SAMPLERATE, MEGA(self.sample_rate))
-            elif self.clock_mode == 32:
-                spcm_dwSetParam_i32 (self.hCard, SPC_CLOCKMODE, self.clock_mode)
-                spcm_dwSetParam_i64 (self.hCard, SPC_REFERENCECLOCK, MEGA(self.reference_clock))
-                spcm_dwSetParam_i64 (self.hCard, SPC_SAMPLERATE, MEGA(self.sample_rate))
-
-            # change card mode and memory
-            if self.card_mode == 32768 and self.sequence_mode == 0 and self.single_joined == 0:
-                #self.buf = self.define_buffer_single()[0]
-                spcm_dwSetParam_i32(self.hCard, SPC_CARDMODE, self.card_mode)
-                spcm_dwSetParam_i32(self.hCard, SPC_MEMSIZE, self.memsize)
-            elif self.card_mode == 32768 and self.sequence_mode == 0 and self.single_joined == 1:
-                #self.buf = self.define_buffer_single_joined()[0]
-                spcm_dwSetParam_i32(self.hCard, SPC_CARDMODE, self.card_mode)
-                spcm_dwSetParam_i32(self.hCard, SPC_MEMSIZE, self.memsize)
-            elif self.card_mode == 512 and self.sequence_mode == 0:
-                #self.buf = self.define_buffer_multi()[0]
-                spcm_dwSetParam_i32(self.hCard, SPC_CARDMODE, self.card_mode)
-                spcm_dwSetParam_i32(self.hCard, SPC_MEMSIZE, self.memsize)
-                spcm_dwSetParam_i32(self.hCard, SPC_SEGMENTSIZE, self.segment_memsize)
-            elif self.sequence_mode == 1:
-                #self.full_buffer
-                # 262144 is SPC_REP_STD_SEQUENCE 262144
-                spcm_dwSetParam_i32( self.hCard, SPC_CARDMODE, SPC_REP_STD_SEQUENCE )
-                spcm_dwSetParam_i64( self.hCard, SPC_SEQMODE_MAXSEGMENTS, self.sequence_segments )
-                #general.message( self.sequence_segments )
-                spcm_dwSetParam_i32( self.hCard, SPC_SEQMODE_STARTSTEP, 0 ) # Step#0 is the first step after card start
-
-            
-            # trigger
-            spcm_dwSetParam_i32(self.hCard, SPC_TRIG_TERM, 1) # 50 Ohm trigger load
-            spcm_dwSetParam_i32(self.hCard, SPC_TRIG_ORMASK, self.trigger_ch) # software / external
-            if self.trigger_ch == 2:
-                spcm_dwSetParam_i32(self.hCard, SPC_TRIG_EXT0_MODE, self.trigger_mode)
-            
-            # loop
-            spcm_dwSetParam_i32(self.hCard, SPC_LOOPS, self.loop)
-
-            # trigger delay
-            spcm_dwSetParam_i32( self.hCard, SPC_TRIG_DELAY, int(self.delay) )
-
-            # set the output channels
-            spcm_dwSetParam_i32 (self.hCard, SPC_CHENABLE, self.channel)
-            spcm_dwSetParam_i32 (self.hCard, SPC_ENABLEOUT0, self.enable_out_0)
-            spcm_dwSetParam_i32 (self.hCard, SPC_ENABLEOUT1, self.enable_out_1)
-            spcm_dwSetParam_i32 (self.hCard, SPC_AMP0, int32 (self.amplitude_0))
-            spcm_dwSetParam_i32 (self.hCard, SPC_AMP1, int32 (self.amplitude_1))
-
-            # define the memory size / max amplitude
-            #llMemSamples = int64 (self.memsize)
-            #lBytesPerSample = int32(0)
-            #spcm_dwGetParam_i32 (hCard, SPC_MIINST_BYTESPERSAMPLE,  byref(lBytesPerSample))
-            #lSetChannels = int32 (0)
-            #spcm_dwGetParam_i32 (hCard, SPC_CHCOUNT, byref (lSetChannels))
-
-            # MaxDACValue corresponds to the amplitude of the output signal; MaxDACValue - Amplitude and so on
-            lMaxDACValue = int32 (0)
-            spcm_dwGetParam_i32 (self.hCard, SPC_MIINST_MAXADCVALUE, byref(lMaxDACValue))
-            lMaxDACValue.value = lMaxDACValue.value - 1
-
-            if lMaxDACValue.value == self.maxCAD:
-                pass
-            else:
-                general.message('self.maxCAD value does not equal to lMaxDACValue.value')
-                sys.exit()
-
-            if self.sequence_mode == 0:
-                spcm_dwSetParam_i64 (self.hCard, SPC_M2CMD, M2CMD_CARD_WRITESETUP)
-            else:
-                # due to some reason in Sequence mode M2CMD_CARD_WRITESETUP does not work correctly:
-                # Call: (SPC_M2CMD, M2CMD_CARD_WRITESETUP) -> the setup isn't valid"
-                pass
-
-        elif self.test_flag == 'test':
-            # to run several important checks
-            if self.reset_count == 0 or self.shift_count == 1 or self.increment_count == 1 or self.setting_change_count == 1 or self.sequence_mode_count == 1:
-                if self.card_mode == 32768 and self.sequence_mode == 0 and self.single_joined == 0:
-                    self.buf = self.define_buffer_single()[0]
-                elif self.card_mode == 32768 and self.sequence_mode == 0 and self.single_joined == 1:
-                    self.buf = self.define_buffer_single_joined()[0]
-                elif self.card_mode == 512 and self.sequence_mode == 0:
-                    self.buf = self.define_buffer_multi()[0]
-            else:
-                pass
-
-    def awg_update(self):
-        """
-        Start AWG card. No argument; No output
-        Default settings:
-        Sample clock is 1250 MHz; Clock mode is 'Internal'; Reference clock is 100 MHz; Card mode is 'Single';
-        Trigger channel is 'External'; Trigger mode is 'Positive'; Loop is infinity; Trigger delay is 0;
-        Enabled channels is CH0 and CH1; Amplitude of CH0 is '600 mV'; Amplitude of CH1 is '533 mV';
-        Number of segments is 1; Card memory size is 64 samples;
-        """
-        if self.test_flag != 'test':
-
-            if self.reset_count == 0 or self.shift_count == 1 or self.increment_count == 1 or self.setting_change_count == 1 or self.sequence_mode_count == 1:
-
-                self.update_counter += 1
-                # change card mode and memory
-                if self.card_mode == 32768 and self.sequence_mode == 0 and self.single_joined == 0:
-                    self.buf = self.define_buffer_single()[0]
-                    spcm_dwSetParam_i32(self.hCard, SPC_MEMSIZE, self.memsize)
-                elif self.card_mode == 32768 and self.sequence_mode == 0 and self.single_joined == 1:
-                    self.buf = self.define_buffer_single_joined()[0]
-                    spcm_dwSetParam_i32(self.hCard, SPC_MEMSIZE, self.memsize )
-                elif self.card_mode == 512 and self.sequence_mode == 0:
-                    self.buf = self.define_buffer_multi()[0]
-                    spcm_dwSetParam_i32(self.hCard, SPC_MEMSIZE, self.memsize)
-                    spcm_dwSetParam_i32(self.hCard, SPC_SEGMENTSIZE, self.segment_memsize)
-                elif self.sequence_mode == 1:
-                    pass
-
-                if self.sequence_mode == 0:
-                    spcm_dwSetParam_i64 (self.hCard, SPC_M2CMD, M2CMD_CARD_WRITESETUP)
-                else:
-                    # due to some reason in Sequence mode M2CMD_CARD_WRITESETUP does not work correctly:
-                    # Call: (SPC_M2CMD, M2CMD_CARD_WRITESETUP) -> the setup isn't valid"
-                    pass
-
-                # define the buffer
-                #self.pnBuffer = c_void_p()
-                #qwBufferSize = uint64 (self.buffer_size)  # buffer size
-                #self.pvBuffer = pvAllocMemPageAligned (qwBufferSize.value)
-                #self.pnBuffer = cast (self.pvBuffer, ptr16)
-
-                # fill the buffer
-                if self.card_mode == 32768 and self.sequence_mode == 0:
-                    # convert numpy array to integer
-                    #for index, element in enumerate(buf):
-                    #    self.pnBuffer[index] = int(lMaxDACValue.value * element)
-                    #    #self.pnBuffer = (lMaxDACValue.value * self.define_buffer_single()).astype('int64')
-
-                    # we define the buffer for transfer and start the DMA transfer
-                    #sys.stdout.write("Starting the DMA transfer and waiting until data is in board memory\n")
-                    # spcm_dwDefTransfer_i64 (device, buffer_type, direction, event (0=and of transfer), data, offset, buffer length)
-                    spcm_dwDefTransfer_i64 (self.hCard, SPCM_BUF_DATA, SPCM_DIR_PCTOCARD, int32 (0), self.buf, uint64 (0), self.qwBufferSize.value)
-                    # transfer
-                    spcm_dwSetParam_i32 (self.hCard, SPC_M2CMD, M2CMD_DATA_STARTDMA | M2CMD_DATA_WAITDMA)
-                    #general.message("AWG buffer has been transferred to board memory")
-
-                    del self.pnBuffer
-                    del self.pvBuffer
-                    del self.buf
-                    
-                    # free memory when the limit is achieved
-                    if self.update_counter * self.qwBufferSize.value > self.gc_collect_limit:
-                        gc.collect()
-                        self.update_counter = 0
-
-                elif self.card_mode == 512 and self.sequence_mode == 0:
-                    #for index, element in enumerate(buf):
-                    #    self.pnBuffer[index] = int(lMaxDACValue.value * element)
-                    #    #self.pnBuffer = (lMaxDACValue.value * self.define_buffer_multi()).astype('int64')
-
-                    # we define the buffer for transfer and start the DMA transfer
-                    #sys.stdout.write("Starting the DMA transfer and waiting until data is in board memory\n")
-                    # spcm_dwDefTransfer_i64 (device, buffer_type, direction, event (0=and of transfer), data, offset, buffer length)
-                    spcm_dwDefTransfer_i64 (self.hCard, SPCM_BUF_DATA, SPCM_DIR_PCTOCARD, int32 (0), self.buf, uint64 (0), self.qwBufferSize.value)
-                    # transfer
-                    spcm_dwSetParam_i32 (self.hCard, SPC_M2CMD, M2CMD_DATA_STARTDMA | M2CMD_DATA_WAITDMA)
-                    #general.message("AWG buffer has been transferred to board memory")
-
-                    del self.pnBuffer
-                    del self.pvBuffer
-                    del self.buf
-                    
-                    # free memory when the limit is achieved
-                    if self.update_counter * self.qwBufferSize.value > self.gc_collect_limit:
-                        gc.collect()
-                        self.update_counter = 0
-
-                elif self.sequence_mode == 1:
-                    if self.channel == 1 or self.channel == 2:
-                        seg_memory = int(self.qwBufferSize.value / 2)
-                    elif self.channel == 3:
-                        seg_memory = int(self.qwBufferSize.value / 4)
-
-                    for index, element in enumerate(self.full_buffer_pointer):
-                        # Setting up the data memory and transfer data
-                        spcm_dwSetParam_i32 (self.hCard, SPC_SEQMODE_WRITESEGMENT, index) # set current configuration switch to segment
-                        ###
-                        ###
-                        #seg_memory should be rounded to 32, which means repetition rate should be divisible by 32
-                        ###
-                        ###
-                        spcm_dwSetParam_i64 (self.hCard, SPC_SEQMODE_SEGMENTSIZE, seg_memory ) # define size of current segment
-
-                        # data transfer #self.full_buffer_pointer[index]
-                        spcm_dwDefTransfer_i64 (self.hCard, SPCM_BUF_DATA, SPCM_DIR_PCTOCARD, int32 (0), element, uint64 (0), self.qwBufferSize.value)
-                        spcm_dwSetParam_i32 (self.hCard, SPC_M2CMD, M2CMD_DATA_STARTDMA | M2CMD_DATA_WAITDMA)
-
-                        #general.message("AWG buffer has been transferred to board memory")
-
-                        # self.vWriteStepEntry (hCard, dwStepIndex, dwStepNextIndex, dwSegmentIndex, dwLoops, dwFlags)
-                        if index <= self.sequence_segments - 2:
-                            self.write_seg_memory (self.hCard,  index,  index + 1, index, self.sequence_loop,  0) #0
-                        elif index == self.sequence_segments - 1:
-                            self.write_seg_memory (self.hCard,  index, 0, index, self.sequence_loop,  2147483648)
-
-                        # SPCSEQ_ENDLOOPONTRIG = 1073741824
-                        # Feature flag that marks the step to conditionally change to the next step on a trigger condition. The occurrence
-                        # of a trigger event is repeatedly checked each time the defined loops for the current segment have been
-                        # replayed. A temporary valid trigger condition will be stored until evaluation at the end of the step.
-                        # SPCSEQ_END = 2147483648
-                        # Feature flag that marks the current step to be the last in the sequence. The card is stopped at the end of this seg-
-                        # ment after the loop counter has reached his end.
-
-                    # free memory
-                    del self.pnBuffer
-                    del self.pvBuffer
-                    del self.full_buffer
-                    del self.full_buffer_pointer
-                    
-                    # free memory when the limit is achieved
-                    if self.update_counter * self.qwBufferSize.value * self.sequence_segments > self.gc_collect_limit:
-                        gc.collect()
-                        self.update_counter = 0
-
-                # We'll start and wait until the card has finished or until a timeout occurs
-                dwError = spcm_dwSetParam_i32 (self.hCard, SPC_M2CMD, M2CMD_CARD_START | M2CMD_CARD_ENABLETRIGGER | M2CMD_CARD_WAITTRIGGER)
-                # test or error message
-                #general.message(dwError)
-                               
-                # clean up
-                #spcm_vClose (hCard)
-
-                self.reset_count = 1
-                self.shift_count = 0
-                self.increment_count = 0
-                self.setting_change_count = 0
-                self.sequence_mode_count == 0
-
-            else:
-                pass
-
-        elif self.test_flag == 'test':
-            # to run several important checks
-            if self.reset_count == 0 or self.shift_count == 1 or self.increment_count == 1 or self.setting_change_count == 1 or self.sequence_mode_count == 1:
-
-                self.update_counter += 1
-
-                if self.card_mode == 32768 and self.sequence_mode == 0 and self.single_joined == 0:
-                    self.buf = self.define_buffer_single()[0]
-                elif self.card_mode == 32768 and self.sequence_mode == 0 and self.single_joined == 1:
-                    self.buf = self.define_buffer_single_joined()[0]
-                elif self.card_mode == 512 and self.sequence_mode == 0:
-                    self.buf = self.define_buffer_multi()[0]
-
-                del self.pnBuffer
-                del self.pvBuffer
-                if self.sequence_mode == 0:
-                    del self.buf
-                
-                # free memory when the limit is achieved
-                if self.update_counter * self.qwBufferSize.value > self.gc_collect_limit:
-                    gc.collect()
-                    self.update_counter = 0
-
-                self.reset_count = 1
-                self.shift_count = 0
-                self.increment_count = 0
-                self.setting_change_count = 0
-                self.sequence_mode_count == 0
-
-            else:
-                pass
-
-    def awg_close(self):
-        """
-        Close AWG card. No argument; No output
-        """
-        if self.test_flag != 'test':
-            # clean up
-            spcm_vClose (self.hCard)
-
-        elif self.test_flag == 'test':
-            pass
-
-    def awg_stop(self):
-        """
-        Stop AWG card. No argument; No output
-        """
-        if self.test_flag != 'test':
-
-            # open card
-            #hCard = spcm_hOpen( create_string_buffer (b'/dev/spcm0') )
-            #if hCard == None:
-            #    general.message("No card found...")
-            #    sys.exit()
-            spcm_dwSetParam_i32 (self.hCard, SPC_M2CMD, M2CMD_CARD_STOP)
-            #general.message('AWG card stopped')
-            # for correct work awg_update() is called without length or start arguments changed
-            self.reset_count = 0
-
-        elif self.test_flag == 'test':
-            pass
-
-    def awg_pulse(self, name = 'P0', channel = 'CH0', func = 'SINE', frequency = '200 MHz', phase = 0,\
-     delta_phase = 0, phase_list = [], length = '16 ns', sigma = '0 ns', length_increment = '0 ns', start = '0 ns', delta_start = '0 ns', d_coef = 1, n = 1, b = 0.02):
-        """
-        A function for awg pulse creation;
-        The possible arguments:
-        NAME,
-        CHANNEL (CHO, CH1), FUNC (SINE, GAUSS, SINC, BLANK, WURST, SECH/TANH), 
-        FREQUENCY (1 - 280 MHz), for WURST frequency is a tuple: (center_freq, sweep_freq)
-        PHASE (in rad),
-        DELTA_PHASE (in rad), phase 1000 means random phase
-        PHASE_LIST in ['+x', '-x', '+y', '-y'] 
-        LENGTH (in ns, us; should be longer than sigma; minimun is 10 ns; maximum is 1900 ns), 
-        SIGMA (sigma for gauss; sinc (length = 32 ns, sigma = 16 ns means +-2pi); sine for uniformity )
-        INCREMENT (in ns, us, ms; for incrementing both sigma and length)
-        START (in ns, us, ms; for joined pulses in 'Single mode')
-        DELTA_START (in ns, us, ms; for joined pulses in 'Single mode')
-        D_COEF (in arb u; additional coefficient to adjust pulse amplitudes)
-        N (in arb u); special coefficient for WURST and SECH/TANH pulse determining the steepness of the amplitude function
-        b (in ns^-1); special coefficient for SECH/TANH pulse determining the truncation parameter
-
-        Buffer according to arguments will be filled after
-        """
-        if self.test_flag != 'test':
-            pulse = {'name': name, 'channel': channel, 'function': func, 'frequency': frequency, 'phase' : phase,\
-             'delta_phase': delta_phase, 'length': length, 'sigma': sigma, 'length_increment': length_increment, 'start': start,\
-              'delta_start': delta_start, 'amp': d_coef, 'phase_list': phase_list, 'n': n, 'b': b }
-
-            self.pulse_array.append( pulse )
-            # for saving the initial pulse_array without increments
-            # deepcopy helps to create a TRULY NEW array and not a link to the object
-            self.pulse_array_init = deepcopy( self.pulse_array )
-            # pulse_name array
-            self.pulse_name_array.append( pulse['name'] )
-
-            # For Single/Multi mode checking
-            # Only one pulse per channel for Single
-            # Number of segments equals to number of pulses for each channel
-            if channel == 'CH0':
-                self.pulse_ch0_array.append( pulse['name'] )
-                # phase_list's length
-                self.phase_array_length_0.append(len(list(phase_list)))
-            elif channel == 'CH1':
-                self.pulse_ch1_array.append( pulse['name'] )
-                self.phase_array_length_1.append(len(list(phase_list)))
-
-            
-        elif self.test_flag == 'test':
-            pulse = {'name': name, 'channel': channel, 'function': func, 'frequency': frequency, 'phase' : phase,\
-             'delta_phase' : delta_phase, 'length': length, 'sigma': sigma, 'length_increment': length_increment, 'start': start,\
-              'delta_start': delta_start, 'amp': d_coef, 'phase_list': phase_list, 'n': n, 'b': b }
-
-            if channel == 'CH0':
-                # phase_list's length
-                self.phase_array_length_0.append(len(list(phase_list)))
-            elif channel == 'CH1':
-                self.phase_array_length_1.append(len(list(phase_list)))
-
-            # Checks
-            # two equal names
-            temp_name = str(name)
-            set_from_list = set(self.pulse_name_array)
-            if temp_name in set_from_list:
-                assert (1 == 2), 'Two pulses have the same name. Please, rename'
-
-            self.pulse_name_array.append( pulse['name'] )
-
-            # channels
-            temp_ch = str(channel)
-            assert (temp_ch in self.channel_dict), 'Incorrect channel. Only CH0 or CH1 are available'
-
-            # for Single/Multi mode checking
-            if channel == 'CH0':
-                self.pulse_ch0_array.append( pulse['name'] )
-            elif channel == 'CH1':
-                self.pulse_ch1_array.append( pulse['name'] )
-
-            # Function type
-            temp_func = str(func)
-            assert (temp_func in self.function_dict), 'Incorrect pulse type. Only SINE, GAUSS, SINC, BLANK, WURST, and SECH/TANH pulses are available'
-            if temp_func == 'WURST' or temp_func == 'TEST2' or temp_func == 'SECH/TANH':
-                assert ( len(frequency) == 2 ), 'For WURST and SECH/TANH pulses frequency should be a tuple: frequency = ("Center MHz", "Sweep MHz")'
-
-            # Frequency
-            if temp_func != 'WURST' and temp_func != 'TEST2' and temp_func != 'SECH/TANH':
-                temp_freq = frequency.split(" ")
-                coef = temp_freq[1]
-                p_freq = float(temp_freq[0])
-                assert (coef == 'MHz'), 'Incorrect frequency dimension. Only MHz is possible'
-                assert(p_freq >= self.min_freq), 'Frequency is lower than minimum available (' + str(self.min_freq) +' MHz)'
-                assert(p_freq < self.max_freq), 'Frequency is longer than minimum available (' + str(self.max_freq) +' MHz)'
-            else:
-                temp_freq_st = frequency[0].split(" ")
-                temp_freq_end = frequency[1].split(" ")
-                coef_st = temp_freq_st[1]
-                coef_end = temp_freq_end[1]
-                p_freq_st = float(temp_freq_st[0])
-                p_freq_end = float(temp_freq_end[0])
-                assert (coef_st == 'MHz' and coef_end == 'MHz'), 'Incorrect frequency dimension. Only MHz is possible'
-                assert(p_freq_st >= self.min_freq and p_freq_end >= self.min_freq), 'Frequency is lower than minimum available (' + str(self.min_freq) +' MHz)'
-                assert(p_freq_st < self.max_freq and p_freq_end < self.max_freq), 'Frequency is longer than minimum available (' + str(self.max_freq) +' MHz)'
-                #assert(p_freq_end > p_freq_st), 'End frequency in WURST pulse should be higher than start frequency)'
-
-            # length
-            temp_length = length.split(" ")
-            if temp_length[1] in self.timebase_dict:
-                coef = self.timebase_dict[temp_length[1]]
-                p_length = coef*float(temp_length[0])
-                assert(p_length >= self.min_pulse_length), 'Pulse is shorter than minimum available length (' + str(self.min_pulse_length) +' ns)'
-                assert(p_length < self.max_pulse_length), 'Pulse is longer than maximum available length (' + str(self.max_pulse_length) +' ns)'
-            else:
-                assert( 1 == 2 ), 'Incorrect time dimension (ms, us, ns)'
-
-            # sigma
-            temp_sigma = sigma.split(" ")
-            if temp_sigma[1] in self.timebase_dict:
-                coef = self.timebase_dict[temp_sigma[1]]
-                p_sigma = coef*float(temp_sigma[0])
-                assert(p_sigma >= self.min_pulse_length), 'Sigma is shorter than minimum available length (' + str(self.min_pulse_length) +' ns)'
-                assert(p_sigma < self.max_pulse_length), 'Sigma is longer than maximum available length (' + str(self.max_pulse_length) +' ns)'
-            else:
-                assert( 1 == 2 ), 'Incorrect time dimension (ms, us, ns)'
-
-            # length should be longer than sigma
-            assert( p_length >= p_sigma ), 'Pulse length should be longer or equal to sigma'
-
-            # increment
-            temp_increment = length_increment.split(" ")
-            if temp_increment[1] in self.timebase_dict:
-                coef = self.timebase_dict[temp_increment[1]]
-                p_increment = coef*float(temp_increment[0])
-                assert (p_increment >= 0 and p_increment < self.max_pulse_length), \
-                'Length and sigma increment is longer than maximum available length or negative'
-            else:
-                assert( 1 == 2 ), 'Incorrect time dimension (ms, us, ns)'
-
-            # start
-            temp_start = start.split(" ")
-            if temp_start[1] in self.timebase_dict:
-                coef = self.timebase_dict[temp_start[1]]
-                p_start = coef*float(temp_start[0])
-                assert(p_start >= 0), 'Pulse start should be a positive number'
-                assert(p_start % 2 == 0), 'Pulse start should be divisible by 2'                
-            else:
-                assert( 1 == 2 ), 'Incorrect time dimension (ms, us, ns)'
-
-            # delta_start
-            temp_delta_start = delta_start.split(" ")
-            if temp_delta_start[1] in self.timebase_dict:
-                coef = self.timebase_dict[temp_delta_start[1]]
-                p_delta_start = coef*float(temp_delta_start[0])
-                assert(p_delta_start >= 0), 'Pulse delta start should be a positive number'
-                assert(p_delta_start % 2 == 0), 'Pulse delta start should be divisible by 2'
-            else:
-                assert( 1 == 2 ), 'Incorrect time dimension (ms, us, ns)'
-
-            # d_coef
-            temp_amp = float( d_coef )
-            #assert(temp_amp != 0), 'Amplification coefficient should not be zero'
-            assert(temp_amp >= 1), 'Amplification coefficient should be more or equal to 1'
-
-            # b
-            temp_b = float( b )
-            assert(temp_b > 0), 'Parameter b should be more than 0'
-
-            self.pulse_array.append( pulse )
-            self.pulse_array_init = deepcopy(self.pulse_array)
-
-    def awg_next_phase(self):
-        """
-        A function for phase cycling. It works using phase_list decleared in awg_pulse():
-        phase_list = ['-y', '+x', '-x', '+x']
-        self.current_phase_index is an iterator of the current phase
-        functions awg_shift() and awg_increment() reset the iterator
-
-        after calling awg_next_phase() the next phase is taken from phase_list
-
-        the length of all phase lists specified for different pulses has to be the same
-        
-        the function also immediately sends a new buffer to awg card as
-        a function awg_update() does. 
-        """
-        if self.test_flag != 'test':
-            for index, element in enumerate(self.pulse_array):
-                if len(list(element['phase_list'])) != 0:
-                    if element['phase_list'][self.current_phase_index] == '+x':
-                        element['phase'] = self.pulse_array_init[index]['phase']
-                        self.reset_count = 0
-                    elif element['phase_list'][self.current_phase_index] == '-x':
-                        element['phase'] = self.pulse_array_init[index]['phase'] + np.pi #+ self.phase_x
-                        self.reset_count = 0
-
-                    elif element['phase_list'][self.current_phase_index] == '+y':
-                        element['phase'] = self.pulse_array_init[index]['phase'] + np.pi / 2
-                        self.reset_count = 0
-
-                    elif element['phase_list'][self.current_phase_index] == '-y':
-                        element['phase'] = self.pulse_array_init[index]['phase'] + 3 * np.pi / 2
-                        self.reset_count = 0
-
-            self.current_phase_index += 1
-
-            self.awg_update()
-
-        elif self.test_flag == 'test':
-            # check that the length is equal (compare all elements in self.phase_array_length)
-            gr = groupby(self.phase_array_length_0)
-            if (next(gr, True) and not next(gr, False)) == False:
-                assert(1 == 2), 'Phase sequence for CH0 does not have equal length'
-
-            gr = groupby(self.phase_array_length_1)
-            if (next(gr, True) and not next(gr, False)) == False:
-                assert(1 == 2), 'Phase sequence for CH1 does not have equal length'
-
-            for index, element in enumerate(self.pulse_array):
-                if len(list(element['phase_list'])) != 0:
-                    if element['phase_list'][self.current_phase_index] == '+x':
-                        element['phase'] = self.pulse_array_init[index]['phase']
-                        self.reset_count = 0
-                    elif element['phase_list'][self.current_phase_index] == '-x':
-                        element['phase'] = self.pulse_array_init[index]['phase'] + np.pi
-                        self.reset_count = 0
-
-                    elif element['phase_list'][self.current_phase_index] == '+y':
-                        element['phase'] = self.pulse_array_init[index]['phase'] + np.pi / 2
-                        self.reset_count = 0
-
-                    elif element['phase_list'][self.current_phase_index] == '-y':
-                        element['phase'] = self.pulse_array_init[index]['phase'] + 3 * np.pi / 2
-                        self.reset_count = 0
-                    else:
-                        assert( 1 == 2 ), 'Incorrect phase name (+x, -x, +y, -y)'
-
-            self.current_phase_index += 1
-
-            self.awg_update()
-
-    def awg_redefine_delta_start(self, *, name, delta_start):
-        """
-        A function for redefining delta_start of the specified pulse for Single Joined mode.
-        awg_redefine_delta_start(name = 'P0', delta_start = '10 ns') changes delta_start of the 'P0' pulse to 10 ns.
-        The main purpose of the function is non-uniform sampling.
-
-        def func(*, name1, name2): defines a function without default values of key arguments
-        """
-
-        if self.test_flag != 'test':
-            i = 0
-
-            while i < len( self.pulse_array ):
-                if name == self.pulse_array[i]['name']:
-                    self.pulse_array[i]['delta_start'] = str(delta_start)
-                    self.shift_count = 1
-                else:
-                    pass
-
-                i += 1
-
-        elif self.test_flag == 'test':
-            i = 0
-            assert( name in self.pulse_name_array ), 'Pulse with the specified name is not defined'
-
-            while i < len( self.pulse_array ):
-                if name == self.pulse_array[i]['name']:
-
-                    # checks
-                    temp_delta_start = delta_start.split(" ")
-                    if temp_delta_start[1] in self.timebase_dict:
-                        coef = self.timebase_dict[temp_delta_start[1]]
-                        p_delta_start = coef*float(temp_delta_start[0])
-                        assert(p_delta_start % 2 == 0), 'Pulse delta start should be divisible by 2'
-                        assert(p_delta_start >= 0), 'Pulse delta start is a negative number'
-                    else:
-                        assert( 1 == 2 ), 'Incorrect time dimension (s, ms, us, ns)'
-
-                    self.pulse_array[i]['delta_start'] = str(delta_start)
-                    self.shift_count = 1
-                else:
-                    pass
-
-                i += 1
-
-    def awg_redefine_frequency(self, *, name, freq):
-        """
-        A function for redefining frequency of the specified pulse.
-        awg_redefine_frequency(name = 'P0', freq = '100 MHz') changes frequency of the 'P0' pulse to 100 MHz.
-
-        def func(*, name1, name2): defines a function without default values of key arguments
-        """
-
-        if self.test_flag != 'test':
-            i = 0
-
-            while i < len( self.pulse_array ):
-                if name == self.pulse_array[i]['name']:
-                    self.pulse_array[i]['frequency'] = freq
-                    self.shift_count = 1
-                else:
-                    pass
-
-                i += 1
-
-        elif self.test_flag == 'test':
-            i = 0
-            assert( name in self.pulse_name_array ), 'Pulse with the specified name is not defined'
-
-            while i < len( self.pulse_array ):
-                if name == self.pulse_array[i]['name']:
-                    # checks
-
-                    if self.pulse_array[i]['function'] != 'WURST' and self.pulse_array[i]['function'] != 'SECH/TANH':
-                        temp_freq = freq.split(" ")
-                        coef = temp_freq[1]
-                        p_freq = float(temp_freq[0])
-                        assert (coef == 'MHz'), 'Incorrect frequency dimension. Only MHz is possible'
-                        assert(p_freq >= self.min_freq), 'Frequency is lower than minimum available (' + str(self.min_freq) +' MHz)'
-                        assert(p_freq < self.max_freq), 'Frequency is longer than minimum available (' + str(self.max_freq) +' MHz)'
-                    else:
-                        temp_freq_st = frequency[0].split(" ")
-                        temp_freq_end = frequency[1].split(" ")
-                        coef_st = temp_freq_st[1]
-                        coef_end = temp_freq_end[1]
-                        p_freq_st = float(temp_freq_st[0])
-                        p_freq_end = float(temp_freq_end[0])
-                        assert (coef_st == 'MHz' and coef_end == 'MHz'), 'Incorrect frequency dimension. Only MHz is possible'
-                        assert(p_freq_st >= self.min_freq and p_freq_end >= self.min_freq), 'Frequency is lower than minimum available (' + str(self.min_freq) +' MHz)'
-                        assert(p_freq_st < self.max_freq and p_freq_end < self.max_freq), 'Frequency is longer than minimum available (' + str(self.max_freq) +' MHz)'
-
-                    self.pulse_array[i]['frequency'] = freq
-                    self.shift_count = 1
-                else:
-                    pass
-
-                i += 1
-
-    def awg_redefine_phase(self, *, name, phase):
-        """
-        A function for redefining phase of the specified pulse.
-        awg_redefine_phase(name = 'P0', phase = pi/2) changes phase of the 'P0' pulse to pi/2.
-        The main purpose of the function phase cycling.
-
-        def func(*, name1, name2): defines a function without default values of key arguments
-        """
-
-        if self.test_flag != 'test':
-            i = 0
-
-            while i < len( self.pulse_array ):
-                if name == self.pulse_array[i]['name']:
-                    self.pulse_array[i]['phase'] = float(phase)
-                    self.shift_count = 1
-                else:
-                    pass
-
-                i += 1
-
-        elif self.test_flag == 'test':
-            i = 0
-            assert( name in self.pulse_name_array ), 'Pulse with the specified name is not defined'
-
-            while i < len( self.pulse_array ):
-                if name == self.pulse_array[i]['name']:
-                    self.pulse_array[i]['phase'] = float(phase)
-                    self.shift_count = 1
-                else:
-                    pass
-
-                i += 1
-
-    def awg_redefine_delta_phase(self, *, name, delta_phase):
-        """
-        A function for redefining delta_phase of the specified pulse.
-        awg_redefine_delta_phase(name = 'P0', delta_phase = pi/2) changes delta_phase of the 'P0' pulse to pi/2.
-        The main purpose of the function is non-uniform sampling.
-
-        def func(*, name1, name2): defines a function without default values of key arguments
-        """
-
-        if self.test_flag != 'test':
-            i = 0
-
-            while i < len( self.pulse_array ):
-                if name == self.pulse_array[i]['name']:
-                    self.pulse_array[i]['delta_phase'] = float(delta_phase)
-                    self.shift_count = 1
-                else:
-                    pass
-
-                i += 1
-
-        elif self.test_flag == 'test':
-            i = 0
-            assert( name in self.pulse_name_array ), 'Pulse with the specified name is not defined'
-
-            while i < len( self.pulse_array ):
-                if name == self.pulse_array[i]['name']:
-                    self.pulse_array[i]['delta_phase'] = float(delta_phase)
-                    self.shift_count = 1
-                else:
-                    pass
-
-                i += 1
-
-    def awg_add_phase(self, *, name, add_phase):
-        """
-        A function for adding a constant phase to the specified pulse.
-        awg_add_phase(name = 'P0', add_phase = pi/2) changes the current phase of the 'P0' pulse 
-        to the value of current_phase + pi/2.
-        The main purpose of the function is phase cycling.
-
-        def func(*, name1, name2): defines a function without default values of key arguments
-        """
-
-        if self.test_flag != 'test':
-            i = 0
-
-            while i < len( self.pulse_array ):
-                if name == self.pulse_array[i]['name']:
-                    self.pulse_array[i]['phase'] = self.pulse_array[i]['phase'] + float(add_phase)
-                    self.shift_count = 1
-                else:
-                    pass
-
-                i += 1
-
-            # it is bad idea to update it here, since the phase of only one pulse
-            # can be changed in one call of this function
-            #self.awg_update_test()
-
-        elif self.test_flag == 'test':
-            i = 0
-            assert( name in self.pulse_name_array ), 'Pulse with the specified name is not defined'
-
-            while i < len( self.pulse_array ):
-                if name == self.pulse_array[i]['name']:
-                    self.pulse_array[i]['phase'] = self.pulse_array[i]['phase'] + float(add_phase)
-                    self.shift_count = 1
-                else:
-                    pass
-
-                i += 1
-
-            #self.awg_update_test()
-
-    def awg_redefine_length_increment(self, *, name, length_increment):
-        """
-        A function for redefining length increment of the specified pulse.
-        awg_redefine_increment(name = 'P0', length_increment = '10 ns') changes length increment of the 'P0' pulse to '10 ns'.
-        The main purpose of the function is non-uniform sampling.
-
-        def func(*, name1, name2): defines a function without default values of key arguments
-        """
-
-        if self.test_flag != 'test':
-            i = 0
-
-            while i < len( self.pulse_array ):
-                if name == self.pulse_array[i]['name']:
-                    self.pulse_array[i]['length_increment'] = str(length_increment)
-                    self.increment_count = 1
-                else:
-                    pass
-
-                i += 1
-
-        elif self.test_flag == 'test':
-            i = 0
-            assert( name in self.pulse_name_array ), 'Pulse with the specified name is not defined'
-
-            while i < len( self.pulse_array ):
-                if name == self.pulse_array[i]['name']:
-                    # checks
-                    temp_increment = length_increment.split(" ")
-                    if temp_increment[1] in self.timebase_dict:
-                        coef = self.timebase_dict[temp_increment[1]]
-                        p_increment = coef*float(temp_increment[0])
-                        assert (p_increment >= 0 and p_increment < self.max_pulse_length), \
-                        'Length and sigma increment is longer than maximum available length or negative'
-                    else:
-                        assert( 1 == 2 ), 'Incorrect time dimension (ms, us, ns)'
-
-                    self.pulse_array[i]['length_increment'] = str(length_increment)
-                    self.increment_count = 1
-                else:
-                    pass
-
-                i += 1
-
-    def awg_shift(self, *pulses):
-        """
-        A function to shift the phase of the pulses for Single mode.
-        Or the start of the pulses for Single Joined mode.
-        The function directly affects the pulse_array.
-        """
-        if self.test_flag != 'test':
-            self.shift_count = 1
-            self.current_phase_index = 0
-
-            if len(pulses) == 0:
-                i = 0
-                if self.single_joined == 0:
-                    while i < len( self.pulse_array ):
-                        if float( self.pulse_array[i]['delta_phase'] ) == 0.:
-                            pass
-                        else:
-                            temp = float( self.pulse_array[i]['phase'] )
-                            temp2 = float( self.pulse_array[i]['delta_phase'] )
-
-                            self.pulse_array[i]['phase'] = temp + temp2
-     
-                        i += 1
-
-                # increment start if in Single Joined
-                elif self.single_joined == 1:
-                    while i < len( self.pulse_array ):
-                        if int( self.pulse_array[i]['delta_start'][:-3] ) == 0:
-                            pass
-                        else:
-                            # convertion to ns
-                            temp = self.pulse_array[i]['delta_start'].split(' ')
-                            if temp[1] in self.timebase_dict:
-                                flag = self.timebase_dict[temp[1]]
-                                d_start = int((temp[0]))*flag
-                            else:
-                                pass
-
-                            temp2 = self.pulse_array[i]['start'].split(' ')
-                            if temp2[1] in self.timebase_dict:
-                                flag2 = self.timebase_dict[temp2[1]]
-                                st = int((temp2[0]))*flag2
-                            else:
-                                pass
-                                    
-                            self.pulse_array[i]['start'] = str( st + d_start ) + ' ns'
-
-                        i += 1
-
-            else:
-                if self.single_joined == 0:
-                    set_from_list = set(pulses)
-                    for element in set_from_list:
-                        if element in self.pulse_name_array:
-                            pulse_index = self.pulse_name_array.index(element)
-
-                            if float( self.pulse_array[pulse_index]['delta_phase'] ) == 0.:
-                                pass
-
-                            else:
-                                temp = float( self.pulse_array[pulse_index]['phase'] )
-                                temp2 = float( self.pulse_array[pulse_index]['delta_phase'] )
-                                        
-                                self.pulse_array[pulse_index]['phase'] = temp + temp2
-
-                elif self.single_joined == 1:
-                    set_from_list = set(pulses)
-                    for element in set_from_list:
-                        if element in self.pulse_name_array:
-                            pulse_index = self.pulse_name_array.index(element)
-
-                            if int( self.pulse_array[pulse_index]['delta_start'][:-3] ) == 0:
-                                pass
-                            else:
-                                # convertion to ns
-                                temp = self.pulse_array[pulse_index]['delta_start'].split(' ')
-                                if temp[1] in self.timebase_dict:
-                                    flag = self.timebase_dict[temp[1]]
-                                    d_start = int((temp[0]))*flag
-                                else:
-                                    pass
-
-                                temp2 = self.pulse_array[pulse_index]['start'].split(' ')
-                                if temp2[1] in self.timebase_dict:
-                                    flag2 = self.timebase_dict[temp2[1]]
-                                    st = int((temp2[0]))*flag2
-                                else:
-                                    pass
-                                        
-                                self.pulse_array[pulse_index]['start'] = str( st + d_start ) + ' ns'
-
-        elif self.test_flag == 'test':
-            self.shift_count = 1
-            self.current_phase_index = 0
-
-            if len(pulses) == 0:
-                i = 0
-                if self.single_joined == 0:
-                    while i < len( self.pulse_array ):
-                        if float( self.pulse_array[i]['delta_phase'] ) == 0.:
-                            pass
-                        else:
-                            temp = float( self.pulse_array[i]['phase'] )
-                            temp2 = float( self.pulse_array[i]['delta_phase'] )
-
-                            self.pulse_array[i]['phase'] = temp + temp2
-                            
-                        i += 1
-
-                # increment start if in Single Joined
-                elif self.single_joined == 1:
-                    while i < len( self.pulse_array ):
-                        if int( self.pulse_array[i]['delta_start'][:-3] ) == 0:
-                            pass
-                        else:
-                            # convertion to ns
-                            temp = self.pulse_array[i]['delta_start'].split(' ')
-                            if temp[1] in self.timebase_dict:
-                                flag = self.timebase_dict[temp[1]]
-                                d_start = int((temp[0]))*flag
-                            else:
-                                pass
-
-                            temp2 = self.pulse_array[i]['start'].split(' ')
-                            if temp2[1] in self.timebase_dict:
-                                flag2 = self.timebase_dict[temp2[1]]
-                                st = int((temp2[0]))*flag2
-                            else:
-                                pass
-                                    
-                            self.pulse_array[i]['start'] = str( st + d_start ) + ' ns'
-
-                        i += 1
-
-            else:
-                if self.single_joined == 0:
-                    set_from_list = set(pulses)
-                    for element in set_from_list:
-                        if element in self.pulse_name_array:
-                            pulse_index = self.pulse_name_array.index(element)
-
-                            if float( self.pulse_array[pulse_index]['delta_phase'] ) == 0.:
-                                pass
-
-                            else:
-                                temp = float( self.pulse_array[pulse_index]['phase'] )
-                                temp2 = float( self.pulse_array[pulse_index]['delta_phase'] )
-                                        
-                                self.pulse_array[pulse_index]['phase'] = temp + temp2
-
-                        else:
-                            assert(1 == 2), "There is no pulse with the specified name"
-
-                elif self.single_joined == 1:
-
-                    set_from_list = set(pulses)
-                    for element in set_from_list:
-                        if element in self.pulse_name_array:
-                            pulse_index = self.pulse_name_array.index(element)
-
-                            if int( self.pulse_array[pulse_index]['delta_start'][:-3] ) == 0:
-                                pass
-                            else:
-                                # convertion to ns
-                                temp = self.pulse_array[pulse_index]['delta_start'].split(' ')
-                                if temp[1] in self.timebase_dict:
-                                    flag = self.timebase_dict[temp[1]]
-                                    d_start = int((temp[0]))*flag
-                                else:
-                                    pass
-
-                                temp2 = self.pulse_array[pulse_index]['start'].split(' ')
-                                if temp2[1] in self.timebase_dict:
-                                    flag2 = self.timebase_dict[temp2[1]]
-                                    st = int((temp2[0]))*flag2
-                                else:
-                                    pass
-                                        
-                                self.pulse_array[pulse_index]['start'] = str( st + d_start ) + ' ns'
-
-                        else:
-                            assert(1 == 2), "There is no pulse with the specified name"
-
-    def awg_increment(self, *pulses):
-        """
-        A function to increment both the length and sigma of the pulses.
-        The function directly affects the pulse_array.
-        """
-        if self.test_flag != 'test':
-            if len(pulses) == 0:
-                i = 0
-                while i < len( self.pulse_array ):
-                    if int( self.pulse_array[i]['length_increment'][:-3] ) == 0:
-                        pass
-                    else:
-                        # convertion to ns
-                        temp = self.pulse_array[i]['length_increment'].split(' ')
-                        if temp[1] in self.timebase_dict:
-                            flag = self.timebase_dict[temp[1]]
-                            d_length = int(float(temp[0]))*flag
-                        else:
-                            pass
-
-                        temp2 = self.pulse_array[i]['length'].split(' ')
-                        if temp2[1] in self.timebase_dict:
-                            flag2 = self.timebase_dict[temp2[1]]
-                            leng = int(float(temp2[0]))*flag2
-                        else:
-                            pass
-
-                        temp3 = self.pulse_array[i]['sigma'].split(' ')
-                        if temp3[1] in self.timebase_dict:
-                            flag3 = self.timebase_dict[temp3[1]]
-                            sigm = int(float(temp3[0]))*flag3
-                        else:
-                            pass
-
-                        if self.pulse_array[i]['function'] == 'SINE':
-                            self.pulse_array[i]['length'] = str( leng + d_length ) + ' ns'
-                            self.pulse_array[i]['sigma'] = str( sigm + d_length ) + ' ns'
-                        elif self.pulse_array[i]['function'] == 'GAUSS' or self.pulse_array[i]['function'] == 'SINC':
-                            ratio = leng/sigm
-                            self.pulse_array[i]['length'] = str( leng + ratio*d_length ) + ' ns'
-                            self.pulse_array[i]['sigma'] = str( sigm + d_length ) + ' ns'
-
-                    i += 1
-
-                self.increment_count = 1
-                self.current_phase_index = 0
-
-            else:
-                set_from_list = set(pulses)
-                for element in set_from_list:
-                    if element in self.pulse_name_array:
-                        pulse_index = self.pulse_name_array.index(element)
-
-                        if int( self.pulse_array[pulse_index]['length_increment'][:-3] ) == 0:
-                            pass
-                        else:
-                            # convertion to ns
-                            temp = self.pulse_array[pulse_index]['length_increment'].split(' ')
-                            if temp[1] in self.timebase_dict:
-                                flag = self.timebase_dict[temp[1]]
-                                d_length = int(float(temp[0]))*flag
-                            else:
-                                pass
-
-                            temp2 = self.pulse_array[pulse_index]['length'].split(' ')
-                            if temp2[1] in self.timebase_dict:
-                                flag2 = self.timebase_dict[temp2[1]]
-                                leng = int(float(temp2[0]))*flag2
-                            else:
-                                pass
-
-                            temp3 = self.pulse_array[pulse_index]['sigma'].split(' ')
-                            if temp3[1] in self.timebase_dict:
-                                flag3 = self.timebase_dict[temp3[1]]
-                                sigm = int(float(temp3[0]))*flag3
-                            else:
-                                pass
-
-                            if self.pulse_array[pulse_index]['function'] == 'SINE':
-                                self.pulse_array[pulse_index]['length'] = str( leng + d_length ) + ' ns'
-                                self.pulse_array[pulse_index]['sigma'] = str( sigm + d_length ) + ' ns'
-                            elif self.pulse_array[pulse_index]['function'] == 'GAUSS' or self.pulse_array[i]['function'] == 'SINC':
-                                ratio = leng/sigm
-                                self.pulse_array[pulse_index]['length'] = str( leng + ratio*d_length ) + ' ns'
-                                self.pulse_array[pulse_index]['sigma'] = str( sigm + d_length ) + ' ns'
-
-                        self.increment_count = 1
-                        self.current_phase_index = 0
-
-        elif self.test_flag == 'test':
-
-            if len(pulses) == 0:
-                i = 0
-                while i < len( self.pulse_array ):
-                    if int( self.pulse_array[i]['length_increment'][:-3] ) == 0:
-                        pass
-                    else:
-                        # convertion to ns
-                        temp = self.pulse_array[i]['length_increment'].split(' ')
-                        if temp[1] in self.timebase_dict:
-                            flag = self.timebase_dict[temp[1]]
-                            d_length = int(float(temp[0]))*flag
-                        else:
-                            assert(1 == 2), "Incorrect time dimension (ns, us, ms)"
-
-                        temp2 = self.pulse_array[i]['length'].split(' ')
-                        if temp2[1] in self.timebase_dict:
-                            flag2 = self.timebase_dict[temp2[1]]
-                            leng = int(float(temp2[0]))*flag2
-                        else:
-                            assert(1 == 2), "Incorrect time dimension (ns, us, ms)"
-
-                        temp3 = self.pulse_array[i]['sigma'].split(' ')
-                        if temp3[1] in self.timebase_dict:
-                            flag3 = self.timebase_dict[temp3[1]]
-                            sigm = int(float(temp3[0]))*flag3
-                        else:
-                            assert(1 == 2), "Incorrect time dimension (ns, us, ms)"
-                        
-                        ratio = leng/sigm
-                        if ( leng + ratio*d_length ) <= self.max_pulse_length:
-                            if self.pulse_array[i]['function'] == 'SINE':
-                                self.pulse_array[i]['length'] = str( leng + d_length ) + ' ns'
-                                self.pulse_array[i]['sigma'] = str( sigm + d_length ) + ' ns'
-                            elif self.pulse_array[i]['function'] == 'GAUSS' or self.pulse_array[i]['function'] == 'SINC':
-                                #ratio = leng/sigm
-                                self.pulse_array[i]['length'] = str( leng + ratio*d_length ) + ' ns'
-                                self.pulse_array[i]['sigma'] = str( sigm + d_length ) + ' ns'
-                        else:
-                            assert(1 == 2), 'Exceeded maximum pulse length' + str(self.max_pulse_length) + 'when increment the pulse'
-
-                    i += 1
-
-                self.increment_count = 1
-                self.current_phase_index = 0
-
-            else:
-                set_from_list = set(pulses)
-                for element in set_from_list:
-                    if element in self.pulse_name_array:
-
-                        pulse_index = self.pulse_name_array.index(element)
-                        if int( self.pulse_array[pulse_index]['length_increment'][:-3] ) == 0:
-                            pass
-                        else:
-                            # convertion to ns
-                            temp = self.pulse_array[pulse_index]['length_increment'].split(' ')
-                            if temp[1] in self.timebase_dict:
-                                flag = self.timebase_dict[temp[1]]
-                                d_length = int(float(temp[0]))*flag
-                            else:
-                                assert(1 == 2), "Incorrect time dimension (ns, us, ms, s)"
-
-                            temp2 = self.pulse_array[pulse_index]['length'].split(' ')
-                            if temp2[1] in self.timebase_dict:
-                                flag2 = self.timebase_dict[temp2[1]]
-                                leng = int(float(temp2[0]))*flag2
-                            else:
-                                assert(1 == 2), "Incorrect time dimension (ns, us, ms, s)"
-                            
-                            temp3 = self.pulse_array[pulse_index]['sigma'].split(' ')
-                            if temp3[1] in self.timebase_dict:
-                                flag3 = self.timebase_dict[temp3[1]]
-                                sigm = int(float(temp3[0]))*flag3
-                            else:
-                                assert(1 == 2), "Incorrect time dimension (ns, us, ms)"
-
-                            ratio = leng/sigm
-                            if ( leng + ratio*d_length ) <= self.max_pulse_length:
-                                if self.pulse_array[pulse_index]['function'] == 'SINE':
-                                    self.pulse_array[pulse_index]['length'] = str( leng + d_length ) + ' ns'
-                                    self.pulse_array[pulse_index]['sigma'] = str( sigm + d_length ) + ' ns'
-                                elif self.pulse_array[pulse_index]['function'] == 'GAUSS' or self.pulse_array[i]['function'] == 'SINC':
-                                    #ratio = leng/sigm
-                                    self.pulse_array[pulse_index]['length'] = str( leng + ratio*d_length ) + ' ns'
-                                    self.pulse_array[pulse_index]['sigma'] = str( sigm + d_length ) + ' ns'
-                            else:
-                                assert(1 == 2), 'Exceeded maximum pulse length' + str(self.max_pulse_length) + 'when increment the pulse'
-
-                        self.increment_count = 1
-                        self.current_phase_index = 0
-
-                    else:
-                        assert(1 == 2), "There is no pulse with the specified name"
-
-    def awg_reset(self):
-        """
-        Reset all pulses to the initial state it was in at the start of the experiment.
-        It includes the complete functionality of awg_pulse_reset(), but also immediately
-        updates the AWG card as it is done by calling awg_update().
-        """
-        if self.test_flag != 'test':
-            # reset the pulses; deepcopy helps to create a TRULY NEW array
-            self.pulse_array = deepcopy( self.pulse_array_init )
-
-            # free memory
-            gc.collect()
-            self.update_counter = 0
-
-            self.awg_update()
-
-            self.reset_count = 1
-            self.increment_count = 0
-            self.shift_count = 0
-            self.current_phase_index = 0
-
-        elif self.test_flag == 'test':
-            # reset the pulses; deepcopy helps to create a TRULY NEW array
-            self.pulse_array = deepcopy( self.pulse_array_init )
-
-            # free memory
-            gc.collect()
-            self.update_counter = 0
-
-            self.awg_update()
-
-            self.reset_count = 1
-            self.increment_count = 0
-            self.shift_count = 0
-            self.current_phase_index = 0
-
-    def awg_pulse_reset(self, *pulses):
-        """
-        Reset all pulses to the initial state it was in at the start of the experiment.
-        It does not update the AWG card, if you want to reset all pulses and and also update 
-        the AWG card use the function awg_reset() instead.
-        """
-        if self.test_flag != 'test':
-            
-            if len(pulses) == 0:
-
-                # free memory
-                self.pulse_array = deepcopy(self.pulse_array_init)
-                self.reset_count = 0
-                self.increment_count = 0
-                self.shift_count = 0
-                self.current_phase_index = 0
-
-                gc.collect()
-                self.update_counter = 0
-
-            else:
-                set_from_list = set(pulses)
-                for element in set_from_list:
-                    if element in self.pulse_name_array:
-                        pulse_index = self.pulse_name_array.index(element)
-
-                        self.pulse_array[pulse_index]['phase'] = self.pulse_array_init[pulse_index]['phase']
-                        self.pulse_array[pulse_index]['length'] = self.pulse_array_init[pulse_index]['length']
-                        self.pulse_array[pulse_index]['sigma'] = self.pulse_array_init[pulse_index]['sigma']
-
-                        self.reset_count = 0
-                        self.increment_count = 0
-                        self.shift_count = 0
-
-        elif self.test_flag == 'test':
-            if len(pulses) == 0:
-                self.pulse_array = deepcopy(self.pulse_array_init)
-                self.reset_count = 0
-                self.increment_count = 0
-                self.shift_count = 0
-                self.current_phase_index = 0
-
-                # free memory                
-                gc.collect()
-                self.update_counter = 0
-
-            else:
-                set_from_list = set(pulses)
-                for element in set_from_list:
-                    if element in self.pulse_name_array:
-                        pulse_index = self.pulse_name_array.index(element)
-
-                        self.pulse_array[pulse_index]['phase'] = self.pulse_array_init[pulse_index]['phase']
-                        self.pulse_array[pulse_index]['length'] = self.pulse_array_init[pulse_index]['length']
-                        self.pulse_array[pulse_index]['sigma'] = self.pulse_array_init[pulse_index]['sigma']
-
-                        self.reset_count = 0
-                        self.increment_count = 0
-                        self.shift_count = 0
-
-    def awg_number_of_segments(self, *segmnets):
-        """
-        Set or query the number of segments for 'Multi" card mode;
-        AWG should be in 'Multi' mode. Please, refer to awg_card_mode() function
-        Input: awg_number_of_segments(2); Number of segment is from the range 0-200
-        Default: 1;
-        Output: '2'
-        """
-        if self.test_flag != 'test':
-            self.setting_change_count = 1
-
-            if len(segmnets) == 1:
-                seg = int(segmnets[0])
-                if self.card_mode == 512:
-                    self.num_segments = seg
-                elif self.card_mode == 32768 and seg == 1:
-                    self.num_segments = seg
-                else:
-                    general.message('AWG is not in Multi mode')
-                    sys.exit()
-            elif len(segmnets) == 0:
-                return self.num_segments
-
-        elif self.test_flag == 'test':
-            self.setting_change_count = 1
-
-            if len(segmnets) == 1:
-                seg = int(segmnets[0])
-                if seg != 1:
-                    assert( self.card_mode == 512), 'Number of segments higher than one is available only in Multi mode. Please, change it using awg_card_mode()'
-                assert (seg > 0 and seg <= 200), 'Incorrect number of segments; Should be 0 < segmenets <= 200'
-                self.num_segments = seg
-
-            elif len(segmnets) == 0:
-                return self.test_num_segments
-            else:
-                assert( 1 == 2 ), 'Incorrect argumnet'
-
-    def awg_channel(self, *channel):
-        """
-        Enable output from the specified channel or query enabled channels;
-        Input: awg_channel('CH0', 'CH1'); Channel is 'CH0' or 'CH1'
-        Default: both channels are enabled
-        Output: 'CH0'
-        """
-        if self.test_flag != 'test':
-            self.setting_change_count = 1
-
-            if len(channel) == 1:
-                ch = str(channel[0])
-                if ch == 'CH0':
-                    self.channel = 1
-                    self.enable_out_0 = 1
-                    self.enable_out_1 = 0
-                elif ch == 'CH1':
-                    self.channel = 2
-                    self.enable_out_0 = 0
-                    self.enable_out_1 = 1
-                else:
-                    general.message('Incorrect channel')
-                    sys.exit()
-            elif len(channel) == 2:
-                ch1 = str(channel[0])
-                ch2 = str(channel[1])
-                if (ch1 == 'CH0' and ch2 == 'CH1') or (ch1 == 'CH1' and ch2 == 'CH0'):
-                    self.channel = 3
-                    self.enable_out_0 = 1
-                    self.enable_out_1 = 1
-                else:
-                    general.message('Incorrect channel; Channel should be CH0 or CH1')
-                    sys.exit()
-            elif len(channel) == 0:
-                if self.channel == 1:
-                    return 'CH0'
-                elif self.channel == 2:
-                    return 'CH1'
-                elif self.channel == 3:
-                    return 'CH0, CH1'
-
-            else:
-                general.message('Incorrect argument; Channel should be CH0 or CH1')
-                sys.exit()
-
-        elif self.test_flag == 'test':
-            self.setting_change_count = 1
-
-            if len(channel) == 1:
-                ch = str(channel[0])
-                assert( ch == 'CH0' or ch == 'CH1' ), 'Incorrect channel; Channel should be CH0 or CH1'
-                if ch == 'CH0':
-                    self.channel = 1
-                    self.enable_out_0 = 1
-                    self.enable_out_1 = 0
-                elif ch == 'CH1':
-                    self.channel = 2
-                    self.enable_out_0 = 0
-                    self.enable_out_1 = 1
-            elif len(channel) == 2:
-                ch1 = str(channel[0])
-                ch2 = str(channel[1])
-                assert( (ch1 == 'CH0' and ch2 == 'CH1') or (ch1 == 'CH1' and ch2 == 'CH0')), 'Incorrect channel; Channel should be CH0 or CH1'
-                if (ch1 == 'CH0' and ch2 == 'CH1') or (ch1 == 'CH1' and ch2 == 'CH0'):
-                    self.channel = 3
-                    self.enable_out_0 = 1
-                    self.enable_out_1 = 1
-            elif len(channel) == 0:
-                return self.test_channel
-            else:
-                assert( 1 == 2 ), 'Incorrect argument'
-
-    def awg_sample_rate(self, *s_rate):
-        """
-        Set or query sample rate; Range: 50 - 1250
-        Input: awg_sample_rate('1250'); Sample rate is in MHz
-        Default: '1250';
-        Output: '1000 MHz'
-        """
-        if self.test_flag != 'test':
-            self.setting_change_count = 1
-
-            if len(s_rate) == 1:
-                rate = int(s_rate[0])
-                if rate <= self.sample_rate_max and rate >= self.sample_rate_min:
-                    self.sample_rate = rate
-                else:
-                    general.message('Incorrect sample rate; Should be 1250 MHz <= Rate <= 50 MHz')
-                    sys.exit()
-
-            elif len(s_rate) == 0:
-                return str(self.sample_rate) + ' MHz'
-
-        elif self.test_flag == 'test':
-            self.setting_change_count = 1
-
-            if len(s_rate) == 1:
-                rate = int(s_rate[0])
-                assert(rate <= self.sample_rate_max and rate >= self.sample_rate_min), "Incorrect sample rate; Should be 1250 MHz <= Rate <= 50 MHz"
-                self.sample_rate = rate
-
-            elif len(s_rate) == 0:
-                return self.test_sample_rate
-            else:
-                assert( 1 == 2 ), 'Incorrect argument'
-
-    def awg_clock_mode(self, *mode):
-        """
-        Set or query clock mode; the driver needs to know the external fed in frequency
-        Input: awg_clock_mode('Internal'); Clock mode is 'Internal' or 'External'
-        Default: 'Internal';
-        Output: 'Internal'
-        """
-        if self.test_flag != 'test':
-            self.setting_change_count = 1
-
-            if len(mode) == 1:
-                md = str(mode[0])
-                if md == 'Internal':
-                    self.clock_mode = 1
-                elif md == 'External':
-                    self.clock_mode = 32
-                else:
-                    general.message('Incorrect clock mode; Only Internal and External modes are available')
-                    sys.exit()
-
-            elif len(mode) == 0:
-                if self.clock_mode == 1:
-                    return 'Internal'
-                elif self.clock_mode == 32:
-                    return 'External'
-
-        elif self.test_flag == 'test':
-            self.setting_change_count = 1
-
-            if len(mode) == 1:
-                md = str(mode[0])
-                assert(md == 'Internal' or md == 'External'), "Incorrect clock mode; Only Internal and External modes are available"
-                if md == 'Internal':
-                    self.clock_mode = 1
-                elif md == 'External':
-                    self.clock_mode = 32
-
-            elif len(mode) == 0:
-                return self.test_clock_mode
-            else:
-                assert( 1 == 2 ), 'Incorrect argument'
-
-    def awg_reference_clock(self, *ref_clock):
-        """
-        Set or query reference clock; the driver needs to know the external fed in frequency
-        Input: awg_reference_clock(100); Reference clock is in MHz; Range: 10 - 1000
-        Default: '100';
-        Output: '200 MHz'
-        """
-        if self.test_flag != 'test':
-            self.setting_change_count = 1
-
-            if len(ref_clock) == 1:
-                rate = int(ref_clock[0])
-                if rate <= self.sample_ref_clock_max and rate >= self.sample_ref_clock_min:
-                    self.reference_clock = rate
-                else:
-                    general.message('Incorrect reference clock; Should be 1000 MHz <= Clock <= 10 MHz')
-                    sys.exit()
-
-            elif len(ref_clock) == 0:
-                return str(self.reference_clock) + ' MHz'
-
-        elif self.test_flag == 'test':
-            self.setting_change_count = 1
-
-            if len(ref_clock) == 1:
-                rate = int(ref_clock[0])
-                assert(rate <= self.sample_ref_clock_max and rate >= self.sample_ref_clock_min), "Incorrect reference clock; Should be 1000 MHz <= Clock <= 10 MHz"
-                self.reference_clock = rate
-
-            elif len(ref_clock) == 0:
-                return self.test_ref_clock
-            else:
-                assert( 1 == 2 ), 'Incorrect argument'
-
-    def awg_card_mode(self, *mode):
-        """
-        Set or query card mode;
-
-        'Single' is "Data generation from on-board memory replaying the complete programmed memory on every detected trigger
-        event. The number of replays can be programmed by loops."
-        "Single Joined" is 'Single' with joined pulses in one combined buffer.
-        'Multi' is "With every detected trigger event one data block (segment) is replayed."
-        Segmented memory is available only in External trigger mode.
-        'Sequence' is 'The sequence replay mode is a special firmware mode that allows to program an output sequence by defining one or more sequences each
-        associated with a certain memory pattern.'
-
-        Input: awg_card_mode('Single'); Card mode is 'Single'; 'Multi'; 'Sequence'
-        Default: 'Single';
-        Output: 'Single'
-        """
-        if self.test_flag != 'test':
-            self.setting_change_count = 1
-
-            if len(mode) == 1:
-                md = str(mode[0])
-                if md == 'Single':
-                    self.single_joined = 0
-                    self.card_mode = 32768
-                elif md == 'Single Joined':
-                    self.single_joined = 1
-                    self.card_mode = 32768                    
-                elif md == 'Multi':
-                    self.card_mode = 512
-                elif md == 'Sequence':
-                    self.sequence_mode = 1
-                else:
-                    general.message('Incorrect card mode; Only Single, Single Joined, Multi, and Sequence modes are available')
-                    sys.exit()
-
-            elif len(mode) == 0:
-                if self.card_mode == 32768 and self.sequence_mode == 0 and self.single_joined == 0:
-                    return 'Single'
-                elif self.card_mode == 32768 and self.sequence_mode == 0 and self.single_joined == 1:
-                    return 'Single Joined'
-                elif self.card_mode == 512 and self.sequence_mode == 0:
-                    return 'Multi'
-                elif self.sequence_mode == 1:
-                    return 'Sequence'
-
-        elif self.test_flag == 'test':
-            self.setting_change_count = 1
-
-            if len(mode) == 1:
-                md = str(mode[0])
-                assert(md == 'Single' or md == 'Single Joined' or md == 'Multi' or md == 'Sequence'), "Incorrect card mode; Only Single,\
-                                                                               Single Joined, Multi, and Sequence modes are available"
-                if md == 'Single':
-                    self.single_joined = 0
-                    self.card_mode = 32768
-                elif md == 'Single Joined':
-                    self.single_joined = 1
-                    self.card_mode = 32768
-                elif md == 'Multi':
-                    self.card_mode = 512
-                elif md == 'Sequence':
-                    self.sequence_mode = 1                    
-
-            elif len(mode) == 0:
-                return self.test_card_mode        
-            else:
-                assert( 1 == 2 ), 'Incorrect argument'
-
-    def awg_trigger_channel(self, *ch):
-        """
-        Set or query trigger channel;
-        Input: awg_trigger_channel('Software'); Trigger channel is 'Software'; 'External'
-        Default: 'External';
-        Output: 'Software'
-        """
-        if self.test_flag != 'test':
-            self.setting_change_count = 1
-
-            if len(ch) == 1:
-                md = str(ch[0])
-                if md == 'Software':
-                    self.trigger_ch = 1
-                elif md == 'External':
-                    self.trigger_ch = 2
-                else:
-                    general.message('Incorrect trigger channel; Only Software and External modes are available')
-                    sys.exit()
-
-            elif len(ch) == 0:
-                if self.trigger_ch == 1:
-                    return 'Software'
-                elif self.trigger_ch == 2:
-                    return 'External'
-
-        elif self.test_flag == 'test':
-            self.setting_change_count = 1
-
-            if len(ch) == 1:
-                md = str(ch[0])
-                assert(md == 'Software' or md == 'External'), "Incorrect trigger channel; Only Software and External modes are available"
-                if md == 'Software':
-                    self.trigger_ch = 1
-                elif md == 'External':
-                    self.trigger_ch = 2
-
-            elif len(ch) == 0:
-                return self.test_trigger_ch
-            else:
-                assert( 1 == 2 ), 'Incorrect argument'
-
-    def awg_trigger_mode(self, *mode):
-        """
-        Set or query trigger mode;
-        Input: awg_trigger_mode('Positive'); Trigger mode is 'Positive'; 'Negative'; 'High'; 'Low'
-        Default: 'Positive';
-        Output: 'Positive'
-        """
-        if self.test_flag != 'test':
-            self.setting_change_count = 1
-
-            if len(mode) == 1:
-                md = str(mode[0])
-                if md == 'Positive':
-                    self.trigger_mode = 1
-                elif md == 'Negative':
-                    self.trigger_mode = 2
-                elif md == 'High':
-                    self.trigger_mode = 8
-                elif md == 'Low':
-                    self.trigger_mode = 10
-                else:
-                    general.message("Incorrect trigger mode; Only Positive, Negative, High, and Low are available")
-                    sys.exit()
-
-            elif len(mode) == 0:
-                if self.trigger_mode == 1:
-                    return 'Positive'
-                elif self.trigger_mode == 2:
-                    return 'Negative'
-                elif self.trigger_mode == 8:
-                    return 'High'
-                elif self.trigger_mode == 10:
-                    return 'Low'
-
-        elif self.test_flag == 'test':
-            self.setting_change_count = 1
-
-            if len(mode) == 1:
-                md = str(mode[0])
-                assert(md == 'Positive' or md == 'Negative' or md == 'High' or md == 'Low'), "Incorrect trigger mode; \
-                    Only Positive, Negative, High, and Low are available"
-                if md == 'Positive':
-                    self.trigger_mode = 1
-                elif md == 'Negative':
-                    self.trigger_mode = 2
-                elif md == 'High':
-                    self.trigger_mode = 8
-                elif md == 'Low':
-                    self.trigger_mode = 10
-
-            elif len(mode) == 0:
-                return self.test_trigger_mode        
-            else:
-                assert( 1 == 2 ), 'Incorrect argument'
-
-    def awg_loop(self, *loop):
-        """
-        Set or query number of loop;
-        Input: awg_loop(0); Number of loop from 1 to 100000; 0 is infinite loop
-        Default: 0;
-        Output: '100'
-        """
-        if self.test_flag != 'test':
-            self.setting_change_count = 1
-
-            if len(loop) == 1:
-                lp = int(loop[0])
-                self.loop = lp
-
-            elif len(loop) == 0:
-                return self.loop
-
-        elif self.test_flag == 'test':
-            self.setting_change_count = 1
-
-            if len(loop) == 1:
-                lp = int(loop[0])
-                assert( lp >= 0 and lp <= self.loop_max ), "Incorrect number of loops; Should be 0 <= Loop <= 100000"
-                self.loop = lp
-
-            elif len(loop) == 0:
-                return self.test_loop      
-            else:
-                assert( 1 == 2 ), 'Incorrect argument'
-
-    def awg_trigger_delay(self, *delay):
-        """
-        Set or query trigger delay;
-        Input: awg_trigger_delay('100 ns'); delay in [ms, us, ns]
-        Step is 32 sample clock; will be rounded if input is not divisible by 32 sample clock
-        Default: 0 ns;
-        Output: '100 ns'
-        """
-        if self.test_flag != 'test':
-            self.setting_change_count = 1
-
-            if len(delay) == 1:
-                temp = delay[0].split(' ')
-                delay_num = float(temp[0])
-                dimen = str(temp[1])
-
-                if dimen in self.timebase_dict:
-                    flag = self.timebase_dict[dimen]
-                    # trigger delay in samples; maximum is 8589934560, step is 32
-                    del_in_sample = int( delay_num*flag*self.sample_rate / 1000 )
-                    if del_in_sample % 32 != 0:
-                        #self.delay = int( 32*(del_in_sample // 32) )
-                        self.delay = self.round_to_closest( del_in_sample, 32 )
-                        general.message('Delay should be divisible by 32 samples (25.6 ns at 1.250 GHz); The closest avalaibale number ' + str(self.delay * 1000 / self.sample_rate) + ' ns is used')
-
-                    else:
-                        self.delay = del_in_sample
-
-                else:
-                    general.message('Incorrect delay dimension; Should be ns, us or ms')
-                    sys.exit()
-
-            elif len(delay) == 0:
-                return str(self.delay / self.sample_rate * 1000) + ' ns'
-
-        elif self.test_flag == 'test':
-            self.setting_change_count = 1
-
-            if len(delay) == 1:
-                temp = delay[0].split(' ')
-                delay_num = float(temp[0])
-                dimen = str(temp[1])
-
-                assert( dimen in self.timebase_dict), 'Incorrect delay dimension; Should be ns, us or ms'
-                flag = self.timebase_dict[dimen]
-                # trigger delay in samples; maximum is 8589934560, step is 32
-                del_in_sample = int( delay_num*flag*self.sample_rate / 1000 )
-                if del_in_sample % 32 != 0:
-                    #self.delay = int( 32*(del_in_sample // 32) )
-                    self.delay = self.round_to_closest( del_in_sample, 32 )
-                else:
-                    self.delay = del_in_sample
-
-                assert(self.delay >= self.delay_min and self.delay <= self.delay_max), 'Incorrect delay; Should be 0 <= Delay <= 8589934560 samples'
-
-
-            elif len(delay) == 0:
-                return self.test_delay
-            else:
-                assert( 1 == 2 ), 'Incorrect argument'
-
-    def awg_amplitude(self, *amplitude):
-        """
-        Set or query amplitude of the channel;
-        Input: awg_amplitude('CH0', '600'); amplitude is in mV
-        awg_amplitude('CH0', '600', 'CH1', '600')
-        Default: CH0 - 600 mV; CH1 - 533 mV;
-        Output: '600 mV'
-        """
-        if self.test_flag != 'test':
-            self.setting_change_count = 1
-
-            if len(amplitude) == 2:
-                ch = str(amplitude[0])
-                ampl = int(amplitude[1])
-                if ch == 'CH0':
-                    self.amplitude_0 = ampl
-                elif ch == 'CH1':
-                    self.amplitude_1 = ampl
-            
-            elif len(amplitude) == 4:
-                ch1 = str(amplitude[0])
-                ampl1 = int(amplitude[1])
-                ch2 = str(amplitude[2])
-                ampl2 = int(amplitude[3])
-                if ch1 == 'CH0':
-                    self.amplitude_0 = ampl1
-                elif ch1 == 'CH1':
-                    self.amplitude_1 = ampl1
-                if ch2 == 'CH0':
-                    self.amplitude_0 = ampl2
-                elif ch2 == 'CH1':
-                    self.amplitude_1 = ampl2
-
-            elif len(amplitude) == 1:
-                ch = str(amplitude[0])
-                if ch == 'CH0':
-                    return str(self.amplitude_0) + ' mV'
-                elif ch == 'CH1':
-                    return str(self.amplitude_1) + ' mV'
-
-        elif self.test_flag == 'test':
-            self.setting_change_count = 1
-
-            if len(amplitude) == 2:
-                ch = str(amplitude[0])
-                ampl = int(amplitude[1])
-                assert(ch == 'CH0' or ch == 'CH1'), "Incorrect channel; Should be CH0 or CH1"
-                assert( ampl >= self.amplitude_min and ampl <= self.amplitude_max ), "Incorrect amplitude; Should be 80 <= amplitude <= 2500"
-                if ch == 'CH0':
-                    self.amplitude_0 = ampl
-                elif ch == 'CH1':
-                    self.amplitude_1 = ampl
-            
-            elif len(amplitude) == 4:
-                ch1 = str(amplitude[0])
-                ampl1 = int(amplitude[1])
-                ch2 = str(amplitude[2])
-                ampl2 = int(amplitude[3])
-                assert(ch1 == 'CH0' or ch1 == 'CH1'), "Incorrect channel 1; Should be CH0 or CH1"
-                assert( ampl1 >= self.amplitude_min and ampl1 <= self.amplitude_max ), "Incorrect amplitude 1; Should be 80 <= amplitude <= 2500"
-                assert(ch2 == 'CH0' or ch2 == 'CH1'), "Incorrect channel 2; Should be CH0 or CH1"
-                assert( ampl2 >= self.amplitude_min and ampl2 <= self.amplitude_max ), "Incorrect amplitude 2; Should be 80 <= amplitude <= 2500"
-                if ch1 == 'CH0':
-                    self.amplitude_0 = ampl1
-                elif ch1 == 'CH1':
-                    self.amplitude_1 = ampl1
-                if ch2 == 'CH0':
-                    self.amplitude_0 = ampl2
-                elif ch2 == 'CH1':
-                    self.amplitude_1 = ampl2
-
-            elif len(amplitude) == 1:
-                ch1 = str(amplitude[0])
-                assert(ch1 == 'CH0' or ch1 == 'CH1'), "Incorrect channel; Should be CH0 or CH1"
-                return self.test_amplitude
-
-            else:
-                assert( 1 == 2 ), 'Incorrect arguments'
-
-    # UNDOCUMENTED
-    def awg_clear(self):
-        """
-        A special function for AWG Control module
-        It clear self.pulse_array and other status flags
-        """
-        self.pulse_array = []
-        self.phase_array_length = []
-        self.pulse_name_array = []
-        self.pulse_array_init = []
-        self.pulse_ch0_array = []
-        self.pulse_ch1_array = []
-        
-        self.reset_count = 0
-        self.shift_count = 0
-        self.increment_count = 0
-        self.setting_change_count = 0
-        self.state = 0
-        self.current_phase_index = 0
-
-    # UNDOCUMENTED
-    def awg_clear_pulses(self):
-        """
-        A special function for clearing pulses and flags
-        when the card is opened
-        """
-        self.pulse_array = []
-        self.phase_array_length = []
-        self.pulse_name_array = []
-        self.pulse_array_init = []
-        self.pulse_ch0_array = []
-        self.pulse_ch1_array = []
-        
-        self.reset_count = 0
-        self.shift_count = 0
-        self.increment_count = 0
-        self.setting_change_count = 0
-        self.state = 1
-        self.current_phase_index = 0
-
-    def awg_test_flag(self, flag):
-        """
-        A special function for AWG Control module
-        It runs TEST mode
-        """
-        self.test_flag = flag
-        self.test_amplitude = '600 mV'
-
-    def awg_pulse_list(self):
-        """
-        Function for saving a pulse list from 
-        the script into the header of the experimental data
-        """
-        pulse_list_mod = ''
-        if self.card_mode == 32768 and self.single_joined == 0:
-            pulse_list_mod = pulse_list_mod + 'AWG card mode: ' + str( "Single" ) + '\n'
-        elif self.card_mode == 32768 and self.single_joined == 1:
-            pulse_list_mod = pulse_list_mod + 'AWG card mode: ' + str( "Single Joined" ) + '\n'
-            pulse_list_mod = pulse_list_mod + 'AWG amplitude (CH0, CH1): ' + str( self.awg_amplitude('CH0') ) + '; ' + str( self.awg_amplitude('CH1') ) + '\n'
-        elif self.card_mode == 512:
-            pulse_list_mod = pulse_list_mod + 'AWG card mode: ' + str( "Multi" ) + '\n'
-        elif self.card_mode == 262144:
-            pulse_list_mod = pulse_list_mod + 'AWG card mode: ' + str( "Sequence" ) + '\n'
-
-        if  self.sequence_mode == 0:
-            for element in self.pulse_array:
-                pulse_list_mod = pulse_list_mod + str(element) + '\n'
-
-            return pulse_list_mod
-
-        elif  self.sequence_mode == 1:
-            pulse_list_mod = pulse_list_mod + str(arguments_array) + '\n'
-
-            return pulse_list_mod
-
-    def awg_visualize(self):
-        """
-        A function for buffer visualization
-        """
-        if self.test_flag != 'test':
-            
-            self.visualize_counter += 1
-
-            if self.sequence_mode == 0:
-                if self.card_mode == 32768 and (self.channel == 1 or self.channel == 2) and self.single_joined == 0:
-                    buf = self.define_buffer_single()[1]
-
-                    del self.pnBuffer
-                    del self.pvBuffer
-                    
-                    # free memory when the limit is achieved
-                    if self.visualize_counter * self.qwBufferSize.value > self.gc_collect_limit:
-                        gc.collect()
-                        self.visualize_counter = 0
-
-                    xs = 1000/self.sample_rate*np.arange( int(self.memsize) )
-                    # A way to convert c_types poinet back to np.array
-                    # np.ctypeslib.as_array(buf, shape = (int(self.memsize), ))
-                    # also try
-                    # pbyData = cast  (addressof (self.pvBuffer) + lPCPos.value, ptr8) # cast to pointer to 8bit integer
-                    general.plot_1d('Buffer_single', xs, np.ctypeslib.as_array(buf, shape = (int(self.memsize), )), \
-                                    label = 'ch0 or ch1')
-
-                # Single Joined
-                elif self.card_mode == 32768 and (self.channel == 1 or self.channel == 2) and self.single_joined == 1:
-                    buf = self.define_buffer_single_joined()[1]
-
-                    del self.pnBuffer
-                    del self.pvBuffer
-                    
-                    # free memory when the limit is achieved
-                    if self.visualize_counter * self.qwBufferSize.value > self.gc_collect_limit:
-                        gc.collect()
-                        self.visualize_counter = 0
-
-                    xs = 1000/self.sample_rate*np.arange( int(self.memsize) )
-                    # A way to convert c_types poinet back to np.array
-                    # np.ctypeslib.as_array(buf, shape = (int(self.memsize), ))
-                    general.plot_1d('Buffer_single_joined', xs, np.ctypeslib.as_array(buf, shape = (int(self.memsize), )), \
-                                    label = 'ch0 or ch1')
-
-                elif self.card_mode == 32768 and self.channel == 3 and self.single_joined == 0:
-                    buf = self.define_buffer_single()[1]
-
-                    del self.pnBuffer
-                    del self.pvBuffer
-                    
-                    # free memory when the limit is achieved
-                    if self.visualize_counter * self.qwBufferSize.value > self.gc_collect_limit:
-                        gc.collect()
-                        self.visualize_counter = 0
-
-                    xs = 1000/self.sample_rate*np.arange( int(self.memsize) )
-                    general.plot_1d('Buffer_single', xs, np.ctypeslib.as_array(buf, shape = (int(self.memsize * 2), ))[0::2], \
-                                    label = 'ch0')
-                    general.plot_1d('Buffer_single', xs, 2 * self.maxCAD + np.ctypeslib.as_array(buf, shape = (int(self.memsize * 2), ))[1::2], \
-                                    label = 'ch1')
-
-                # Single Joined
-                elif self.card_mode == 32768 and self.channel == 3 and self.single_joined == 1:
-                    buf = self.define_buffer_single_joined()[1]
-
-                    del self.pnBuffer
-                    del self.pvBuffer
-                    
-                    # free memory when the limit is achieved
-                    if self.visualize_counter * self.qwBufferSize.value > self.gc_collect_limit:
-                        gc.collect()
-                        self.visualize_counter = 0
-
-                    xs = 1000/self.sample_rate*np.arange( int(self.memsize) )
-                    ##sin = self.maxCAD * np.sin(2*np.pi*xs*0.125)
-                    general.plot_1d('Buffer_single_joined', xs, np.ctypeslib.as_array(buf, shape = (int(self.memsize * 2), ))[0::2], \
-                                    label = 'ch0')
-                    general.plot_1d('Buffer_single_joined', xs, 2 * self.maxCAD + np.ctypeslib.as_array(buf, shape = (int(self.memsize * 2), ))[1::2], \
-                                    label = 'ch1')
-                    ###general.plot_1d('Buffer_single_joined', xs, sin, label = 'sin')
-
-                elif self.card_mode == 512 and (self.channel == 1 or self.channel == 2):
-                    buf = self.define_buffer_multi()[1]
-
-                    del self.pnBuffer
-                    del self.pvBuffer
-                    
-                    # free memory when the limit is achieved
-                    if self.visualize_counter * self.qwBufferSize.value > self.gc_collect_limit:
-                        gc.collect()
-                        self.visualize_counter = 0
-
-                    xs = 1000/self.sample_rate*np.arange( int(self.memsize) )
-                    general.plot_1d('Buffer_multi', xs, np.ctypeslib.as_array(buf, shape = (int(self.memsize), )), \
-                                    label = 'ch0 or ch1')
-               
-                elif self.card_mode == 512 and self.channel == 3:
-                    buf = self.define_buffer_multi()[1]
-
-                    del self.pnBuffer
-                    del self.pvBuffer
-                    
-                    # free memory when the limit is achieved
-                    if self.visualize_counter * self.qwBufferSize.value > self.gc_collect_limit:
-                        gc.collect()
-                        self.visualize_counter = 0
-
-                    xs = 1000/self.sample_rate*np.arange( int(self.memsize) )
-                    general.plot_1d('Buffer_multi', xs, np.ctypeslib.as_array(buf, shape = (int(self.memsize * 2), ))[0::2], \
-                                    label = 'ch0')
-                    general.plot_1d('Buffer_multi', xs, 2 * self.maxCAD + np.ctypeslib.as_array(buf, shape = (int(self.memsize * 2), ))[1::2], \
-                                    label = 'ch1')
-
-            elif self.sequence_mode == 1:
-                if self.channel != 3:
-                    xs = np.arange( 0, int(self.qwBufferSize.value/2) )*1000/self.sample_rate
-
-                    general.plot_1d('Buffer_sequence', xs, np.ctypeslib.as_array(self.full_buffer[0], shape = (int(self.qwBufferSize.value/2), )),\
-                                        label = '0ch0')
-                    general.plot_1d('Buffer_sequence', xs, 2*self.maxCAD + np.ctypeslib.as_array(self.full_buffer[1], shape = (int(self.qwBufferSize.value/2), )), \
-                                        label = '1ch0')
-                    general.plot_1d('Buffer_sequence', xs, 4*self.maxCAD + np.ctypeslib.as_array(self.full_buffer[2], shape = (int(self.qwBufferSize.value/2), )), \
-                                        label = '2ch0')
-
-                    del self.pnBuffer
-                    del self.pvBuffer
-                    del self.full_buffer
-                    
-                    # free memory when the limit is achieved
-                    if self.visualize_counter * self.qwBufferSize.value * self.sequence_segments > self.gc_collect_limit:
-                        gc.collect()
-                        self.visualize_counter = 0
-
-                elif self.channel == 3:
-                    xs = np.arange( 0, int(self.qwBufferSize.value/4) )*1000/self.sample_rate
-                
-                    general.plot_1d('Buffer_sequence', xs, np.ctypeslib.as_array(self.full_buffer[0], \
-                                    shape = (int(self.qwBufferSize.value/2), ))[0::2], label = '0ch0')
-                    general.plot_1d('Buffer_sequence', xs, 2*self.maxCAD + np.ctypeslib.as_array(self.full_buffer[0], \
-                                    shape = (int(self.qwBufferSize.value/2), ))[1::2], label = '0ch1')
-                    general.plot_1d('Buffer_sequence', xs, 4*self.maxCAD + np.ctypeslib.as_array(self.full_buffer[1], \
-                                    shape = (int(self.qwBufferSize.value/2), ))[0::2], label = '1ch0')
-                    general.plot_1d('Buffer_sequence', xs, 6*self.maxCAD + np.ctypeslib.as_array(self.full_buffer[1], \
-                                    shape = (int(self.qwBufferSize.value/2), ))[1::2], label = '1ch1')
-
-                    del self.pnBuffer
-                    del self.pvBuffer
-                    del self.full_buffer
-                    
-                    # free memory when the limit is achieved
-                    if self.visualize_counter * self.qwBufferSize.value * self.sequence_segments > self.gc_collect_limit:
-                        gc.collect()
-                        self.visualize_counter = 0
-
-                    #pure_sinus = np.zeros(len(xs))
-                    #for i in range(len(xs)):
-                    #    pure_sinus[i] = sin(2*pi*(( i ))*70 / 1250)
-                    #general.plot_1d('buffer', xs, 6 + pure_sinus, label = 'sine')
-
-        elif self.test_flag == 'test':
-            
-            self.visualize_counter += 1
-
-            if self.sequence_mode == 0:
-                if self.card_mode == 32768 and (self.channel == 1 or self.channel == 2) and self.single_joined == 0:
-                    buf = self.define_buffer_single()[1]
-
-                    del self.pnBuffer
-                    del self.pvBuffer
-                    
-                    # free memory when the limit is achieved
-                    if self.visualize_counter * self.qwBufferSize.value > self.gc_collect_limit:
-                        gc.collect()
-                        self.visualize_counter = 0
-
-                    xs = 1000/self.sample_rate*np.arange( int(self.memsize) )
-                    general.plot_1d('Buffer_single', xs, np.ctypeslib.as_array(buf, shape = (int(self.memsize), )), \
-                                    label = 'ch0 or ch1')
-
-                # Single Joined
-                elif self.card_mode == 32768 and (self.channel == 1 or self.channel == 2) and self.single_joined == 1:
-                    buf = self.define_buffer_single_joined()[1]
-
-                    del self.pnBuffer
-                    del self.pvBuffer
-                    
-                    # free memory when the limit is achieved
-                    if self.visualize_counter * self.qwBufferSize.value > self.gc_collect_limit:
-                        gc.collect()
-                        self.visualize_counter = 0
-
-                    xs = 1000/self.sample_rate*np.arange( int(self.memsize) )
-                    # A way to convert c_types poinet back to np.array
-                    #np.ctypeslib.as_array(buf, shape = (int(self.memsize), ))
-                    general.plot_1d('Buffer_single_joined', xs, np.ctypeslib.as_array(buf, shape = (int(self.memsize), )), \
-                                    label = 'ch0 or ch1')
-
-                elif self.card_mode == 32768 and self.channel == 3 and self.single_joined == 0:
-                    buf = self.define_buffer_single()[1]
-
-                    del self.pnBuffer
-                    del self.pvBuffer
-                    
-                    # free memory when the limit is achieved
-                    if self.visualize_counter * self.qwBufferSize.value > self.gc_collect_limit:
-                        gc.collect()
-                        self.visualize_counter = 0
-
-                    xs = 1000/self.sample_rate*np.arange( int(self.memsize) )
-                    general.plot_1d('Buffer_single', xs, np.ctypeslib.as_array(buf, shape = (int(self.memsize * 2), ))[0::2], \
-                                    label = 'ch0')
-                    general.plot_1d('Buffer_single', xs, 2 * self.maxCAD + np.ctypeslib.as_array(buf, shape = (int(self.memsize * 2), ))[1::2], \
-                                    label = 'ch1')
-                
-                # Single Joined
-                elif self.card_mode == 32768 and self.channel == 3 and self.single_joined == 1:
-                    buf = self.define_buffer_single_joined()[1]
-
-                    del self.pnBuffer
-                    del self.pvBuffer
-                    
-                    # free memory when the limit is achieved
-                    if self.visualize_counter * self.qwBufferSize.value > self.gc_collect_limit:
-                        gc.collect()
-                        self.visualize_counter = 0
-
-                    xs = 1000/self.sample_rate*np.arange( int(self.memsize) )
-                    general.plot_1d('Buffer_single_joined', xs, np.ctypeslib.as_array(buf, shape = (int(self.memsize * 2), ))[0::2], \
-                                    label = 'ch0')
-                    general.plot_1d('Buffer_single_joined', xs, 2 * self.maxCAD + np.ctypeslib.as_array(buf, shape = (int(self.memsize * 2), ))[1::2], \
-                                    label = 'ch1')
-
-                elif self.card_mode == 512 and (self.channel == 1 or self.channel == 2):
-                    buf = self.define_buffer_multi()[1]
-
-                    del self.pnBuffer
-                    del self.pvBuffer
-                    
-                    # free memory when the limit is achieved
-                    if self.visualize_counter * self.qwBufferSize.value > self.gc_collect_limit:
-                        gc.collect()
-                        self.visualize_counter = 0
-
-                    xs = 1000/self.sample_rate*np.arange( int(self.memsize) )
-                    general.plot_1d('Buffer_multi', xs, np.ctypeslib.as_array(buf, shape = (int(self.memsize), )), \
-                                    label = 'ch0 or ch1')
-               
-                elif self.card_mode == 512 and self.channel == 3:
-                    buf = self.define_buffer_multi()[1]
-
-                    del self.pnBuffer
-                    del self.pvBuffer
-                    
-                    # free memory when the limit is achieved
-                    if self.visualize_counter * self.qwBufferSize.value > self.gc_collect_limit:
-                        gc.collect()
-                        self.visualize_counter = 0
-
-                    xs = 1000/self.sample_rate*np.arange( int(self.memsize) )
-                    general.plot_1d('Buffer_multi', xs, np.ctypeslib.as_array(buf, shape = (int(self.memsize * 2), ))[0::2], \
-                                    label = 'ch0')
-                    general.plot_1d('Buffer_multi', xs, 2 * self.maxCAD + np.ctypeslib.as_array(buf, shape = (int(self.memsize * 2), ))[1::2], \
-                                    label = 'ch1')
-
-            elif self.sequence_mode == 1:
-                if self.channel != 3:
-                    pass
-                    # no buffer is filled in test
-
-
-                elif self.channel == 3:
-                    pass
-                    # no buffer is filled in test
-
-            elif self.full_buffer != 0:
-                assert( 1 == 2 ), 'No pulse sequence is defined'
-
-    def awg_pulse_sequence(self, *, pulse_type, pulse_start, pulse_delta_start,\
-                            pulse_length, pulse_phase, pulse_sigma, pulse_frequency, number_of_points, loop, rep_rate, n, b_sech):
-        """
-        A function for Sequence mode of the AWG card.
-        The sequence replay mode is a special firmware mode that allows to program an output sequence by defining one or more sequences each
-        associated with a certain memory pattern.
-        #######
-        Possible trigger is needed only once. Should be also zeros that define repetition rate
-        #######
-
-        Pulse_start must be sorted
-        number of channel should be defined before awg.awg_pulse_sequence()
-
-        The function refilling the sequence buffer after each call
-        After going through all the buffer the AWG card will be stopped
-        Inside an experimental script this function can be called only with all arguments specified
-
-        12-08-2021:
-        No additional amplification coefficient is taking into account in this function
-        """
-        if self.test_flag != 'test':
-
-            # collect arguments in special array for further handling
-            arguments_array = []
-            arguments_array.append(pulse_type)          #   0   type: SINE, GAUSS, SINC, WURST
-            arguments_array.append(pulse_start)         #   1   start
-            arguments_array.append(pulse_delta_start)   #   2   delta start
-            arguments_array.append(pulse_length)        #   3   length
-            arguments_array.append(pulse_phase)         #   4   phase
-            arguments_array.append(pulse_sigma)         #   5   sigma
-            arguments_array.append(pulse_frequency)     #   6   frequency; a tuple (center_freq; sweep_freq) for WURST pulse
-            arguments_array.append(number_of_points)    #   7   number of points in sequence
-            arguments_array.append(loop)                #   8   number of loops
-            arguments_array.append(rep_rate)            #   9   repetition rate
-            arguments_array.append(n)                   #  10   n parameter for WURST and SECH/TANH pulses
-            arguments_array.append(b_sech)              #  11   b parameter for SECH/TANH pulse
-
-            # turn on the sequence mode
-            self.sequence_mode = 1
-            # number of segments should be power of two
-            # segments can be empty
-            self.sequence_segments = self.closest_power_of_two( arguments_array[7] )
-            #self.sequence_segments = self.round_to_closest( arguments_array[7], 32 )
-            self.sequence_loop = arguments_array[8]
-            # repetition rate for pulse sequence in samples; Hz -> ns -> samples
-            seq_rep_rate = int( ( 10**9 / (arguments_array[9])) * self.sample_rate/1000 )
-            if seq_rep_rate % 32 != 0:
-                #seq_rep_rate = int( 32*(seq_rep_rate // 32) )
-                seq_rep_rate = self.round_to_closest( seq_rep_rate, 32 )
-                general.message('Repetition rate should be divisible by 25.6 ns; The closest avalaibale number is used: ' + str( 1/(seq_rep_rate*10**-6 / self.sample_rate )) + ' Hz' )
-
-            # convert phase list to radians
-            pulse_phase_converted = []
-            for el in arguments_array[4]:
-                if el == '+x':
-                    pulse_phase_converted.append(0)
-                elif el == '-x':
-                    pulse_phase_converted.append(pi)
-                elif el == '+y':
-                    pulse_phase_converted.append(pi/2)
-                elif el == '-y':
-                    pulse_phase_converted.append(3*pi/2)
-                elif el == 'rand':
-                    # 1000 will never be reached
-                    # use it for distinguish DEER random phase pulse
-                    pulse_phase_converted.append(1000)
-            
-            # WURST pulse center_freq; sweep_freq convertion to start_freq; end_freq
-            for index, el in enumerate(arguments_array[6]):
-                try:
-                    if len(el) == 2:
-                        # for WURST convert center_freq; sweep_freq to start_freq; end_freq
-                        cen = float(el[0])
-                        sw = float(el[1])
-                        arguments_array[6][index] = ( ( 2 * cen - sw ) / 2, ( 2 * cen + sw ) / 2 )
-                except TypeError:
-                    pass
-
-            # convert everything in samples 
-            pulse_phase_np = np.asarray(pulse_phase_converted)
-            pulse_start_smp = (np.asarray(arguments_array[1])*self.sample_rate/1000).astype('int64')
-            pulse_delta_start_smp = (np.asarray(arguments_array[2])*self.sample_rate/1000).astype('int64')
-            pulse_length_smp = (np.asarray(arguments_array[3])*self.sample_rate/1000).astype('int64')
-            pulse_sigma_smp = np.asarray(arguments_array[5])*self.sample_rate/1000
-            pulse_frequency = np.asarray(arguments_array[6], dtype='object')
-            pulse_n_wurst = np.asarray(arguments_array[10])
-            pulse_b_sech = np.asarray(arguments_array[11])
-
-            # we do not expect that pulses will have drastically different
-            # pulse length. It is better to define the same buffer length 
-            # for each segment, since in this case we should not worry about
-            # saving the information about memory size for each segments
-            max_pulse_length = max( pulse_length_smp )
-            max_start = max( pulse_start_smp )
-            max_delta_start = max( pulse_delta_start_smp )
-            # buffer length is defined from the largest delay
-            #segment_length = self.closest_power_of_two( max_start + max_pulse_length + max_delta_start*arguments_array[7] )
-            # buffer length is defined from the repetiton rate
-            segment_length = seq_rep_rate
-
-            # define buffer differently for only one or two channels enabled
-            # for ch1 phase is automatically shifted by self.phase_shift_ch1_seq_mode
-            if self.channel == 1 or self.channel == 2:
-                #self.full_buffer = np.zeros( ( arguments_array[7], segment_length ), dtype = np.float64 )
-                # save buffer directly in c_types format
-                self.full_buffer = []
-                self.full_buffer_pointer = []
-
-                # define the buffer
-                self.pnBuffer = c_void_p()
-                self.qwBufferSize = uint64 (2 * segment_length)  # buffer size
-                
-                # run over all defined pulses for each point
-                for point in range(arguments_array[7]):
-                    # clear the buffer
-                    self.pvBuffer = pvAllocMemPageAligned (self.qwBufferSize.value)
-                    self.pnBuffer = cast (self.pvBuffer, ptr16)
-
-                    # run over defined pulses inside a sequence point
-                    for index, element in enumerate(pulse_type):
-                        # for DEER pulse with random phase
-                        rnd_phase = 2*pi*random.random()
-
-                        if element == 'SINE':
-                            for i in range(pulse_start_smp[index] + pulse_delta_start_smp[index]*point, segment_length):
-
-                                    if i < (pulse_start_smp[index] + pulse_delta_start_smp[index]*point):
-                                        pass
-                                    elif ( i >= ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point) and \
-                                           i <= (pulse_start_smp[index] + pulse_length_smp[index] + pulse_delta_start_smp[index]*point) ):
-                                        
-                                        if pulse_phase_np[index] != 1000:
-                                            #self.full_buffer[point, i]
-                                            # i one phase
-                                            # ( i - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i] = int( self.maxCAD * sin(2*pi*(( i - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)))*pulse_frequency[index] / self.sample_rate \
-                                                            + pulse_phase_np[index] ) )
-
-                                        else:
-                                            #self.full_buffer[point, i]
-                                            # i one phase
-                                            # ( i - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i] = int( self.maxCAD * sin(2*pi*(( i - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)))*pulse_frequency[index] / self.sample_rate \
-                                                            + rnd_phase) )
-                                    else:
-                                        break
-
-                        elif element == 'GAUSS':
-                            # mid_point for GAUSS, SINC, and WURST, SECH/TANH
-                            mid_point = int( (pulse_start_smp[index] + pulse_delta_start_smp[index]*point + \
-                                        pulse_start_smp[index] + pulse_length_smp[index] + pulse_delta_start_smp[index]*point)/2 )
-
-                            for i in range(pulse_start_smp[index] + pulse_delta_start_smp[index]*point, segment_length):
-                                    if i < (pulse_start_smp[index] + pulse_delta_start_smp[index]*point):
-                                        pass
-                                    elif ( i >= ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point) and \
-                                           i <= (pulse_start_smp[index] + pulse_length_smp[index] + pulse_delta_start_smp[index]*point) ):
-                                        
-                                        if pulse_phase_np[index] != 1000:
-                                            #self.full_buffer[point, i]
-                                            # i one phase
-                                            # ( i - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i] = int( self.maxCAD * exp(-((( i ) - mid_point)**2)*(1/(2*pulse_sigma_smp[index]**2)))*\
-                                                                    sin(2*pi*(( i - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)))*pulse_frequency[index] / self.sample_rate \
-                                                                    + pulse_phase_np[index] ) )
-
-                                        else:
-                                            #self.full_buffer[point, i]
-                                            # i one phase
-                                            # ( i - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i] = int( self.maxCAD * exp(-((( i ) - mid_point)**2)*(1/(2*pulse_sigma_smp[index]**2)))*\
-                                                                    sin(2*pi*(( i - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)))*pulse_frequency[index] / self.sample_rate \
-                                                                    + pulse_phase_np[index] + rnd_phase) )
-                                    else:
-                                        break
-
-                        elif element == 'SINC':
-                            # mid_point for GAUSS, SINC, and WURST, SECH/TANH
-                            mid_point = int( (pulse_start_smp[index] + pulse_delta_start_smp[index]*point + \
-                                        pulse_start_smp[index] + pulse_length_smp[index] + pulse_delta_start_smp[index]*point)/2 )
-
-                            for i in range(pulse_start_smp[index] + pulse_delta_start_smp[index]*point, segment_length):
-                                    if i < (pulse_start_smp[index] + pulse_delta_start_smp[index]*point):
-                                        pass
-                                    elif ( i >= ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point) and \
-                                           i <= (pulse_start_smp[index] + pulse_length_smp[index] + pulse_delta_start_smp[index]*point) ):
-                                        
-                                        if pulse_phase_np[index] != 1000:
-                                            #self.full_buffer[point, i] 
-                                            # i one phase
-                                            # ( i - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i] = int( self.maxCAD * np.sinc(2*(( i ) - mid_point) / (pulse_sigma_smp[index]) )*\
-                                                                    sin(2*pi*(( i - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)))*pulse_frequency[index] / self.sample_rate \
-                                                                    + pulse_phase_np[index] ) )
-
-                                        else:
-                                            #self.full_buffer[point, i]
-                                            # i one phase
-                                            # ( i - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i] = int( self.maxCAD * np.sinc(2*(( i ) - mid_point) / (pulse_sigma_smp[index]) )*\
-                                                                    sin(2*pi*(( i - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)))*pulse_frequency[index] / self.sample_rate \
-                                                                    + pulse_phase_np[index] + rnd_phase) )
-                                    else:
-                                        break
-
-                        elif element == 'BLANK':
-                            break
-
-                        elif element == 'WURST':
-                            # mid_point for GAUSS, SINC, and WURST, SECH/TANH
-                            # at = A*( 1 - abs( sin(pi*(t-tp/2)/tp) )^n )
-                            # ph = 2*pi*(Fstr*t + 0.5*( Ffin - Fstr )*t^2/tp )
-                            # WURST = at*sin(ph + phase_0)
-                            mid_point = int( (pulse_start_smp[index] + pulse_delta_start_smp[index]*point + \
-                                        pulse_start_smp[index] + pulse_length_smp[index] + pulse_delta_start_smp[index]*point)/2 )
-
-                            for i in range(pulse_start_smp[index] + pulse_delta_start_smp[index]*point, segment_length):
-                                    if i < (pulse_start_smp[index] + pulse_delta_start_smp[index]*point):
-                                        pass
-                                    elif ( i >= ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point) and \
-                                           i <= (pulse_start_smp[index] + pulse_length_smp[index] + pulse_delta_start_smp[index]*point) ):
-                                        
-                                        if pulse_phase_np[index] != 1000:
-                                            #self.full_buffer[point, i]
-                                            # i one phase
-                                            # ( i - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i] = int( self.maxCAD * ( 1 - abs( sin( pi*( i - mid_point ) / pulse_length_smp[index] ) ) ** pulse_n_wurst[index] )*\
-                                                            sin(2*pi*( ( i - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)) * pulse_frequency[index][0] / self.sample_rate \
-                                                            + 0.5 * (pulse_frequency[index][1] - pulse_frequency[index][0])*\
-                                                            ( ( i - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))**2 ) / pulse_length_smp[index] / self.sample_rate ) \
-                                                            + pulse_phase_np[index] ) )
-
-                                        else:
-                                            #self.full_buffer[point, i]
-                                            # self.maxCAD / pulse_amp[index]
-                                            # i one phase
-                                            # ( i - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i] = int( self.maxCAD * ( 1 - abs( sin( pi*( i - mid_point ) / pulse_length_smp[index] ) ) ** pulse_n_wurst[index] )*\
-                                                            sin(2*pi*( ( i - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)) * pulse_frequency[index][0] / self.sample_rate \
-                                                            + 0.5 * (pulse_frequency[index][1] - pulse_frequency[index][0])*\
-                                                            ( ( i - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))**2 ) / pulse_length_smp[index] / self.sample_rate ) \
-                                                            + pulse_phase_np[index] + rnd_phase ) )
-
-                                    else:
-                                        break
-
-                        elif element == 'SECH/TANH':
-                            # at = Sech[b*tp*2^(n - 1) ((t - tp/2)/tp)^n];
-                            # ph = 2*Pi*bw/b*Log[Cosh[b*(t - tp/2)]]/2/Tanh[b*tp/2]
-                            # SECH/TANH = at*sin(ph + phase_0)
-
-                            freq_cen = ( pulse_frequency[index][1] + pulse_frequency[index][0] ) / 2
-                            mid_point = int( (pulse_start_smp[index] + pulse_delta_start_smp[index]*point + \
-                                        pulse_start_smp[index] + pulse_length_smp[index] + pulse_delta_start_smp[index]*point)/2 )
-
-                            for i in range(pulse_start_smp[index] + pulse_delta_start_smp[index]*point, segment_length):
-                                if i < (pulse_start_smp[index] + pulse_delta_start_smp[index]*point):
-                                    pass
-                                elif ( i >= ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point) and \
-                                       i <= (pulse_start_smp[index] + pulse_length_smp[index] + pulse_delta_start_smp[index]*point) ):
-                                    
-                                    self.pnBuffer[i] = int( self.maxCAD * ( 1 / np.cosh( pulse_b_sech[index] * pulse_length_smp[index] * 2 **(pulse_n_wurst[index] - 1) * ( ( i - mid_point ) \
-                                        / pulse_length_smp[index]  ) **pulse_n_wurst[index] ) ) * \
-                                        sin(2*pi*(pulse_frequency[index][1] - pulse_frequency[index][0]) / self.sample_rate / pulse_b_sech[index] * \
-                                        np.log( np.cosh( pulse_b_sech[index] * ( i - mid_point ) ) ) / 2 / np.tanh( pulse_b_sech[index] * mid_point ) + pulse_phase_np[index] + \
-                                        2 * pi * i * (pulse_frequency[index][1] - pulse_frequency[index][0]) / 2 / self.sample_rate ))
-                                else:
-                                    break
-
-                    self.full_buffer.append(self.pnBuffer)
-                    self.full_buffer_pointer.append(self.pvBuffer)
-                
-                # for sequence_segments as a power of two
-                for point in range(arguments_array[7], self.sequence_segments):
-                    # clear the buffer
-                    self.pvBuffer = pvAllocMemPageAligned (self.qwBufferSize.value)
-                    self.pnBuffer = cast (self.pvBuffer, ptr16)
-
-                    self.full_buffer.append(self.pnBuffer)
-                    self.full_buffer_pointer.append(self.pvBuffer)
-
-            elif self.channel == 3:
-                #self.full_buffer = np.zeros( ( arguments_array[7], 2*segment_length ), dtype = np.float64 )
-                # save buffer directly in c_types format
-                self.full_buffer = []
-                self.full_buffer_pointer = []
-
-                # define the buffer
-                self.pnBuffer = c_void_p()
-                self.qwBufferSize = uint64 (2 * segment_length * 2)  # buffer size for two channels
-
-                # run over all defined pulses for each point
-                for point in range(arguments_array[7]):
-                    # clear the buffer
-                    self.pvBuffer = pvAllocMemPageAligned (self.qwBufferSize.value)
-                    self.pnBuffer = cast (self.pvBuffer, ptr16)
-
-                    # run over defined pulses inside a sequence point
-                    for index, element in enumerate(pulse_type):
-                        # DEER pulse
-                        rnd_phase = 2*pi*random.random()
-
-                        if element == 'SINE':
-
-                            for i in range(2 * (pulse_start_smp[index] + pulse_delta_start_smp[index]*point), 2*segment_length, 2):
-                                    if i < 2 * (pulse_start_smp[index] + pulse_delta_start_smp[index]*point):
-                                        pass
-                                    elif ( i >= 2 * ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point) and \
-                                           i <= 2 * (pulse_start_smp[index] + pulse_length_smp[index] + pulse_delta_start_smp[index]*point) ):
-                                        
-                                        if pulse_phase_np[index] != 1000:
-                                            #self.full_buffer[point, i]
-                                            #ch0
-                                            # i/2 one phase
-                                            # ( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i] = int( self.maxCAD * sin(2*pi*(( i/2 ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] ) )
-                                            #ch1
-                                            # i/2 one phase
-                                            # ( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i + 1] = int( self.maxCAD * sin(2*pi*(( ( i )/2 ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] +\
-                                                                     self.phase_shift_ch1_seq_mode) )
-
-                                        else:
-                                            #self.full_buffer[point, i]
-                                            #ch0
-                                            # i/2 one phase
-                                            # ( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i] = int( self.maxCAD * sin(2*pi*(( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)))*pulse_frequency[index] / self.sample_rate\
-                                                                + rnd_phase) )
-                                            #ch1
-                                            # i/2 one phase
-                                            # ( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i + 1] = int( self.maxCAD * sin(2*pi*(( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)))*pulse_frequency[index] / self.sample_rate\
-                                                                  + rnd_phase + self.phase_shift_ch1_seq_mode) )                                            
-                                    else:
-                                        break
-
-                        elif element == 'GAUSS':
-                            # mid_point for GAUSS, SINC, and WURST, and SECH/TANH
-                            mid_point = int( (pulse_start_smp[index] + pulse_delta_start_smp[index]*point + \
-                                pulse_start_smp[index] + pulse_length_smp[index] + pulse_delta_start_smp[index]*point)/2 )
-
-                            for i in range(2 * (pulse_start_smp[index] + pulse_delta_start_smp[index]*point), 2*segment_length, 2):
-
-                                    if i < 2 * (pulse_start_smp[index] + pulse_delta_start_smp[index]*point):
-                                        pass
-                                    elif ( i >= 2 * ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point) and \
-                                           i <= 2 * (pulse_start_smp[index] + pulse_length_smp[index] + pulse_delta_start_smp[index]*point) ):
-                                        
-                                        if pulse_phase_np[index] != 1000:
-                                            #self.full_buffer[point, i]
-                                            #ch0
-                                            # i/2 one phase
-                                            # ( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i] = int( self.maxCAD * exp(-((( i/2 ) - mid_point)**2)*(1/(2*pulse_sigma_smp[index]**2)))*\
-                                                                    sin(2*pi*(( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)))*pulse_frequency[index] / self.sample_rate \
-                                                                    + pulse_phase_np[index] ) )
-                                            #ch1
-                                            # i/2 one phase
-                                            # ( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i + 1] = int( self.maxCAD * exp(-((( ( i )/2 ) - mid_point)**2)*(1/(2*pulse_sigma_smp[index]**2)))*\
-                                                                    sin(2*pi*(( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)))*pulse_frequency[index] / self.sample_rate \
-                                                                    + pulse_phase_np[index] + self.phase_shift_ch1_seq_mode) )
-
-                                        else:
-                                            #self.full_buffer[point, i]
-                                            #ch0
-                                            # i/2 one phase
-                                            # ( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i] = int( self.maxCAD * exp(-((( i/2 ) - mid_point)**2)*(1/(2*pulse_sigma_smp[index]**2)))*\
-                                                                    sin(2*pi*(( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)))*pulse_frequency[index] / self.sample_rate \
-                                                                    + rnd_phase ) )
-                                            #ch1
-                                            # i/2 one phase
-                                            # ( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i + 1] = int( self.maxCAD * exp(-((( ( i )/2 ) - mid_point)**2)*(1/(2*pulse_sigma_smp[index]**2)))*\
-                                                                    sin(2*pi*(( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)))*pulse_frequency[index] / self.sample_rate \
-                                                                    + rnd_phase + self.phase_shift_ch1_seq_mode) )
-
-                                    else:
-                                        break
-                            
-                        elif element == 'SINC':
-                            # mid_point for GAUSS, SINC, and WURST, and SECH/TANH
-                            mid_point = int( (pulse_start_smp[index] + pulse_delta_start_smp[index]*point + \
-                                pulse_start_smp[index] + pulse_length_smp[index] + pulse_delta_start_smp[index]*point)/2 )
-
-                            for i in range(2 * (pulse_start_smp[index] + pulse_delta_start_smp[index]*point), 2*segment_length, 2):
-
-                                    if i < 2 * (pulse_start_smp[index] + pulse_delta_start_smp[index]*point):
-                                        pass
-                                    elif ( i >= 2 * ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point) and \
-                                           i <= 2 * (pulse_start_smp[index] + pulse_length_smp[index] + pulse_delta_start_smp[index]*point) ):
-                                        
-                                        if pulse_phase_np[index] != 1000:
-                                            #self.full_buffer[point, i]
-                                            #ch0
-                                            # i/2 one phase
-                                            # ( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i] = int( self.maxCAD * np.sinc(2*(( i/2 ) - mid_point) / (pulse_sigma_smp[index]) )*\
-                                                                     sin(2*pi*(( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)))*pulse_frequency[index] / self.sample_rate \
-                                                                     + pulse_phase_np[index] ) )
-                                            #ch1
-                                            # i/2 one phase
-                                            # ( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i + 1] = int( self.maxCAD * np.sinc(2*(( ( i )/2 ) - mid_point) / (pulse_sigma_smp[index]) )*\
-                                                                     sin(2*pi*(( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)))*pulse_frequency[index] / self.sample_rate \
-                                                                     + pulse_phase_np[index] + self.phase_shift_ch1_seq_mode) )                                            
-
-                                        else:
-                                            #self.full_buffer[point, i]
-                                            #ch0
-                                            # i/2 one phase
-                                            # ( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i] = int( self.maxCAD * np.sinc(2*(( i/2 ) - mid_point) / (pulse_sigma_smp[index]) )*\
-                                                                     sin(2*pi*(( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] + rnd_phase) )
-                                            #ch1
-                                            # i/2 one phase
-                                            # ( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i + 1] = int( self.maxCAD * np.sinc(2*(( ( i )/2 ) - mid_point) / (pulse_sigma_smp[index]) )*\
-                                                                     sin(2*pi*( ( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)) )*pulse_frequency[index] / self.sample_rate \
-                                                                     + pulse_phase_np[index] + self.phase_shift_ch1_seq_mode + rnd_phase) )                                            
-
-                                    else:
-                                        break
-                        
-                        elif element == 'BLANK':
-                            break
-
-                        elif element == 'WURST':
-                            # mid_point for GAUSS, SINC, and WURST, and SECH/TANH
-                            # at = A*( 1 - abs( sin(pi*(t-tp/2)/tp) )^n )
-                            # ph = 2*pi*(Fstr*t + 0.5*( Ffin - Fstr )*t^2/tp )
-                            # WURST = at*sin(ph + phase_0)
-                            mid_point = int( (pulse_start_smp[index] + pulse_delta_start_smp[index]*point + \
-                                pulse_start_smp[index] + pulse_length_smp[index] + pulse_delta_start_smp[index]*point)/2 )
-
-                            for i in range(2 * (pulse_start_smp[index] + pulse_delta_start_smp[index]*point), 2*segment_length, 2):
-
-                                    if i < 2 * (pulse_start_smp[index] + pulse_delta_start_smp[index]*point):
-                                        pass
-                                    elif ( i >= 2 * ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point) and \
-                                           i <= 2 * (pulse_start_smp[index] + pulse_length_smp[index] + pulse_delta_start_smp[index]*point) ):
-                                        
-                                        if pulse_phase_np[index] != 1000:
-                                            #self.full_buffer[point, i]
-                                            # self.maxCAD / pulse_amp[index] *
-                                            #ch0
-                                            # i/2 one phase
-                                            # ( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-                                            self.pnBuffer[i] = int( self.maxCAD * ( 1 - abs( sin( pi*( i/2 - mid_point ) / pulse_length_smp[index] ) ) ** pulse_n_wurst[index] )*\
-                                                            sin(2*pi*( (i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)) * pulse_frequency[index][0] / self.sample_rate \
-                                                             + 0.5 * (pulse_frequency[index][1] - pulse_frequency[index][0])*\
-                                                            ( (i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))**2 ) / pulse_length_smp[index] / self.sample_rate )\
-                                                             + pulse_phase_np[index] ) )
-
-                                            #ch1
-                                            self.pnBuffer[i + 1] = int( self.maxCAD * ( 1 - abs( sin( pi*( i/2 - mid_point ) / pulse_length_smp[index] ) ) ** pulse_n_wurst[index] )*\
-                                                            sin(2*pi*( (i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)) * pulse_frequency[index][0] / self.sample_rate \
-                                                            + 0.5 * (pulse_frequency[index][1] - pulse_frequency[index][0])*\
-                                                            ( (i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))**2 ) / pulse_length_smp[index] / self.sample_rate ) \
-                                                            + pulse_phase_np[index] + self.phase_shift_ch1_seq_mode ) )
-
-                                        else:
-                                            #self.full_buffer[point, i]
-                                            #ch0
-                                            # i/2 one phase
-                                            # ( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i] = int( self.maxCAD * ( 1 - abs( sin( pi*( i/2 - mid_point ) / pulse_length_smp[index] ) ) ** pulse_n_wurst[index] )*\
-                                                            sin(2*pi*( (i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)) * pulse_frequency[index][0] / self.sample_rate \
-                                                             + 0.5 * (pulse_frequency[index][1] - pulse_frequency[index][0])*\
-                                                            ( (i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))**2 ) / pulse_length_smp[index] / self.sample_rate )\
-                                                             + pulse_phase_np[index] + rnd_phase) )
-
-                                            #ch1
-                                            # i/2 one phase
-                                            # ( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                            self.pnBuffer[i + 1] = int( self.maxCAD * ( 1 - abs( sin( pi*( i/2 - mid_point ) / pulse_length_smp[index] ) ) ** pulse_n_wurst[index] )*\
-                                                            sin(2*pi*( (i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point)) * pulse_frequency[index][0] / self.sample_rate\
-                                                             + 0.5 * (pulse_frequency[index][1] - pulse_frequency[index][0])*\
-                                                            ( (i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))**2 ) / pulse_length_smp[index] / self.sample_rate )\
-                                                             + pulse_phase_np[index] + self.phase_shift_ch1_seq_mode + rnd_phase ) )
-                                    else:
-                                        break
-
-                        elif element == 'SECH/TANH':
-                            # at = Sech[b*tp*2^(n - 1) ((t - tp/2)/tp)^n];
-                            # ph = 2*Pi*bw/b*Log[Cosh[b*(t - tp/2)]]/2/Tanh[b*tp/2]
-                            # SECH/TANH = at*sin(ph + phase_0)
-
-                            freq_cen = ( pulse_frequency[index][1] + pulse_frequency[index][0] ) / 2
-                            mid_point = int( (pulse_start_smp[index] + pulse_delta_start_smp[index]*point + \
-                                pulse_start_smp[index] + pulse_length_smp[index] + pulse_delta_start_smp[index]*point)/2 )
-
-                            for i in range(2 * (pulse_start_smp[index] + pulse_delta_start_smp[index]*point), 2*segment_length, 2):
-
-                                if i < 2 * (pulse_start_smp[index] + pulse_delta_start_smp[index]*point):
-                                    pass
-                                elif ( i >= 2 * ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point) and \
-                                       i <= 2 * (pulse_start_smp[index] + pulse_length_smp[index] + pulse_delta_start_smp[index]*point) ):
-
-                                    #self.full_buffer[point, i]
-                                    # self.maxCAD / pulse_amp[index] *
-                                    #ch0
-                                    # i/2 one phase
-                                    # ( i/2 - ( pulse_start_smp[index] + pulse_delta_start_smp[index]*point))
-
-                                    self.pnBuffer[i] = int( self.maxCAD * ( 1 / np.cosh( pulse_b_sech[index] * pulse_length_smp[index] * 2 **(pulse_n_wurst[index] - 1) * \
-                                        ( (i/2 - mid_point ) \
-                                        / pulse_length_smp[index]  ) **pulse_n_wurst[index] ) ) * \
-                                        sin(2*pi*(pulse_frequency[index][1] - pulse_frequency[index][0]) / self.sample_rate / pulse_b_sech[index] * \
-                                        np.log( np.cosh( pulse_b_sech[index] * (i/2 - mid_point ) ) ) / 2 / np.tanh( pulse_b_sech[index] * mid_point ) \
-                                        + pulse_phase_np[index] + \
-                                        2 * pi * ( i/2 ) * freq_cen / self.sample_rate + pulse_phase_np[index] ))
-
-                                    #ch1
-                                    self.pnBuffer[i + 1] = int( self.maxCAD * ( 1 / np.cosh( pulse_b_sech[index] * pulse_length_smp[index] * 2 **(pulse_n_wurst[index] - 1) * \
-                                        ( (i/2 - mid_point ) \
-                                        / pulse_length_smp[index]  ) **pulse_n_wurst[index] ) ) * \
-                                        sin(2*pi*(pulse_frequency[index][1] - pulse_frequency[index][0]) / self.sample_rate / pulse_b_sech[index] * \
-                                        np.log( np.cosh( pulse_b_sech[index] * (i/2 - mid_point ) ) ) / 2 / np.tanh( pulse_b_sech[index] * mid_point ) \
-                                        + pulse_phase_np[index] + \
-                                        2 * pi * ( i/2 ) * freq_cen / self.sample_rate + self.phase_shift_ch1_seq_mode \
-                                        + pulse_phase_np[index] ))
-
-                                else:
-                                    break
-
-                    self.full_buffer.append(self.pnBuffer)
-                    self.full_buffer_pointer.append(self.pvBuffer)
-
-                # for sequence_segments as a power of two
-                for point in range(arguments_array[7], self.sequence_segments):
-                    # clear the buffer
-                    self.pvBuffer = pvAllocMemPageAligned (self.qwBufferSize.value)
-                    self.pnBuffer = cast (self.pvBuffer, ptr16)
-
-                    self.full_buffer.append(self.pnBuffer)
-                    self.full_buffer_pointer.append(self.pvBuffer)
-
-            #general.message( (self.full_buffer_pointer[0]) )
-            # A way to convert c_types poinet back to np.array
-            #general.message( np.ctypeslib.as_array(self.full_buffer[0], shape = (int(self.qwBufferSize.value/2), )) )
-            self.sequence_mode_count == 1
-
-        elif self.test_flag == 'test':
-            self.sequence_mode = 1
-            # check that length of pulse_start, pulse_delta_start and other are the same
-            # collect arguments in special array for check
-            arguments_array = []
-            length_array = []
-
-            arguments_array.append(pulse_type)          #   0
-            length_array.append( len( pulse_type ) )
-            arguments_array.append(pulse_start)         #   1
-            length_array.append( len( pulse_start ) )
-            arguments_array.append(pulse_delta_start)   #   2
-            length_array.append( len( pulse_delta_start ) )
-            arguments_array.append(pulse_length)        #   3
-            length_array.append( len( pulse_length ) )
-            arguments_array.append(pulse_phase)         #   4
-            length_array.append( len( pulse_phase ) )
-            arguments_array.append(pulse_sigma)         #   5
-            length_array.append( len( pulse_sigma ) )
-            arguments_array.append(pulse_frequency)     #   6
-            length_array.append( len( pulse_frequency ) )
-            arguments_array.append(number_of_points)    #   7
-            arguments_array.append(loop)                #   8
-            length_array.append( len( n ) )
-            arguments_array.append(n)                   #  9   n parameter for WURST and SECH/TANH pulses
-            length_array.append( len( b_sech ) )
-            arguments_array.append(b_sech)              #  10  b parameter for SECH/TANH pulse
-
-            assert( loop > 0 ), 'Number of loops should be higher than 0'
-            assert( number_of_points > 0 ), 'Number of points in pulse sequence should be higher than 0'
-            assert( rep_rate > 0 ), 'Repetition rate is given in Hz and should be a positive number'
-
-            for index, el in enumerate(arguments_array[0]):
-                assert( el == 'SINE' or el == 'GAUSS' or el == 'SINC' or el == 'BLANK' or el == 'WURST' or el == 'SECH/TANH'), 'Only SINE, GAUSS, SINC, BLANK, WURST, and SECH/TANH pulses are available'
-                if el == 'WURST' or el == 'SECH/TANH':
-                    assert( len( pulse_frequency[index] ) == 2  ), 'For WURST and SECH/TANH pulses frequency should be a tuple: frequency = ("Center", "Sweep")'
-
-            for el in arguments_array[10]:
-                if el == 'SECH/TANH':
-                    assert( el > 0 ), 'b parameter of SECH/TANH pulse should be higher than zero' 
-
-            for el in arguments_array[1]:
-                assert( el >= 0 ), 'Pulse starts should be positive numbers'
-                assert( el % 2 == 0 ), 'Pulse starts should be divisible by 2'
-
-            for el in arguments_array[2]:
-                assert( el >= 0 ), 'Pulse delta starts should be positive numbers'
-                assert( el % 2 == 0 ), 'Pulse delta starts should be divisible by 2'
-
-            for el in arguments_array[3]:
-                assert( el > 0 ), 'Pulse lengths should be positive numbers'
-                assert( el % 2 == 0 ), 'Pulse lengths should be divisible by 2'
-
-            for el in arguments_array[4]:
-                #assert( type(el) == int or type(el) == float ), 'Phase should be a number'
-                assert( el == '+x' or el == '-x' or el == '-y' or el == '+y' ), 'Pulse phase should be one of the following: [+x, -x, +y, -y]'
-
-            for el in arguments_array[5]:
-                assert( el > 0 ), 'Pulse sigmas should be positive numbers'
-
-            for el in arguments_array[5]:
-                assert( el >= self.min_freq and el <= self.max_freq), 'Pulse frequency should be from '+ str(self.min_freq) + ' MHz' + ' to ' + str(self.max_freq) + ' MHz'
-
-            # check that the length is equal (compare all elements in length_array)
-            gr = groupby(length_array)
-            if (next(gr, True) and not next(gr, False)) == False:
-                assert(1 == 2), 'Defined arrays in pulse sequence does not have equal length'
-
-            # TO DO
-            # overlapping check
-            # It will be done by pulse_programmer RECT_AWG pulses
-
-    def awg_correction(self, only_pi_half = 'True', coef_array = [1, 0, 0, 1, 0, 0, 1, 0, 0, 1], low_level = 16, limit = 23):
-        """
-        Funtion for amplitude correction taking into account the resonator frequency profile
-        """
-        self.bl = coef_array[0]
-        self.a1 = coef_array[1]
-        self.x1 = coef_array[2]
-        self.w1 = coef_array[3]
-        self.a2 = coef_array[4]
-        self.x2 = coef_array[5]
-        self.w2 = coef_array[6]
-        self.a3 = coef_array[7]
-        self.x3 = coef_array[8]
-        self.w3 = coef_array[9]
-
-        if only_pi_half == 'True':
-            self.pi2flag = 1
-        else:
-            self.pi2flag = 0
-
-        # in MHz
-        # limit minimum B1
-        # 16 MHz is the value for MD3 at +-150 MHz around the center
-        # 23 MHz is an arbitrary limit; around 210 MHz width        
-        self.low_level = low_level
-        self.limit = limit
-
-    # Auxilary functions
-    def awg_update_test(self):
-        """
-        Function that can be used for tests instead of awg_update()
-        """
-        if self.test_flag != 'test':
-            if self.reset_count == 0 or self.shift_count == 1 or self.increment_count == 1 or self.setting_change_count == 1:
-                if self.card_mode == 32768 and self.sequence_mode == 0 and self.single_joined == 0:
-                    buf = self.define_buffer_single()[0]
-                elif self.card_mode == 32768 and self.sequence_mode == 0 and self.single_joined == 1:
-                    buf = self.define_buffer_single_joined()[0]
-                elif self.card_mode == 512 and self.sequence_mode == 0:
-                    buf = self.define_buffer_multi()[0]
-
-                self.reset_count = 1
-                self.shift_count = 0
-                self.increment_count = 0
-                self.setting_change_count = 0
-
-            else:
-                pass
-
-        elif self.test_flag == 'test':
-
-            if self.reset_count == 0 or self.shift_count == 1 or self.increment_count == 1 or self.setting_change_count == 1:
-                if self.card_mode == 32768 and self.sequence_mode == 0 and self.single_joined == 0:
-                    buf = self.define_buffer_single()[0]
-                elif self.card_mode == 32768 and self.sequence_mode == 0 and self.single_joined == 1:
-                    buf = self.define_buffer_single_joined()[0]
-                elif self.card_mode == 512 and self.sequence_mode == 0:
-                    buf = self.define_buffer_multi()[0]
-
-                self.reset_count = 1
-                self.shift_count = 0
-                self.increment_count = 0
-                self.setting_change_count = 0
-
-            else:
-                pass
-
-    def convertion_to_numpy(self, p_array):
-        """
-        Convertion of the pulse_array into numpy array in the form of
-        [channel_number, function, frequency, phase, length, sigma, start, delta_start, amp]
-        channel_number is from self.channel_dict
-        function is from self.function_dict
-        frequency is a pulse frequency in MHz; or a tuple (center_freq, sweep_freq) for WURST pulse
-        phase is a pulse phase in rad
-        length is a pulse length in sample rate
-        sigma is a pulse sigma in sample rate
-        start is a pulse start in sample rate forjoined pulses in 'Single'
-        delta_start is a pulse delta start in sample rate forjoined pulses in 'Single'
-        amp is an additional amplification coefficient to adjust pulse amplitudes
-        n is a special coefficient for WURST and SECH/TANH pulses determining the steepness of the amplitude function
-        b (in ns^-1); special coefficient for SECH/TANH pulse determining the truncation parameter
-
-        The numpy array is sorted according to channel number
-        """
-        if self.test_flag != 'test':
-            i = 0
-            pulse_temp_array = []
-            num_pulses = len( p_array )
-            while i < num_pulses:
-                # get channel number
-                ch = p_array[i]['channel']
-                if ch in self.channel_dict:
-                    ch_num = self.channel_dict[ch]
-
-                # get function
-                fun = p_array[i]['function']
-                if fun in self.function_dict:
-                    func = self.function_dict[fun]
-                
-                # get length
-                leng = p_array[i]['length']
-
-                if leng[-2:] == 'ns':
-                    leng_time = int(float(leng[:-3])*self.sample_rate/1000)
-                elif leng[-2:] == 'us':
-                    leng_time = int(float(leng[:-3])*1000*self.sample_rate/1000)
-                elif leng[-2:] == 'ms':
-                    leng_time = int(float(leng[:-3])*1000000*self.sample_rate/1000)
-                elif leng[-2:] == 's':
-                    leng_time = int(float(leng[:-3])*1000000000*self.sample_rate/1000)
-
-                # get frequency
-                freq = p_array[i]['frequency']
-                if func != 4 and func != 5 and func != 7: # 4 is WURST; 7 is TEST2; 5 is SECH/TANH
-                    freq_mhz = int(float(freq[:-3]))
-                else:
-                    # for WURST and SECH/TANH convert center_freq; sweep_freq to start_freq; end_freq
-                    cen = float(freq[0][:-3])
-                    sw = float(freq[1][:-3])
-                    freq_mhz = [  ( 2 * cen - sw ) / 2, ( 2 * cen + sw ) / 2 ]
-
-                # get phase
-                phase = float(p_array[i]['phase'])
-
-                # get sigma
-                sig = p_array[i]['sigma']
-
-                if sig[-2:] == 'ns':
-                    sig_time = int(float(sig[:-3])*self.sample_rate/1000)
-                elif sig[-2:] == 'us':
-                    sig_time = int(float(sig[:-3])*1000*self.sample_rate/1000)
-                elif sig[-2:] == 'ms':
-                    sig_time = int(float(sig[:-3])*1000000*self.sample_rate/1000)
-                elif sig[-2:] == 's':
-                    sig_time = int(float(sig[:-3])*1000000000*self.sample_rate/1000)
-
-                # get start
-                st = p_array[i]['start']
-
-                if st[-2:] == 'ns':
-                    st_time = int(float(st[:-3])*self.sample_rate/1000)
-                elif st[-2:] == 'us':
-                    st_time = int(float(st[:-3])*1000*self.sample_rate/1000)
-                elif st[-2:] == 'ms':
-                    st_time = int(float(st[:-3])*1000000*self.sample_rate/1000)
-                elif st[-2:] == 's':
-                    st_time = int(float(st[:-3])*1000000000*self.sample_rate/1000)
-
-                # get delta_start
-                del_st = p_array[i]['delta_start']
-
-                if del_st[-2:] == 'ns':
-                    del_st_time = int(float(del_st[:-3])*self.sample_rate/1000)
-                elif del_st[-2:] == 'us':
-                    del_st_time = int(float(del_st[:-3])*1000*self.sample_rate/1000)
-                elif del_st[-2:] == 'ms':
-                    del_st_time = int(float(del_st[:-3])*1000000*self.sample_rate/1000)
-                elif del_st[-2:] == 's':
-                    del_st_time = int(float(del_st[:-3])*1000000000*self.sample_rate/1000)
-
-                # get amp
-                amp = float(p_array[i]['amp'])
-
-                # get n
-                n_wurst = float(p_array[i]['n'])
-
-                # get b
-                b_sech = float(p_array[i]['b'])
-
-                # creating converted array
-                pulse_temp_array.append( (ch_num, func, freq_mhz, phase, leng_time, sig_time, st_time, del_st_time, amp, n_wurst, b_sech) )
-
-                i += 1
-
-            # should be sorted according to channel number for corecct splitting into subarrays
-            return np.asarray(sorted(pulse_temp_array, key = lambda x: ( int(x[0]), int(x[6]) ) ), dtype="object") #, dtype = np.int64 
-
-        elif self.test_flag == 'test':
-            i = 0
-            pulse_temp_array = []
-            num_pulses = len( p_array )
-            while i < num_pulses:
-                # get channel number
-                ch = p_array[i]['channel']
-                if ch in self.channel_dict:
-                    ch_num = self.channel_dict[ch]
-
-                # get function
-                fun = p_array[i]['function']
-                if fun in self.function_dict:
-                    func = self.function_dict[fun]
-                
-                # get length
-                leng = p_array[i]['length']
-
-                if leng[-2:] == 'ns':
-                    leng_time = int(float(leng[:-3])*self.sample_rate/1000)
-                elif leng[-2:] == 'us':
-                    leng_time = int(float(leng[:-3])*1000*self.sample_rate/1000)
-                elif leng[-2:] == 'ms':
-                    leng_time = int(float(leng[:-3])*1000000*self.sample_rate/1000)
-                elif leng[-2:] == 's':
-                    leng_time = int(float(leng[:-3])*1000000000*self.sample_rate/1000)
-
-                # get frequency
-                freq = p_array[i]['frequency']
-                if func != 4 and func != 5 and func != 7: # 4 is WURST; 5 is SECH/TANH 7 is TEST2:
-                    freq_mhz = int(float(freq[:-3]))
-                else:
-                    # for WURST convert center_freq; sweep_freq to start_freq; end_freq
-                    cen = float(freq[0][:-3])
-                    sw = float(freq[1][:-3])
-                    freq_mhz = [  ( 2 * cen - sw ) / 2, ( 2 * cen + sw ) / 2 ]
-
-                # get phase
-                phase = float(p_array[i]['phase'])
-
-                # get sigma
-                sig = p_array[i]['sigma']
-
-                if sig[-2:] == 'ns':
-                    sig_time = int(float(sig[:-3])*self.sample_rate/1000)
-                elif sig[-2:] == 'us':
-                    sig_time = int(float(sig[:-3])*1000*self.sample_rate/1000)
-                elif sig[-2:] == 'ms':
-                    sig_time = int(float(sig[:-3])*1000000*self.sample_rate/1000)
-                elif sig[-2:] == 's':
-                    sig_time = int(float(sig[:-3])*1000000000*self.sample_rate/1000)
-
-                # get start
-                st = p_array[i]['start']
-
-                if st[-2:] == 'ns':
-                    st_time = int(float(st[:-3])*self.sample_rate/1000)
-                elif st[-2:] == 'us':
-                    st_time = int(float(st[:-3])*1000*self.sample_rate/1000)
-                elif st[-2:] == 'ms':
-                    st_time = int(float(st[:-3])*1000000*self.sample_rate/1000)
-                elif st[-2:] == 's':
-                    st_time = int(float(st[:-3])*1000000000*self.sample_rate/1000)
-
-                # get delta_start
-                del_st = p_array[i]['delta_start']
-
-                if del_st[-2:] == 'ns':
-                    del_st_time = int(float(del_st[:-3])*self.sample_rate/1000)
-                elif del_st[-2:] == 'us':
-                    del_st_time = int(float(del_st[:-3])*1000*self.sample_rate/1000)
-                elif del_st[-2:] == 'ms':
-                    del_st_time = int(float(del_st[:-3])*1000000*self.sample_rate/1000)
-                elif del_st[-2:] == 's':
-                    del_st_time = int(float(del_st[:-3])*1000000000*self.sample_rate/1000)
-
-                # get amp
-                amp = float(p_array[i]['amp'])
-
-                # get n
-                n_wurst = float(p_array[i]['n'])
-
-                # get b
-                b_sech = float(p_array[i]['b'])
-
-                # creating converted array
-                pulse_temp_array.append( ( ch_num, func, freq_mhz, phase, leng_time, sig_time, st_time, del_st_time, amp, n_wurst, b_sech ) )
-
-                i += 1
-
-            # should be sorted according to channel number for corecct splitting into subarrays
-            return np.asarray(sorted(pulse_temp_array, key = lambda x: ( int(x[0]), int(x[6]) ) ), dtype="object") #, dtype = np.int64
-
-    def splitting_acc_to_channel(self, np_array):
-        """
-        A function that splits pulse array into
-        several array that have the same channel
-        I.E. [[0, 0, 10, 70, 10, 16], [0, 0, 20, 70, 10, 16]]
-        -> [array([0, 0, 10, 70, 10, 16], [0, 0, 20, 70, 10, 16])]
-        Input array should be sorted
-        """
-        if self.test_flag != 'test':
-            # according to 0 element (channel number)
-            answer = np.split(np_array, np.where(np.diff(np_array[:,0]))[0] + 1)
-            return answer
-
-        elif self.test_flag == 'test':
-            # according to 0 element (channel number)
-            try:
-                answer = np.split(np_array, np.where(np.diff(np_array[:,0]))[0] + 1)
-            except IndexError:
-                assert( 1 == 2 ), 'No AWG pulses are defined'
-
-            return answer
-
-    def preparing_buffer_multi(self):
-        """
-        A function to prepare everything for buffer filling in the 'Multi' mode
-        Check of 'Multi' card mode and 'External' trigger mode.
-        Check of number of segments.
-        Find a pulse with the maximum length. Determine the memory size.
-        Return memory_size, number_of_segments, pulses
-        """
-        if self.test_flag != 'test':
-            
-            #checks
-            #if self.card_mode == 32768:
-            #    general.message('You are not in Multi mode')
-            #    sys.exit()
-            #if self.trigger_ch == 'Software':
-            #    general.message('Segmented memory is available only in External trigger mode')
-            #    sys.exit()
-
-            # maximum length and number of segments array
-            num_segments_array = []
-            max_length_array = []
-
-            pulses = self.splitting_acc_to_channel( self.convertion_to_numpy(self.pulse_array) )
-
-            # Check that number of segments and number of pulses are equal
-            for index, element in enumerate(pulses):
-                num_segments_array.append( len(element) )
-                max_length_array.append( max( element[:,4] ))
-            num_segments_array.append( self.num_segments )
-
-            #gr = groupby( num_segments_array )
-            #if (next(gr, True) and not next(gr, False)) == False:
-            #    assert(1 == 2), 'Number of segments are not equal to the number of AWG pulses'
-
-            # finding the maximum pulse length to create a buffer
-            max_pulse_length = max( max_length_array )
-            #buffer_per_max_pulse = self.closest_power_of_two( max_pulse_length )
-            buffer_per_max_pulse = self.round_to_closest( max_pulse_length , 32 )
-            if buffer_per_max_pulse < 32:
-                buffer_per_max_pulse = 32
-                general.message('Buffer size was rounded to the minimal available value (32 samples)')
-
-            # determine the memory size (buffer size will be doubled if two channels are enabled)
-            memsize = buffer_per_max_pulse*num_segments_array[0]
-
-            return memsize, num_segments_array[0], pulses
-
-        elif self.test_flag == 'test':            
-            
-            #checks
-            assert( self.card_mode == 512 ), 'You are not in Multi mode'
-            assert( self.trigger_ch == 2 ), 'Segmented memory is available only in External trigger mode'
-
-            num_segments_array = []
-            max_length_array = []
-
-            pulses = self.splitting_acc_to_channel( self.convertion_to_numpy(self.pulse_array) )
-
-            # Check that number of segments and number of pulses
-            # are equal
-            for index, element in enumerate(pulses):
-                num_segments_array.append( len(element) )
-                max_length_array.append( max( element[:,4] ))
-            num_segments_array.append( self.num_segments )
-
-            gr = groupby( num_segments_array )
-            if (next(gr, True) and not next(gr, False)) == False:
-                assert(1 == 2), 'Number of segments are not equal to the number of AWG pulses'
-
-            # finding the maximum pulse length to create a buffer
-            max_pulse_length = max( max_length_array )
-            #buffer_per_max_pulse = self.closest_power_of_two( max_pulse_length )
-            buffer_per_max_pulse = self.round_to_closest( max_pulse_length , 32 )
-            if buffer_per_max_pulse < 32:
-                buffer_per_max_pulse = 32
-                general.message('Buffer size was rounded to the minimal available value (32 samples)')
-
-            # check number of channels and determine the memory size 
-            # (buffer size will be doubled if two channels are enabled)
-            num_ch = len(pulses)
-            assert( (num_ch == 1 and ( self.channel == 1 or self.channel == 2)) or \
-                num_ch == 2 and ( self.channel == 3 ) ), 'Number of enabled channels are not equal to the number of channels in AWG pulses'
-
-            memsize = buffer_per_max_pulse*num_segments_array[0]
-
-            return memsize, num_segments_array[0], pulses
-
-    def define_buffer_multi(self):
-        """
-        Define and fill the buffer in 'Multi' mode;
-        Full card memory is splitted into number of segments.
-        
-        If a number of enabled channels is 1:
-        In every segment each index is a new data sample
-        
-        If a number of enabled channels are 2:
-        In every segment every even index is a new data sample for CH0,
-        every odd index is a new data sample for CH1.
-        """
-
-        # all the data
-        self.memsize, segments, pulses = self.preparing_buffer_multi()
-        self.segment_memsize = int( self.memsize / segments )
-
-        # define buffer differently for only one or two channels enabled
-        if self.channel == 1 or self.channel == 2:
-            # two bytes per sample; multiply by number of enabled channels
-            self.buffer_size = len( np.zeros(2 * self.memsize * 1) ) 
-            #buf = np.zeros(self.memsize * 1, dtype = np.float64 )
-
-            # define the buffer
-            self.pnBuffer = c_void_p()
-            self.qwBufferSize = uint64 (self.buffer_size)  # buffer size
-            self.pvBuffer = pvAllocMemPageAligned (self.qwBufferSize.value)
-            self.pnBuffer = cast (self.pvBuffer, ptr16)
-
-            # pulses for different channel
-            for element in pulses:
-                # individual pulses at each channel
-                for index2, element2 in enumerate( element ):
-                    # segmented memory; mid_point for GAUSS, SINC, and WURST
-                    mid_point = int( element2[4]/2 )
-
-                    # take a segment: self.segment_memsize*index2, self.segment_memsize*(index2 + 1)
-                    for i in range ( self.segment_memsize*index2, self.segment_memsize*(index2 + 1), 1):
-                                             #[      0,        1,               2,           3,                4,               5,     6,           7,               8,        9,     10]
-                        if element2[1] == 0: # SINE; [channel, function, frequency (MHz), phase, length (samples), sigma (samples), start, delta_start, amp_coefficient, n_wurst, b_sech]
-                            if i <= ( element2[4] + self.segment_memsize*index2 ):
-                                #buf[i]
-                                self.pnBuffer[i] = int(self.maxCAD / element2[8] * sin(2*pi*(( i - self.segment_memsize*index2))*element2[2] / self.sample_rate + element2[3]) )
-                            else:
-                                # keeping 0
-                                break
-                        elif element2[1] == 1: # GAUSS
-                            if i <= ( element2[4] + self.segment_memsize*index2 ):
-                                self.pnBuffer[i] = int(self.maxCAD / element2[8] * exp(-((( i - self.segment_memsize*index2) - mid_point)**2)*(1/(2*element2[5]**2)))*\
-                                    sin(2*pi*(( i - self.segment_memsize*index2))*element2[2] / self.sample_rate + element2[3]) )
-                            else:
-                                break
-                        elif element2[1] == 2: # SINC
-                            if i <= ( element2[4] + self.segment_memsize*index2 ):
-                                self.pnBuffer[i] = int(self.maxCAD / element2[8] * np.sinc(2*(( i - self.segment_memsize*index2) - mid_point) / (element2[5]) )*\
-                                    sin(2*pi*( i - self.segment_memsize*index2)*element2[2] / self.sample_rate + element2[3]) )
-                            else:
-                                break
-                        elif element2[1] == 3: # BLANK
-                            break
-                        elif element2[1] == 4: # WURST
-                            # at = A*( 1 - abs( sin(pi*(t-tp/2)/tp) )^n )
-                            # ph = 2*pi*(Fstr*t + 0.5*( Ffin - Fstr )*t^2/tp )
-                            # WURST = at*sin(ph + phase_0)
-                            if i <= ( element2[4] + self.segment_memsize*index2 ):
-                                self.pnBuffer[i] = int( self.maxCAD / element2[8] * ( 1 - abs( sin( pi*( ( i - self.segment_memsize*index2) - mid_point ) / element2[4] ) ) ** element2[9] )*\
-                                    sin(2*pi*( ( i - self.segment_memsize*index2) *  element2[2][0] / self.sample_rate + 0.5 * (element2[2][1] - element2[2][0])*\
-                                    ( i - self.segment_memsize*index2)**2 / element2[4] / self.sample_rate ) + element2[3] ))
-
-                            else:
-                                break
-                        elif element2[1] == 5: # SECH/TANH
-                            # at = Sech[b*tp*2^(n - 1) ((t - tp/2)/tp)^n];
-                            # ph = 2*Pi*bw/b*Log[Cosh[b*(t - tp/2)]]/2/Tanh[b*tp/2]
-                            # SECH/TANH = at*sin(ph + phase_0)
-                            freq_cen = ( element2[2][1] + element2[2][0] ) / 2
-                            if i <= ( element2[4] + self.segment_memsize*index2 ):
-                                self.pnBuffer[i] = int( self.maxCAD / element2[8] * (1 / np.cosh( element2[10] * element2[4] * 2 **(element2[9] - 1) * ( ( ( i - self.segment_memsize*index2) - mid_point ) / element2[4]  ) ** element2[9] ) ) * \
-                                    sin(2*pi*(element2[2][1] - element2[2][0]) / self.sample_rate / element2[10] * \
-                                    np.log( np.cosh( element2[10] * ( ( i - self.segment_memsize*index2) - mid_point ) ) ) / 2 / np.tanh( element2[10] * mid_point ) + element2[3] + \
-                                        2 * pi * i * freq_cen / self.sample_rate ))
-                            else:
-                                break
-
-            return self.pvBuffer, self.pnBuffer
-
-        elif self.channel == 3:
-            # two bytes per sample; multiply by number of enabled channels
-            self.buffer_size = len( np.zeros(2 * self.memsize * 2) )
-            #buf = np.zeros(self.memsize * 2)
-            
-            # define the buffer
-            self.pnBuffer = c_void_p()
-            self.qwBufferSize = uint64 (self.buffer_size)  # buffer size
-            self.pvBuffer = pvAllocMemPageAligned (self.qwBufferSize.value)
-            self.pnBuffer = cast (self.pvBuffer, ptr16)
-
-            # pulses for different channel
-            for element in pulses:
-                # individual pulses at each channel
-                for index2, element2 in enumerate( element ):
-                    # segments memory; mid_point for GAUSS, SINC, and WURST
-                    mid_point = int( element2[4]/2 )
-                    
-                    if element2[0] == 0:
-                        # take a segment: 2*self.segment_memsize*index2, 2*self.segment_memsize*(index2 + 1)
-                        # fill even indexes for CH0; step in the cycle is 2
-                        for i in range (2 * self.segment_memsize*index2, 2 * self.segment_memsize*(index2 + 1), 2):
-                                                 #[      0,        1,               2,           3,                4,               5,     6,           7,               8,        9,     10]
-                            if element2[1] == 0: # SINE; [channel, function, frequency (MHz), phase, length (samples), sigma (samples), start, delta_start, amp_coefficient, n_wurst, b_sech]
-                                if i <= (2 * element2[4] + 2 * self.segment_memsize*index2 ):
-                                    # Sine Signal CH_0; i/2 in order to keep the frequency
-                                    #buf[i] 
-                                    self.pnBuffer[i] = int(self.maxCAD / element2[8] * sin(2*pi*(( i/2 - self.segment_memsize*index2))*element2[2] / self.sample_rate + element2[3]) )
-                                else:
-                                    break
-                            elif element2[1] == 1: # GAUSS
-                                if i <= ( 2 * element2[4] + 2 * self.segment_memsize*index2 ):
-                                    self.pnBuffer[i] = int(self.maxCAD / element2[8] * exp(-((( i/2 - self.segment_memsize*index2) - mid_point)**2)*(1/(2*element2[5]**2)))*\
-                                        sin(2*pi*(( i/2 - self.segment_memsize*index2))*element2[2] / self.sample_rate + element2[3]) )
-                                else:
-                                    break
-                            elif element2[1] == 2: # SINC
-                                if i <= ( 2 * element2[4] + 2 * self.segment_memsize*index2 ):
-                                    self.pnBuffer[i] = int(self.maxCAD / element2[8] * np.sinc(2*(( i/2 - self.segment_memsize*index2) - mid_point) / (element2[5]) )*\
-                                        sin(2*pi*( i/2 - self.segment_memsize*index2)*element2[2] / self.sample_rate + element2[3]) )
-                                else:
-                                    break
-                            elif element2[1] == 3: # BLANK
-                                break
-                            elif element2[1] == 4: # WURST
-                                # at = A*( 1 - abs( sin(pi*(t-tp/2)/tp) )^n )
-                                # ph = 2*pi*(Fstr*t + 0.5*( Ffin - Fstr )*t^2/tp )
-                                # WURST = at*sin(ph + phase_0)
-                                if i <= ( 2 * element2[4] + 2 * self.segment_memsize*index2 ):
-                                    self.pnBuffer[i] = int( self.maxCAD / element2[8] * ( 1 - abs( sin( pi*( (  i/2 - self.segment_memsize*index2) - mid_point ) / element2[4] ) ) ** element2[9] )*\
-                                        sin(2*pi*( (  i/2 - self.segment_memsize*index2) *  element2[2][0] / self.sample_rate + 0.5 * (element2[2][1] - element2[2][0])*\
-                                        (  i/2 - self.segment_memsize*index2)**2 / element2[4] / self.sample_rate ) + element2[3] ))
-                                else:
-                                    break
-                            elif element2[1] == 5: # SECH/TANH
-                                # at = Sech[b*tp*2^(n - 1) ((t - tp/2)/tp)^n];
-                                # ph = 2*Pi*bw/b*Log[Cosh[b*(t - tp/2)]]/2/Tanh[b*tp/2]
-                                # SECH/TANH = at*sin(ph + phase_0)
-                                freq_cen = ( element2[2][1] + element2[2][0] ) / 2
-                                if i <= ( 2 * element2[4] + 2 * self.segment_memsize*index2 ):
-                                    self.pnBuffer[i] = int( self.maxCAD / element2[8] * (1 / np.cosh( element2[10] * element2[4] * 2 **(element2[9] - 1) * ( ( ( i/2 - self.segment_memsize*index2) - mid_point ) / element2[4]  ) ** element2[9] ) ) * \
-                                        sin(2*pi*(element2[2][1] - element2[2][0]) / self.sample_rate / element2[10] * \
-                                        np.log( np.cosh( element2[10] * ( ( i/2 - self.segment_memsize*index2) - mid_point ) ) ) / 2 / np.tanh( element2[10] * mid_point ) + element2[3] + \
-                                        2 * pi * (i/2) * freq_cen / self.sample_rate ))
-                                else:
-                                    break
-
-                    elif element2[0] == 1:
-                        # fill odd indexes for CH1; step in the cycle is 2
-                        for i in range (1 + 2 * self.segment_memsize*index2, 1 + 2 * self.segment_memsize*(index2 + 1), 2):
-                                                 #[      0,        1,               2,           3,                4,               5,     6,           7,               8,        9]
-                            if element2[1] == 0: # SINE; [channel, function, frequency (MHz), phase, length (samples), sigma (samples), start, delta_start, amp_coefficient, n_wurst]
-                                if (i - 1) <= ( 2 * element2[4] + 2 * self.segment_memsize*index2 ):
-                                    # Sine Signal CH_1; i/2 in order to keep the frequency
-                                    #buf[i]
-                                    self.pnBuffer[i] = int(self.maxCAD / element2[8] * sin(2*pi*(( (i - 1)/2 - self.segment_memsize*index2 ))*element2[2] / self.sample_rate + element2[3]) )
-                                else:
-                                    break
-                            elif element2[1] == 1: # GAUSS
-                                if (i - 1) <= ( 2 * element2[4] + 2 * self.segment_memsize*index2 ):
-                                    self.pnBuffer[i] = int(self.maxCAD / element2[8] * exp(-((( (i - 1)/2 - self.segment_memsize*index2) - mid_point)**2)*(1/(2*element2[5]**2)))*\
-                                        sin(2*pi*(( (i - 1)/2 - self.segment_memsize*index2))*element2[2] / self.sample_rate + element2[3]) )
-                                else:
-                                    break
-                            elif element2[1] == 2: # SINC
-                                if (i - 1) <= ( 2 * element2[4] + 2 * self.segment_memsize*index2 ):
-                                    self.pnBuffer[i] = int(self.maxCAD / element2[8] * np.sinc(2*(( (i - 1)/2 - self.segment_memsize*index2) - mid_point) / (element2[5]) )*\
-                                        sin(2*pi*( (i - 1)/2 - self.segment_memsize*index2)*element2[2] / self.sample_rate + element2[3]) )
-                                else:
-                                    break
-                            elif element2[1] == 3: # BLANK
-                                break
-                            elif element2[1] == 4: # WURST
-                                # at = A*( 1 - abs( sin(pi*(t-tp/2)/tp) )^n )
-                                # ph = 2*pi*(Fstr*t + 0.5*( Ffin - Fstr )*t^2/tp )
-                                # WURST = at*sin(ph + phase_0)
-                                if (i - 1) <= ( 2 * element2[4] + 2 * self.segment_memsize*index2 ):
-                                    self.pnBuffer[i] = int( self.maxCAD / element2[8] * ( 1 - abs( sin( pi*( (  (i - 1)/2 - self.segment_memsize*index2) - mid_point ) / element2[4] ) ) ** element2[9] )*\
-                                        sin(2*pi*( (  (i - 1)/2 - self.segment_memsize*index2) *  element2[2][0] / self.sample_rate + 0.5 * (element2[2][1] - element2[2][0])*\
-                                        (  (i - 1)/2 - self.segment_memsize*index2)**2 / element2[4] / self.sample_rate ) + element2[3] ))
-                                else:
-                                    break
-                            elif element2[1] == 5: # SECH/TANH
-                                # at = Sech[b*tp*2^(n - 1) ((t - tp/2)/tp)^n];
-                                # ph = 2*Pi*bw/b*Log[Cosh[b*(t - tp/2)]]/2/Tanh[b*tp/2]
-                                # SECH/TANH = at*sin(ph + phase_0)
-                                freq_cen = ( element2[2][1] + element2[2][0] ) / 2
-                                if (i - 1) <= ( 2 * element2[4] + 2 * self.segment_memsize*index2 ):
-                                    self.pnBuffer[i] = int( self.maxCAD / element2[8] * (1 / np.cosh( element2[10] * element2[4] * 2 **(element2[9] - 1) * ( ( ( (i - 1)/2 - self.segment_memsize*index2) - mid_point ) / element2[4]  ) ** element2[9] ) ) * \
-                                        sin(2*pi*(element2[2][1] - element2[2][0]) / self.sample_rate / element2[10] * \
-                                        np.log( np.cosh( element2[10] * ( ( (i - 1)/2 - self.segment_memsize*index2) - mid_point ) ) ) / 2 / np.tanh( element2[10] * mid_point ) + element2[3] + \
-                                        2 * pi * (i - 1)/2 * freq_cen / self.sample_rate ))
-                                else:
-                                    break
-
-            return self.pvBuffer, self.pnBuffer
-
-    def preparing_buffer_single(self):
-        """
-        A function to prepare everything for buffer filling in the 'Single' mode
-        Check of 'Single' card mode.
-        Check of number of segments (should be  1).
-        Find a pulse with the maximum length. Determine the memory size.
-        Return memory_size, pulses
-        """
-        if self.test_flag != 'test':
-            
-            max_length_array = []
-            pulses = self.splitting_acc_to_channel( self.convertion_to_numpy(self.pulse_array) )
-
-            # Max pulse length
-            for index, element in enumerate(pulses):
-                max_length_array.append( max( element[:,4] ))
-
-            # finding the maximum pulse length to create a buffer
-            max_pulse_length = max( max_length_array )
-            #buffer_per_max_pulse = self.closest_power_of_two( max_pulse_length )
-            buffer_per_max_pulse = self.round_to_closest( max_pulse_length , 32 )
-            if buffer_per_max_pulse < 32:
-                buffer_per_max_pulse = 32
-                general.message('Buffer size was rounded to the minimal available value (32 samples)')
-
-            # determine the memory size (buffer size will be doubled if two channels are enabled)
-            memsize = buffer_per_max_pulse
-
-            return memsize, pulses
-
-        elif self.test_flag == 'test':
-
-            # checks
-            assert( self.card_mode == 32768 ), 'You are not in Single mode'
-
-            max_length_array = []
-            pulses = self.splitting_acc_to_channel( self.convertion_to_numpy(self.pulse_array) )
-
-            if self.single_joined == 0:
-                if self.channel == 1:
-                    assert( len(self.pulse_ch0_array) == 1 and len(self.pulse_ch1_array) == 0 ), "Only one CH0 pulse can be defined in Single mode with only CH0 enabled"
-                elif self.channel == 2:
-                    assert( len(self.pulse_ch1_array) == 1 and len(self.pulse_ch0_array) == 0 ), "Only one CH1 pulse can be defined in Single mode with only CH1 enabled"
-                elif self.channel == 3:
-                    assert( len(self.pulse_ch0_array) == 1 and len(self.pulse_ch1_array) == 1 ), "Only one CH1 and CH0 pulses can be defined in Single mode with CH0 and CH1 enabled"
-            elif self.single_joined == 1:
-                if self.channel == 1:
-                    assert( len(self.pulse_ch0_array) >= 1 and len(self.pulse_ch1_array) == 0 ), "At least one CH0 pulse should be defined in Single Joined mode with only CH0 enabled"
-                elif self.channel == 2:
-                    assert( len(self.pulse_ch1_array) >= 1 and len(self.pulse_ch0_array) == 0 ), "At least one CH1 pulse should be defined in Single Joined mode with only CH1 enabled"
-                elif self.channel == 3:
-                    assert( len(self.pulse_ch0_array) > 0 and len(self.pulse_ch1_array) == 0 ), "Only CH0 pulses should be defined in Single Joined mode with CH0 and CH1 enabled. CH1 pulses are filled automatically"                
-
-            assert( self.num_segments == 1 ), 'More than one segment is declared in Single mode. Please, use Multi mode'
-
-            # finding the maximum pulse length to create a buffer
-            for index, element in enumerate(pulses):
-                max_length_array.append( max( element[:,4] ))
-
-            max_pulse_length = max( max_length_array )
-            #buffer_per_max_pulse = self.closest_power_of_two( max_pulse_length )
-            buffer_per_max_pulse = self.round_to_closest( max_pulse_length , 32 )
-            if buffer_per_max_pulse < 32:
-                buffer_per_max_pulse = 32
-                general.message('Buffer size was rounded to the minimal available value (32 samples)')
-
-            # check number of channels and determine the memory size 
-            # (buffer size will be doubled if two channels are enabled)
-            #num_ch = len(pulses)
-            #assert( (num_ch == 1 and ( self.channel == 1 or self.channel == 2)) or \
-            #    num_ch == 2 and ( self.channel == 3 ) ), 'Number of enabled channels are not equal to the number of channels in AWG pulses'
-
-            memsize = buffer_per_max_pulse
-
-            return memsize, pulses
-
-    def define_buffer_single(self):
-        """
-        Define and fill the buffer in 'Single' mode;
-        
-        If a number of enabled channels is 1:
-        Each index is a new data sample
-        
-        If a number of enabled channels are 2:
-        Every even index is a new data sample for CH0,
-        Every odd index is a new data sample for CH1.
-        """
-
-        self.memsize, pulses = self.preparing_buffer_single()
-
-        # define buffer differently for only one or two channels enabled
-        if self.channel == 1 or self.channel == 2:
-            # two bytes per sample; multiply by number of enabled channels
-            self.buffer_size = len( np.zeros(2 * self.memsize * 1) )
-            #buf = np.zeros(self.memsize * 1, dtype = np.float64 )
-
-            # define the buffer
-            self.pnBuffer = c_void_p()
-            self.qwBufferSize = uint64 (self.buffer_size)  # buffer size
-            self.pvBuffer = pvAllocMemPageAligned (self.qwBufferSize.value)
-            self.pnBuffer = cast (self.pvBuffer, ptr16)
-
-            # pulses for different channel
-            for element in pulses:
-                # individual pulses at each channel
-                for index2, element2 in enumerate( element ):
-                    # mid_point for GAUSS, SINC, and WURST
-                    mid_point = int( element2[4]/2 )
-
-                    for i in range (0, self.memsize, 1):
-                                                    #[      0,        1,               2,     3,                4,               5,     6,           7,               8,       9,     10]
-                        if element2[1] == 0: # SINE; [channel, function, frequency (MHz), phase, length (samples), sigma (samples), start, delta_start, amp_coefficient, n_wurst, b_sech]
-                            if i <= ( element2[4] ):
-                                #buf[i]
-                                self.pnBuffer[i] = int( self.maxCAD / element2[8] * sin(2*pi*(( i ))*element2[2] / self.sample_rate + element2[3]) )
-                            else:
-                                break
-                        elif element2[1] == 1: # GAUSS
-                            if i <= ( element2[4] ):
-                                self.pnBuffer[i] = int( self.maxCAD / element2[8] * exp(-((( i ) - mid_point)**2)*(1/(2*element2[5]**2)))*\
-                                    sin(2*pi*(( i ))*element2[2] / self.sample_rate + element2[3]) )
-                            else:
-                                break
-                        elif element2[1] == 2: # SINC
-                            if i <= ( element2[4] ):
-                                self.pnBuffer[i] = int( self.maxCAD / element2[8] * np.sinc(2*(( i ) - mid_point) / (element2[5]) )*\
-                                    sin(2*pi*( i )*element2[2] / self.sample_rate + element2[3]) )
-                            else:
-                                break
-                        elif element2[1] == 3: # BLANK
-                            break
-                        elif element2[1] == 4: # WURST
-                            # at = A*( 1 - abs( sin(pi*(t-tp/2)/tp) )^n )
-                            # ph = 2*pi*(Fstr*t + 0.5*( Ffin - Fstr )*t^2/tp )
-                            # WURST = at*sin(ph + phase_0)
-                            if i <= ( element2[4] ):
-                                self.pnBuffer[i] = int( self.maxCAD / element2[8] * ( 1 - abs( sin( pi*( i - mid_point ) / element2[4] ) ) ** element2[9] )*\
-                                    sin(2*pi*( i * element2[2][0] / self.sample_rate + 0.5 * (element2[2][1] - element2[2][0])*\
-                                    i**2  / element2[4] / self.sample_rate ) + element2[3] ) )
-                            else:
-                                break
-                        elif element2[1] == 5: # SECH/TANH
-                            # at = Sech[b*tp*2^(n - 1) ((t - tp/2)/tp)^n];
-                            # ph = 2*Pi*bw/b*Log[Cosh[b*(t - tp/2)]]/2/Tanh[b*tp/2]
-                            # SECH/TANH = at*sin(ph + phase_0)
-                            freq_cen = ( element2[2][1] + element2[2][0] ) / 2
-                            if i <= ( element2[4] ):
-                                self.pnBuffer[i] = int( self.maxCAD / element2[8] * ( 1 / np.cosh( element2[10] * element2[4] * 2 **(element2[9] - 1) * ( ( i - mid_point ) / element2[4]  ) ** element2[9] ) ) * \
-                                    sin(2*pi*(element2[2][1] - element2[2][0]) / self.sample_rate / element2[10] * \
-                                    np.log( np.cosh( element2[10] * ( i - mid_point ) ) ) / 2 / np.tanh( element2[10] * mid_point ) + element2[3] + \
-                                    2 * pi * i * freq_cen / self.sample_rate ))
-                            else:
-                                break
-
-            return self.pvBuffer, self.pnBuffer
-
-        elif self.channel == 3:
-            # two bytes per sample; multiply by number of enabled channels
-            self.buffer_size = len( np.zeros(2 * self.memsize * 2) )
-            #buf = np.zeros(self.memsize * 2, dtype = np.float64 )
-
-            # define the buffer
-            self.pnBuffer = c_void_p()
-            self.qwBufferSize = uint64 (self.buffer_size)  # buffer size
-            self.pvBuffer = pvAllocMemPageAligned (self.qwBufferSize.value)
-            self.pnBuffer = cast (self.pvBuffer, ptr16)
-
-            # pulses for different channel
-            for element in pulses:
-                # individual pulses at each channel
-                for index2, element2 in enumerate( element ):
-                    # mid_point for GAUSS, SINC, and WURST
-                    mid_point = int( element2[4]/2 )
-
-                    
-                    if element2[0] == 0:
-                        # fill even indexes for CH0; step in the cycle is 2
-                        for i in range (0, 2 * self.memsize, 2):
-                                                        #[      0,        1,               2,     3,                4,               5,     6,           7,               8,       9,     10]
-                            if element2[1] == 0: # SINE; [channel, function, frequency (MHz), phase, length (samples), sigma (samples), start, delta_start, amp_coefficient, n_wurst, b_sech]
-                                if i <= ( 2 * element2[4] ):
-                                    # Sine Signal CH_0; i/2 in order to keep the frequency
-                                    # buf[i]
-                                    self.pnBuffer[i] = int( self.maxCAD / element2[8] * sin(2*pi*(( i/2 ))*element2[2] / self.sample_rate + element2[3]) )
-                                else:
-                                    break
-                            elif element2[1] == 1: # GAUSS
-                                if i <= ( 2 * element2[4] ):
-                                    self.pnBuffer[i] = int( self.maxCAD / element2[8] * exp(-((( i/2 ) - mid_point)**2)*(1/(2*element2[5]**2)))*\
-                                        sin(2*pi*(( i/2 ))*element2[2] / self.sample_rate + element2[3]) )
-                                else:
-                                    break
-                            elif element2[1] == 2: # SINC
-                                if i <= ( 2 * element2[4] ):
-                                    self.pnBuffer[i] = int( self.maxCAD / element2[8] * np.sinc(2*(( i/2 ) - mid_point) / (element2[5]) )*\
-                                        sin(2*pi*( i/2 )*element2[2] / self.sample_rate + element2[3]) )
-                                else:
-                                    break
-                            elif element2[1] == 3: # BLANK
-                                break
-                            elif element2[1] == 4: # WURST
-                                # at = A*( 1 - abs( sin(pi*(t-tp/2)/tp) )^n )
-                                # ph = 2*pi*(Fstr*t + 0.5*( Ffin - Fstr )*t^2/tp )
-                                # WURST = at*sin(ph + phase_0)                            
-                                if i <= ( 2 * element2[4] ):
-                                    self.pnBuffer[i] = int( self.maxCAD / element2[8] * ( 1 - abs( sin( pi*( i/2 - mid_point ) / element2[4] ) ) ** element2[9] )*\
-                                        sin(2*pi*( i/2 * element2[2][0] / self.sample_rate + 0.5 * (element2[2][1] - element2[2][0])*\
-                                        (i/2)**2  / element2[4] / self.sample_rate ) + element2[3] ) )
-                            elif element2[1] == 5: # SECH/TANH
-                                # at = Sech[b*tp*2^(n - 1) ((t - tp/2)/tp)^n];
-                                # ph = 2*Pi*bw/b*Log[Cosh[b*(t - tp/2)]]/2/Tanh[b*tp/2]
-                                # SECH/TANH = at*sin(ph + phase_0)
-                                freq_cen = ( element2[2][1] + element2[2][0] ) / 2
-                                if i <= ( 2 * element2[4] ):
-                                    self.pnBuffer[i] = int( self.maxCAD / element2[8] * (1 / np.cosh( element2[10] * element2[4] * 2 **(element2[9] - 1) * ( ( i/2 - mid_point ) / element2[4]  ) ** element2[9] ) ) * \
-                                        sin(2*pi*(element2[2][1] - element2[2][0]) / self.sample_rate / element2[10] * \
-                                        np.log( np.cosh( element2[10] * ( i/2 - mid_point ) ) ) / 2 / np.tanh( element2[10] * mid_point ) + element2[3] + \
-                                        2 * pi * (i/2) * freq_cen / self.sample_rate ))
-                                else:
-                                    break
-
-                    elif element2[0] == 1:
-                        # fill odd indexes for CH1; step in the cycle is 2
-                        for i in range (1 , 1 + 2 * self.memsize, 2):
-                                                        #[      0,        1,               2,     3,                4,               5,     6,           7,               8,       9,     10]
-                            if element2[1] == 0: # SINE; [channel, function, frequency (MHz), phase, length (samples), sigma (samples), start, delta_start, amp_coefficient, n_wurst, b_sech]
-                                if (i - 1) <= ( 2 * element2[4] ):
-                                    # Sine Signal CH_1; i/2 in order to keep the frequency
-                                    #buf[i]
-                                    self.pnBuffer[i] = int( self.maxCAD / element2[8] * sin(2*pi*(( (i - 1)/2 ))*element2[2] / self.sample_rate + element2[3]) )
-                                else:
-                                    break
-                            elif element2[1] == 1: # GAUSS
-                                if (i - 1) <= ( 2 * element2[4] ):
-                                    self.pnBuffer[i] = int( self.maxCAD / element2[8] * exp(-((( (i - 1)/2 ) - mid_point)**2)*(1/(2*element2[5]**2)))*\
-                                        sin(2*pi*(( (i - 1)/2 ))*element2[2] / self.sample_rate + element2[3]) )
-                                else:
-                                    break
-                            elif element2[1] == 2: # SINC
-                                if (i - 1) <= ( 2 * element2[4] ):
-                                    self.pnBuffer[i] = int( self.maxCAD / element2[8] * np.sinc(2*(( (i - 1)/2 ) - mid_point) / (element2[5]) )*\
-                                        sin(2*pi*( (i - 1)/2 )*element2[2] / self.sample_rate + element2[3]) )
-                                else:
-                                    break
-                            elif element2[1] == 3: # BLANK
-                                break
-                            elif element2[1] == 4: # WURST
-                                # at = A*( 1 - abs( sin(pi*(t-tp/2)/tp) )^n )
-                                # ph = 2*pi*(Fstr*t + 0.5*( Ffin - Fstr )*t^2/tp )
-                                # WURST = at*sin(ph + phase_0)                            
-                                if (i - 1) <= ( 2 * element2[4] ):
-                                    self.pnBuffer[i] = int( self.maxCAD / element2[8] * ( 1 - abs( sin( pi*( (i - 1)/2 - mid_point ) / element2[4] ) ) ** element2[9] )*\
-                                        sin(2*pi*( (i - 1)/2 * element2[2][0] / self.sample_rate + 0.5 * (element2[2][1] - element2[2][0])*\
-                                        ((i - 1)/2)**2  / element2[4] / self.sample_rate ) + element2[3] ) )
-                            elif element2[1] == 5: # SECH/TANH
-                                # at = Sech[b*tp*2^(n - 1) ((t - tp/2)/tp)^n];
-                                # ph = 2*Pi*bw/b*Log[Cosh[b*(t - tp/2)]]/2/Tanh[b*tp/2]
-                                # SECH/TANH = at*sin(ph + phase_0)
-                                freq_cen = ( element2[2][1] + element2[2][0] ) / 2
-                                if (i - 1) <= ( 2 * element2[4] ):
-                                    self.pnBuffer[i] = int( self.maxCAD / element2[8] * (1 / np.cosh( element2[10] * element2[4] * 2 **(element2[9] - 1) * ( ( (i - 1)/2 - mid_point ) / element2[4]  ) ** element2[9] ) ) * \
-                                        sin(2*pi*(element2[2][1] - element2[2][0]) / self.sample_rate / element2[10] * \
-                                        np.log( np.cosh( element2[10] * ( (i - 1)/2 - mid_point ) ) ) / 2 / np.tanh( element2[10] * mid_point ) + element2[3] + \
-                                        2 * pi * (i - 1)/2 * freq_cen / self.sample_rate ))
-                                else:
-                                    break
-
-            return self.pvBuffer, self.pnBuffer
-
-    def closest_power_of_two(self, x):
-        """
-        A function to round card memory or sequence segments
-        """
-        return int( 2**int(log2(x - 1) + 1 ) )
-
-    def write_seg_memory(self, hCard, dwStepIndex, dwStepNextIndex, dwSegmentIndex, dwLoops, dwFlags):
-        """
-        Function for setting up the sequence memory
-        Page 104 of the programming guide of the AWG card
-        """
-        if self.test_flag != 'test':
-            qwSequenceEntry = uint64 (0)
-
-            # setup register value
-            qwSequenceEntry = (dwFlags & ~SPCSEQ_LOOPMASK) | (dwLoops & SPCSEQ_LOOPMASK)
-            qwSequenceEntry <<= 32
-            qwSequenceEntry |= ((dwStepNextIndex << 16)& SPCSEQ_NEXTSTEPMASK) | (int(dwSegmentIndex) & SPCSEQ_SEGMENTMASK)
-
-            dwError = spcm_dwSetParam_i64 (hCard, SPC_SEQMODE_STEPMEM0 + dwStepIndex, int64(qwSequenceEntry))
-
-        elif self.test_flag == 'test':
-            pass
-
-    def define_buffer_single_joined(self):
-        """
-        Define and fill the buffer in 'Single Joined' mode;
-        
-        Every even index is a new data sample for CH0,
-        Every odd index is a new data sample for CH1.
-
-        Second channel will be filled automatically
-        """
-        # pulses are in a form [channel_number, function, frequency, phase, length, sigma, start, delta_start, amp, n_wurst, b_sech] 
-        #                      [0,              1,        2,         3,      4,     5,      6,    7,           8,   9,       10    ]
-        self.memsize, pulses = self.preparing_buffer_single() # 0.2-0.3 ms
-        # only ch0 pulses are analyzed
-        # ch1 will be generated automatically with shifted phase
-        # approach is similar to awg_pulse_sequence()
-        arguments_array = [[], [], [], [], [], [], [], [], [], []]
-        for element in pulses[0]:
-            # collect arguments in special array for further handling
-            arguments_array[0].append(int(element[1]))     #   0    type; 0 is SINE; 1 is GAUSS; 2 is SINC; 3 is BLANK, 4 is WURST, 5 is SECH/TANH
-            arguments_array[1].append(element[6])          #   1    start
-            arguments_array[2].append(element[7])          #   2    delta_start
-            arguments_array[3].append(element[4])          #   3    length
-            arguments_array[4].append(element[3])          #   4    phase
-            arguments_array[5].append(element[5])          #   5    sigma
-            arguments_array[6].append(element[2])          #   6    frequency
-            arguments_array[7].append(element[8])          #   8    amp coefficient
-            arguments_array[8].append(element[9])          #   9    n
-            arguments_array[9].append(element[10])         #   10   b
-
-        # TO DO
-        # overlapping check
-        # It will be done by pulse_programmer RECT_AWG pulses
-        #general.message( np.diff(arguments_array[1]) )
-        #if min(np.diff(arguments_array[1])) < 0:
-        #    general.message('Overlapped pulses')
-        
-        #general.message(arguments_array)
-
-        # convert everything in samples 
-        pulse_phase_np = np.asarray(arguments_array[4])
-        pulse_start_smp = (np.asarray(arguments_array[1])).astype('int64')
-        pulse_delta_start_smp = (np.asarray(arguments_array[2])).astype('int64')
-        pulse_length_smp = (np.asarray(arguments_array[3])).astype('int64')
-        pulse_sigma_smp = np.asarray(arguments_array[5])
-        pulse_frequency = np.asarray(arguments_array[6], dtype=object)
-        pulse_amp = np.asarray(arguments_array[7])
-        pulse_n_wurst = np.asarray(arguments_array[8])
-        pulse_b_sech = np.asarray(arguments_array[9])
-        
-        # we do not expect that pulses will have drastically different
-        # pulse length. It is better to define the same buffer length 
-        # for each segment, since in this case we should not worry about
-        # saving the information about memory size for each segments
-        last_pulse_length = pulse_length_smp[-1]
-        last_start = pulse_start_smp[-1]
-
-        #general.message(last_start)
-        # buffer length defines for the largest delay
-        #self.memsize = self.closest_power_of_two( last_start + last_pulse_length )
-        self.memsize = self.round_to_closest( (last_start + last_pulse_length) , 32)
-
-        # define buffer differently for only one or two channels enabled
-        # for ch1 phase is automatically shifted by self.phase_shift_ch1_seq_mode
-        if (self.channel == 1 or self.channel == 2) and self.single_joined == 1:
-
-            # define the buffer
-            self.pnBuffer = c_void_p()
-            self.qwBufferSize = uint64 (2 * self.memsize)  # buffer size
-            self.pvBuffer = pvAllocMemPageAligned (self.qwBufferSize.value)
-            self.pnBuffer = cast (self.pvBuffer, ptr16)
-
-            # run over defined pulses inside a sequence point
-            for index, element in enumerate(arguments_array[0]):
-                # for DEER pulse with random phase
-                #rnd_phase = 2*pi*random.random()
-
-                if element == 0: # 'SINE'
-                    # always zero phase in Sine: i
-                    # one phase in Sine: i - pulse_start_smp[index]
-
-                    for i in range(pulse_start_smp[index], self.memsize):
-
-                        if i < (pulse_start_smp[index] ):
-                            pass
-                        elif ( i >= ( pulse_start_smp[index] ) and \
-                               i <= (pulse_start_smp[index] + pulse_length_smp[index] ) ):
-                            
-                            if pulse_phase_np[index] != 1000:
-                                # ( i - pulse_start_smp[index] ) for always zero phase
-                                self.pnBuffer[i] = int( self.maxCAD / pulse_amp[index] * sin(2*pi*(( i - pulse_start_smp[index] ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] ) )
-
-                            else:
-                                # for DEER pulse with random phase
-                                rnd_phase = 2*pi*random.random()
-                                self.pnBuffer[i] = int( self.maxCAD / pulse_amp[index] * sin(2*pi*(( i - pulse_start_smp[index] ))*pulse_frequency[index] / self.sample_rate + \
-                                                    pulse_phase_np[index] ) + rnd_phase )
-                        else:
-                            break
-
-                elif element == 1: # GAUSS
-                    # mid_point for GAUSS and SINC and WURST and SECH/TANH
-                    # always zero phase in Sine: i
-                    # one phase in Sine: i - pulse_start_smp[index]
-
-                    mid_point = int( pulse_start_smp[index] + ( pulse_length_smp[index] )/2 )
-
-                    for i in range(pulse_start_smp[index], self.memsize):
-                        if i < (pulse_start_smp[index] ):
-                            pass
-                        elif ( i >= ( pulse_start_smp[index] ) and \
-                               i <= (pulse_start_smp[index] + pulse_length_smp[index] ) ):
-                            
-                            if pulse_phase_np[index] != 1000:
-                                #self.full_buffer[point, i] 
-                                # ( i - pulse_start_smp[index] ) in Sine for always zero phase
-                                self.pnBuffer[i] = int( self.maxCAD / pulse_amp[index]* exp(-((( i ) - mid_point)**2)*(1/(2*pulse_sigma_smp[index]**2)))*\
-                                                        sin(2*pi*(( i - pulse_start_smp[index] ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] ) )
-
-                            else:
-                                # for DEER pulse with random phase
-                                rnd_phase = 2*pi*random.random()
-                                self.pnBuffer[i] = int( self.maxCAD / pulse_amp[index] * exp(-((( i ) - mid_point)**2)*(1/(2*pulse_sigma_smp[index]**2)))*\
-                                                        sin(2*pi*(( i - pulse_start_smp[index] ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] +\
-                                                        rnd_phase) )
-                        else:
-                            break
-
-                elif element == 2: # 'SINC'
-                    # mid_point for GAUSS and SINC and WURST and SECH/TANH
-                    # always zero phase in Sine: i
-                    # one phase in Sine: i - pulse_start_smp[index]
-
-                    mid_point = int( pulse_start_smp[index] + ( pulse_length_smp[index] )/2 )
-
-                    for i in range(pulse_start_smp[index], self.memsize):
-                        if i < (pulse_start_smp[index]):
-                            pass
-                        elif ( i >= ( pulse_start_smp[index] ) and \
-                               i <= (pulse_start_smp[index] + pulse_length_smp[index] ) ):
-                            
-                            if pulse_phase_np[index] != 1000:
-                                self.full_buffer[point, i] 
-                                # ( i - pulse_start_smp[index] ) in Sine for always zero phase
-                                self.pnBuffer[i] = int( self.maxCAD / pulse_amp[index] * np.sinc(2*(( i ) - mid_point) / (pulse_sigma_smp[index]) )*\
-                                                           sin(2*pi*(( i - pulse_start_smp[index] ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] ) )
-
-                            else:
-                                # for DEER pulse with random phase
-                                rnd_phase = 2*pi*random.random()
-                                self.pnBuffer[i] = int( self.maxCAD / pulse_amp[index] * np.sinc(2*(( i ) - mid_point) / (pulse_sigma_smp[index]) )*\
-                                                        sin(2*pi*(( i - pulse_start_smp[index] ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] +\
-                                                        rnd_phase) )
-                        else:
-                            break
-
-                elif element == 3: # BLANK
-                    pass
-
-                elif element == 4: # 'WURST'
-                    # mid_point for GAUSS and SINC and WURST and SECH/TANH
-                    # at = A*( 1 - abs( sin(pi*(t-tp/2)/tp) )^n )
-                    # ph = 2*pi*(Fstr*t + 0.5*( Ffin - Fstr )*t^2/tp )
-                    # WURST = at*sin(ph + phase_0)
-                    # ( i - pulse_start_smp[index] ) for 
-                    # always zero phase in Sine: i
-                    # one phase in Sine: i - pulse_start_smp[index]
-
-                    mid_point = int( pulse_start_smp[index] + ( pulse_length_smp[index] )/2 )
-
-                    for i in range(pulse_start_smp[index], self.memsize):
-                        if i < (pulse_start_smp[index]):
-                            pass
-                        elif ( i >= ( pulse_start_smp[index] ) and \
-                               i <= (pulse_start_smp[index] + pulse_length_smp[index] ) ):
-                            
-                            if pulse_phase_np[index] != 1000:
-                                # ( i - pulse_start_smp[index] ) in Sine for always zero phase
-                                self.pnBuffer[i] = int( self.maxCAD / pulse_amp[index] * ( 1 - abs( sin( pi*( i - mid_point ) / pulse_length_smp[index] ) ) ** pulse_n_wurst[index] )*\
-                                                        sin(2*pi*( ( i - pulse_start_smp[index] ) * pulse_frequency[index][0] / self.sample_rate + 0.5 * \
-                                                        (pulse_frequency[index][1] - pulse_frequency[index][0]) * ( i - pulse_start_smp[index] )**2 \
-                                                        / pulse_length_smp[index] / self.sample_rate ) + pulse_phase_np[index] ))
-
-                            else:
-                                # for DEER pulse with random phase
-                                rnd_phase = 2*pi*random.random()
-                                self.pnBuffer[i] = int( self.maxCAD / pulse_amp[index] * ( 1 - abs( sin( pi*( i - mid_point ) / pulse_length_smp[index] ) ) ** pulse_n_wurst[index] )*\
-                                                        sin(2*pi*( ( i - pulse_start_smp[index] ) * pulse_frequency[index][0] / self.sample_rate + 0.5 * \
-                                                        (pulse_frequency[index][1] - pulse_frequency[index][0]) * ( i - pulse_start_smp[index] )**2 \
-                                                        / pulse_length_smp[index] / self.sample_rate ) + pulse_phase_np[index] + rnd_phase ))
-
-                        else:
-                            break
-
-                elif element == 5: # 'SECH/TANH'
-                    # mid_point for GAUSS and SINC and WURST and SECH/TANH
-                    # at = A*Sech[b*tp*2^(n - 1) ((t - tp/2)/tp)^n]
-                    # ph = 2*Pi*bw/b*Log[Cosh[b*(t - tp/2)]]/2/Tanh[b*tp/2]
-                    # SECH = at*sin(ph + phase_0)
-                    # ( i - pulse_start_smp[index] ) for 
-                    # always zero phase in Sine: i
-                    # one phase in Sine: i - pulse_start_smp[index]
-
-                    mid_point = int( pulse_start_smp[index] + ( pulse_length_smp[index] )/2 )
-                    freq_cen = ( pulse_frequency[index][1] + pulse_frequency[index][0] ) / 2
-
-                    for i in range(pulse_start_smp[index], self.memsize):
-                        if i < (pulse_start_smp[index]):
-                            pass
-                        elif ( i >= ( pulse_start_smp[index] ) and \
-                               i <= (pulse_start_smp[index] + pulse_length_smp[index] ) ):
-                            
-                            # ( i - pulse_start_smp[index] ) in Sine for always zero phase
-                            self.pnBuffer[i] = int( self.maxCAD / pulse_amp[index] * ( 1 / np.cosh( pulse_b_sech[index] * pulse_length_smp[index] * 2 ** (pulse_n_wurst[index] - 1)  * \
-                                ( ( i - mid_point ) / pulse_length_smp[index] )** pulse_n_wurst[index] ) ) *\
-                                sin(2*pi*(pulse_frequency[index][1] - pulse_frequency[index][0]) / self.sample_rate / pulse_b_sech[index] * np.log( np.cosh( pulse_b_sech[index] \
-                                    * ( i - mid_point )  ) ) / 2 / np.tanh( pulse_b_sech[index] * mid_point ) + pulse_phase_np[index] + 2 * pi * i * freq_cen / self.sample_rate ))
-                        else:
-                            break
-
-            return self.pvBuffer, self.pnBuffer
-
-        # Modification for vectorized buffer filling 12-08-2021
-        # It decreases buffer filling time 2-3 times
-        elif self.channel == 3 and self.single_joined == 1:
-            # 1-2 ms per pulse
-            # define the buffer
-            self.pnBuffer = c_void_p()
-            self.qwBufferSize = uint64 (2 * self.memsize * 2)  # buffer size for two channels
-            self.pvBuffer = pvAllocMemPageAligned (self.qwBufferSize.value)
-            self.pnBuffer = cast (self.pvBuffer, ptr16)
-            # additional line to convertion back to numpy; it should be commented in a standard range approach
-            self.pnBuffer = np.ctypeslib.as_array(self.pnBuffer, shape = (int(2 * self.memsize), ))
-
-            # run over defined pulses inside a sequence point
-            for index, element in enumerate(arguments_array[0]):
-                # DEER pulse
-                #rnd_phase = 2*pi*random.random()
-
-                if element == 0: #'SINE'
-                    ## STANDARD RANGE APPROACH:
-                    ##for i in range(2 * (pulse_start_smp[index] ), 2*self.memsize, 2):
-                    ##    if i < 2 * (pulse_start_smp[index] ):
-                    ##        pass
-                    ##    elif ( i >= 2 * ( pulse_start_smp[index] ) and \
-                    ##           i <= 2 * (pulse_start_smp[index] + pulse_length_smp[index] ) ):
-                    ##        
-                    ##        #if pulse_phase_np[index] != 1000:
-                    ##            #self.full_buffer[point, i] 
-                    ##        # ch0
-                    ##        self.pnBuffer[i] = int( self.maxCAD / pulse_amp[index] * sin(2*pi*(( i/2 ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] ) )
-                    ##        #ch1
-                    ##        self.pnBuffer[i + 1] = int( self.maxCAD / pulse_amp[index] * sin(2*pi*(( ( i )/2 ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] +\
-                    ##                                     self.phase_shift_ch1_seq_mode) )
-                    ##        #else:
-                    ##            #self.full_buffer[point, i]
-                    ##            # ch0
-                    ##            #self.pnBuffer[i] = int( self.maxCAD / pulse_amp[index] * sin(2*pi*(( i/2 ))*pulse_frequency[index] / self.sample_rate + rnd_phase) )
-                    ##            #ch1
-                    ##            #self.pnBuffer[i + 1] = int( self.maxCAD / pulse_amp[index] * sin(2*pi*(( ( i )/2 ))*pulse_frequency[index] / self.sample_rate + rnd_phase + \
-                    ##            #                         self.phase_shift_ch1_seq_mode) )
-                    ##    else:
-                    ##        break
-
-                    # vectorized version:
-                    # always zero phase: np.arange(0, 0 + pulse_length_smp[index]) )
-                    # one phase: np.arange(pulse_start_smp[index], pulse_start_smp[index] + pulse_length_smp[index]) )
-                    if pulse_phase_np[index] != 1000:
-                        self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_start_smp[index] + pulse_length_smp[index])][0::2] = \
-                                    (self.maxCAD / pulse_amp[index] * np.sin(2*np.pi*(( np.arange(0, 0 + \
-                                        pulse_length_smp[index]) ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] )).astype(int64)
-                        self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_start_smp[index] + pulse_length_smp[index])][1::2] = \
-                                    (self.maxCAD / pulse_amp[index] * np.sin(2*np.pi*(( np.arange(0, 0 + \
-                                        pulse_length_smp[index]) ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] + self.phase_shift_ch1_seq_mode)).astype(int64)
-                    else:
-                        # DEER pulse
-                        rnd_phase = 2*pi*random.random()
-                        self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_start_smp[index] + pulse_length_smp[index])][0::2] = \
-                                    (self.maxCAD / pulse_amp[index] * np.sin(2*np.pi*(( np.arange(0, 0 + \
-                                        pulse_length_smp[index]) ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] + rnd_phase)).astype(int64)
-                        self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_start_smp[index] + pulse_length_smp[index])][1::2] = \
-                                    (self.maxCAD / pulse_amp[index] * np.sin(2*np.pi*(( np.arange(0, 0 + \
-                                        pulse_length_smp[index]) ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] + self.phase_shift_ch1_seq_mode + rnd_phase)).astype(int64)
-
-                elif element == 1: #'GAUSS'
-                    # mid_point for GAUSS, SINC, and WURST, and SECH/TANH
-                    mid_point = int( pulse_start_smp[index] + (pulse_length_smp[index] )/2 )
-                    ## STANDARD RANGE APPROACH:
-                    ##for i in range(2 * (pulse_start_smp[index] ), 2*self.memsize, 2):
-                    ##    if i < 2 * (pulse_start_smp[index] ):
-                    ##        pass
-                    ##    elif ( i >= 2 * ( pulse_start_smp[index] ) and \
-                    ##           i <= 2 * (pulse_start_smp[index] + pulse_length_smp[index] ) ):
-                    ##
-                    ##        #if pulse_phase_np[index] != 1000:
-                    ##            #self.full_buffer[point, i]
-                    ##        # ch0
-                    ##        self.pnBuffer[i] = int( self.maxCAD / pulse_amp[index] * exp(-((( i/2 ) - mid_point)**2)*(1/(2*pulse_sigma_smp[index]**2)))*\
-                    ##                                    sin(2*pi*(( i/2 ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] ) )
-                    ##        #ch1
-                    ##        self.pnBuffer[i + 1] = int( self.maxCAD / pulse_amp[index] * exp(-((( ( i )/2 ) - mid_point)**2)*(1/(2*pulse_sigma_smp[index]**2)))*\
-                    ##                                    sin(2*pi*(( ( i )/2 ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] +\
-                    ##                                    self.phase_shift_ch1_seq_mode) )
-                    ##
-                    ##        #else:
-                    ##            #self.full_buffer[point, i]
-                    ##            # ch0
-                    ##        #    self.pnBuffer[i] = int( self.maxCAD / pulse_amp[index] * exp(-((( i/2 ) - mid_point)**2)*(1/(2*pulse_sigma_smp[index]**2)))*\
-                    ##        #                            sin(2*pi*(( i/2 ))*pulse_frequency[index] / self.sample_rate + rnd_phase ) )
-                    ##            #ch1
-                    ##        #    self.pnBuffer[i + 1] = int( self.maxCAD / pulse_amp[index] * exp(-((( ( i )/2 ) - mid_point)**2)*(1/(2*pulse_sigma_smp[index]**2)))*\
-                    ##        #                            sin(2*pi*(( ( i )/2 ))*pulse_frequency[index] / self.sample_rate + rnd_phase +\
-                    ##        #                            self.phase_shift_ch1_seq_mode) )                                    
-                    ##
-                    ##    else:
-                    ##        break
-
-                    # always zero phase in Sine: np.arange(0, 0 + pulse_length_smp[index]) )
-                    # one phase in Sine: np.arange(pulse_start_smp[index], pulse_start_smp[index] + pulse_length_smp[index]) )
-                    if pulse_phase_np[index] != 1000:
-                        self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_start_smp[index] + pulse_length_smp[index])][0::2] = \
-                                        (self.maxCAD / pulse_amp[index] * np.exp(-((( ( np.arange(pulse_start_smp[index], pulse_start_smp[index] + \
-                                            pulse_length_smp[index]) ) ) - mid_point)**2)*(1/(2*pulse_sigma_smp[index]**2)))*\
-                                                    np.sin(2*np.pi*(( ( np.arange(0, 0 + \
-                                            pulse_length_smp[index]) )  ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] )).astype(int64)
-                        self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_start_smp[index] + pulse_length_smp[index])][1::2] = \
-                                        (self.maxCAD / pulse_amp[index] * np.exp(-((( ( np.arange(pulse_start_smp[index], pulse_start_smp[index] + \
-                                            pulse_length_smp[index]) )  ) - mid_point)**2)*(1/(2*pulse_sigma_smp[index]**2)))*\
-                                                    np.sin(2*np.pi*(( ( np.arange(0, 0 + \
-                                            pulse_length_smp[index]) )  ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] + self.phase_shift_ch1_seq_mode )).astype(int64)
-                    else:
-                        # DEER pulse
-                        rnd_phase = 2*pi*random.random()
-                        self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_start_smp[index] + pulse_length_smp[index])][0::2] = \
-                                        (self.maxCAD / pulse_amp[index] * np.exp(-((( ( np.arange(pulse_start_smp[index], pulse_start_smp[index] + \
-                                            pulse_length_smp[index]) ) ) - mid_point)**2)*(1/(2*pulse_sigma_smp[index]**2)))*\
-                                                    np.sin(2*np.pi*(( ( np.arange(0, 0 + \
-                                            pulse_length_smp[index]) )  ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] + rnd_phase)).astype(int64)
-                        self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_start_smp[index] + pulse_length_smp[index])][1::2] = \
-                                        (self.maxCAD / pulse_amp[index] * np.exp(-((( ( np.arange(pulse_start_smp[index], pulse_start_smp[index] + \
-                                            pulse_length_smp[index]) )  ) - mid_point)**2)*(1/(2*pulse_sigma_smp[index]**2)))*\
-                                                    np.sin(2*np.pi*(( ( np.arange(0, 0 + \
-                                            pulse_length_smp[index]) )  ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] + self.phase_shift_ch1_seq_mode + rnd_phase)).astype(int64)
-
-                elif element == 2: #'SINC'
-                    # mid_point for GAUSS, SINC, and WURST, and SECH/TANH 
-                    mid_point = int( pulse_start_smp[index] + (pulse_length_smp[index])/2 )
-                    ## STANDARD RANGE APPROACH:
-                    ##for i in range(2 * (pulse_start_smp[index] ), 2*self.memsize, 2):
-                    ##
-                    ##    if i < 2 * (pulse_start_smp[index] ):
-                    ##        pass
-                    ##    elif ( i >= 2 * ( pulse_start_smp[index] ) and \
-                    ##           i <= 2 * (pulse_start_smp[index] + pulse_length_smp[index] ) ):
-                    ##        
-                    ##        #if pulse_phase_np[index] != 1000:
-                    ##            #self.full_buffer[point, i]
-                    ##        # ch0
-                    ##        self.pnBuffer[i] = int( self.maxCAD / pulse_amp[index] * np.sinc(2*(( i/2 ) - mid_point) / (pulse_sigma_smp[index]) )*\
-                    ##                                     sin(2*pi*(( i/2 ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] ) )
-                    ##        #ch1
-                    ##        self.pnBuffer[i + 1] = int( self.maxCAD / pulse_amp[index] * np.sinc(2*(( ( i  )/2 ) - mid_point) / (pulse_sigma_smp[index]) )*\
-                    ##                                     sin(2*pi*(( ( i  )/2 ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] +\
-                    ##                                     self.phase_shift_ch1_seq_mode) )
-                    ##        #else:
-                    ##            #self.full_buffer[point, i]
-                    ##            # ch0
-                    ##        #    self.pnBuffer[i] = int( self.maxCAD / pulse_amp[index] * np.sinc(2*(( i/2 ) - mid_point) / (pulse_sigma_smp[index]) )*\
-                    ##        #                             sin(2*pi*(( i/2 ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] + rnd_phase) )
-                    ##        #    self.pnBuffer[i + 1] = int( self.maxCAD / pulse_amp[index] * np.sinc(2*(( ( i )/2 ) - mid_point) / (pulse_sigma_smp[index]) )*\
-                    ##        #                             sin(2*pi*(( ( i )/2 ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] +\
-                    ##        #                             self.phase_shift_ch1_seq_mode + rnd_phase) )
-                    ##    else:
-                    ##        break
-
-                    # always zero phase in Sine: np.arange(0, 0 + pulse_length_smp[index]) )
-                    # one phase in Sine: np.arange(pulse_start_smp[index], pulse_start_smp[index] + pulse_length_smp[index]) )
-                    if pulse_phase_np[index] != 1000:
-                        self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_start_smp[index] + pulse_length_smp[index])][0::2] = \
-                                        (self.maxCAD / pulse_amp[index] * np.sinc(2*(( ( np.arange(pulse_start_smp[index], pulse_start_smp[index] + \
-                                            pulse_length_smp[index]) ) ) - mid_point) / (pulse_sigma_smp[index]) )*\
-                                                np.sin(2*np.pi*(( ( np.arange(0, 0 + \
-                                                    pulse_length_smp[index]) ) ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] )).astype(int64)
-                        self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_start_smp[index] + pulse_length_smp[index])][1::2] = \
-                                        (self.maxCAD / pulse_amp[index] * np.sinc(2*(( ( np.arange(pulse_start_smp[index], pulse_start_smp[index] + \
-                                            pulse_length_smp[index]) ) ) - mid_point) / (pulse_sigma_smp[index]) )*\
-                                                np.sin(2*np.pi*(( ( np.arange(0, 0 + \
-                                                    pulse_length_smp[index]) ) ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] + self.phase_shift_ch1_seq_mode )).astype(int64)
-                    else:
-                        # DEER pulse
-                        rnd_phase = 2*pi*random.random()
-                        self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_start_smp[index] + pulse_length_smp[index])][0::2] = \
-                                        (self.maxCAD / pulse_amp[index] * np.sinc(2*(( ( np.arange(pulse_start_smp[index], pulse_start_smp[index] + \
-                                            pulse_length_smp[index]) ) ) - mid_point) / (pulse_sigma_smp[index]) )*\
-                                                np.sin(2*np.pi*(( ( np.arange(0, 0 + \
-                                                    pulse_length_smp[index]) ) ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] + rnd_phase)).astype(int64)
-                        self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_start_smp[index] + pulse_length_smp[index])][1::2] = \
-                                        (self.maxCAD / pulse_amp[index] * np.sinc(2*(( ( np.arange(pulse_start_smp[index], pulse_start_smp[index] + \
-                                            pulse_length_smp[index]) ) ) - mid_point) / (pulse_sigma_smp[index]) )*\
-                                                np.sin(2*np.pi*(( ( np.arange(0, 0 + \
-                                                    pulse_length_smp[index]) ) ))*pulse_frequency[index] / self.sample_rate + pulse_phase_np[index] + \
-                                                        self.phase_shift_ch1_seq_mode + rnd_phase )).astype(int64)
-
-                elif element == 3: # BLANK
-                    pass
-
-                elif element == 4: #'WURST'
-                    # mid_point for GAUSS, SINC, and WURST, and SECH/TANH
-                    mid_point = int( pulse_start_smp[index] + (pulse_length_smp[index])/2 )
- 
-                    # always zero phase in Sine: np.arange(0, 0 + pulse_length_smp[index]) )
-                    # one phase in Sine: np.arange(pulse_start_smp[index], pulse_start_smp[index] + pulse_length_smp[index]) )
-                    # at = A*( 1 - abs( sin(pi*(t-tp/2)/tp) )^n )
-                    # ph = 2*pi*(Fstr*t + 0.5*( Ffin - Fstr )*t^2/tp )
-                    # WURST = at*sin(ph + phase_0)
-
-                    ###############################################
-                    # resonator profile correction test
-                    freq_sweep = pulse_frequency[index][1] - pulse_frequency[index][0]
-                    m_p = ( mid_point - pulse_start_smp[index] )
-                    
-                    ###LO - RF; high frequency first; flip order
-                    t_axis = np.flip( np.arange(0, 0 + pulse_length_smp[index] ) - m_p )
-
-                    # 300 is wurst sweep
-                    # md4
-                    #c = 1 / self.triple_gauss(t_axis * 300 / pulse_length_smp[index], 0.570786, 0.383363, 12.2448, 1241.89, \
-                    #                                                                            0.191815, -43.478, 1913.96, \
-                    #                                                                            0.06655,  77.3173, 614.985)
-
-                    # md3
-                    #c = 1 / self.triple_lorentzian(t_axis * 300 / pulse_length_smp[index], 5.92087, 412.868, -124.647, 62.0069, \
-                    #                                                                            420.717, -35.8879, 34.4214, \
-                    #                                                                            9893.97,  12.4056, 150.304)
-                    
-                    c = 1 / self.triple_lorentzian(t_axis * freq_sweep / pulse_length_smp[index], self.bl, self.a1, self.x1, self.w1, \
-                                                                                                  self.a2, self.x2, self.w2, \
-                                                                                                  self.a3, self.x3, self.w3)
-
-                    c = c / c[0]
-                    # limit minimum B1
-                    # 16 MHz is the value for MD3 at +-150 MHz around the center
-                    # 23 MHz is an arbitrary limit; around 210 MHz width
-                    c[c > self.low_level/self.limit] = self.low_level/self.limit
-                    
-                    c = c / c[0]
-                    ph_cor = 0
-
-                    if freq_sweep >= 0:
-                        pass
-                    else:
-                        np.flip( c )
-
-                    # only pi/2 correction
-                    if self.pi2flag == 1:
-                        if int( pulse_amp[index] ) > 1:
-                            pass
-                        else:
-                            c = 1
-
-                    #general.plot_1d( 'C', np.arange(0, 0 + pulse_length_smp[index] ), c )
-                    
-                    #phase and amplitude from ideal resonator with f0 and Q
-                    ##Q = 88
-                    ##f0 = 9700
-
-                    ##length = pulse_length_smp[index]
-                    ##end_freq = pulse_frequency[index][1]
-                    ##st_freq = pulse_frequency[index][0]
-                    ##sweep = end_freq - st_freq
-
-                    #LO - RF; high frequency first; flip order
-                    ##t_axis = np.flip( np.arange( st_freq + f0, end_freq + f0, sweep / length ) )
-
-                    ##ideal_res = 1 / ( 1 + 1j * Q * ( t_axis / f0 - f0 / t_axis ) )
-                    ##ph_cor = np.arctan2( ideal_res.imag, ideal_res.real ) 
-                    # only pi/2 correction
-                    ##if int( pulse_amp[index] ) > 1:
-                    ##    amp_cor = 1 / np.abs( ideal_res )
-                    ##    c = amp_cor / amp_cor[0]
-                    ##else:
-                    ##    c = 1
-
-                    #general.plot_1d( 'C', np.arange(0, 0 + pulse_length_smp[index] ), ph_cor * 180 / np.pi )
-                    #general.plot_1d( 'C', np.arange(0, 0 + pulse_length_smp[index] ), c )
-
-                    ###############################################
-                    
-                    if pulse_phase_np[index] != 1000:
-                        self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_start_smp[index] + pulse_length_smp[index])][0::2] = \
-                                        (self.maxCAD * c / pulse_amp[index] * ( 1 - np.abs( np.sin( np.pi * ( np.arange(pulse_start_smp[index], pulse_start_smp[index] + \
-                                            pulse_length_smp[index]) - mid_point) / pulse_length_smp[index] ) ) ** pulse_n_wurst[index] ) * \
-                                            np.sin(2*np.pi*( np.arange(0, 0 + \
-                                            pulse_length_smp[index] )*( pulse_frequency[index][0] / self.sample_rate ) + 0.5 * ( pulse_frequency[index][1] - pulse_frequency[index][0])\
-                                             / self.sample_rate * np.arange(0, 0 + pulse_length_smp[index] )**2 / pulse_length_smp[index] ) \
-                                             + pulse_phase_np[index] + ph_cor )).astype(int64)
-
-                        self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_start_smp[index] + pulse_length_smp[index])][1::2] = \
-                                        (self.maxCAD * c / pulse_amp[index] * ( 1 - np.abs( np.sin( np.pi * ( np.arange(pulse_start_smp[index], pulse_start_smp[index] + \
-                                            pulse_length_smp[index]) - mid_point) / pulse_length_smp[index] ) ) ** pulse_n_wurst[index] ) * \
-                                            np.sin(2*np.pi*( np.arange(0, 0 + \
-                                            pulse_length_smp[index] )*( pulse_frequency[index][0] / self.sample_rate ) + 0.5 * ( pulse_frequency[index][1] - pulse_frequency[index][0])\
-                                             / self.sample_rate * np.arange(0, 0 + pulse_length_smp[index] )**2 / pulse_length_smp[index] ) \
-                                              + pulse_phase_np[index] + self.phase_shift_ch1_seq_mode + ph_cor )).astype(int64) 
-
-                    else:
-                        # DEER pulse
-                        rnd_phase = 2*pi*random.random()
-
-                        self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_start_smp[index] + pulse_length_smp[index])][0::2] = \
-                                        (self.maxCAD / pulse_amp[index] * ( 1 - np.abs( np.sin( np.pi * ( np.arange(pulse_start_smp[index], pulse_start_smp[index] + \
-                                            pulse_length_smp[index]) - mid_point) / pulse_length_smp[index] ) ) ** pulse_n_wurst[index] ) * \
-                                            np.sin(2*np.pi*( np.arange(0, 0 + \
-                                            pulse_length_smp[index] )*( pulse_frequency[index][0] / self.sample_rate ) + 0.5 * ( pulse_frequency[index][1] - pulse_frequency[index][0])\
-                                             / self.sample_rate * np.arange(0, 0 + pulse_length_smp[index] )**2 / pulse_length_smp[index] ) \
-                                             + pulse_phase_np[index] + rnd_phase )).astype(int64)
-
-                        self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_start_smp[index] + pulse_length_smp[index])][1::2] = \
-                                        (self.maxCAD / pulse_amp[index] * ( 1 - np.abs( np.sin( np.pi * ( np.arange(pulse_start_smp[index], pulse_start_smp[index] + \
-                                            pulse_length_smp[index]) - mid_point) / pulse_length_smp[index] ) ) ** pulse_n_wurst[index] ) * \
-                                            np.sin(2*np.pi*( np.arange(0, 0 + \
-                                            pulse_length_smp[index] )*( pulse_frequency[index][0] / self.sample_rate ) + 0.5 * ( pulse_frequency[index][1] - pulse_frequency[index][0])\
-                                             / self.sample_rate * np.arange(0, 0 + pulse_length_smp[index] )**2 / pulse_length_smp[index] ) \
-                                             + pulse_phase_np[index] + self.phase_shift_ch1_seq_mode + rnd_phase )).astype(int64)
-
-                elif element == 5: # 'SECH/TANH'
-                    # mid_point for GAUSS, SINC, and WURST, and SECH/TANH
-                    mid_point = int( pulse_start_smp[index] + (pulse_length_smp[index])/2 )
-                    
-                    #########################################################
-                    # resonator profile correction test
-                    m_p = ( mid_point - pulse_start_smp[index] )
-                    freq_sweep = pulse_frequency[index][1] - pulse_frequency[index][0]
-
-                    ###LO - RF; high frequency first; flip order
-                    t_axis = np.flip( np.arange(0, 0 + pulse_length_smp[index] ) - m_p )
-                    
-                    # 300 is wurst sweep
-                    c = 1 / self.triple_lorentzian(t_axis * freq_sweep / pulse_length_smp[index], self.bl, self.a1, self.x1, self.w1, \
-                                                                                                  self.a2, self.x2, self.w2, \
-                                                                                                  self.a3, self.x3, self.w3)
-
-                    c = c / c[0]
-                    # limit minimum B1
-                    # 16 MHz is the value for MD3 at +-150 MHz around the center
-                    # 23 MHz is an arbitrary limit; around 210 MHz width
-                    c[c > self.low_level/self.limit] = self.low_level/self.limit
-                    
-                    c = c / c[0]
-                    ph_cor = 0
-
-                    if freq_sweep >= 0:
-                        pass
-                    else:
-                        np.flip( c )
-
-                    # only pi/2 correction
-                    if self.pi2flag == 1:
-                        if int( pulse_amp[index] ) > 1:
-                            pass
-                        else:
-                            c = 1
-
-                    #general.plot_1d( 'C', np.arange(0, 0 + pulse_length_smp[index] ), c )
-                    
-                    # always zero phase in Sine: np.arange(0, 0 + pulse_length_smp[index]) )
-                    # one phase in Sine: np.arange(pulse_start_smp[index], pulse_start_smp[index] + pulse_length_smp[index]) )
-
-                    # at = A*Sech[b*tp*2^(n - 1) ((t - tp/2)/tp)^n]
-                    # ph = 2*Pi*bw/b*Log[Cosh[b*(t - tp/2)]]/2/Tanh[b*tp/2]
-                    # SECH = at*sin(ph + phase_0)
-                    freq_cen = ( pulse_frequency[index][1] + pulse_frequency[index][0] ) / 2
-
-                    self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_start_smp[index] + pulse_length_smp[index])][0::2] = \
-                                    (self.maxCAD * c / pulse_amp[index] * ( 1 / np.cosh( pulse_b_sech[index] * pulse_length_smp[index] * 2 ** (pulse_n_wurst[index] - 1)  * \
-                                    ( ( np.arange(pulse_start_smp[index], pulse_start_smp[index] + \
-                                        pulse_length_smp[index]) - mid_point ) / pulse_length_smp[index] )** pulse_n_wurst[index] ) ) * \
-                                    np.sin(2*np.pi*(pulse_frequency[index][1] - pulse_frequency[index][0]) / self.sample_rate / pulse_b_sech[index] * np.log( np.cosh( pulse_b_sech[index] \
-                                        * ( np.arange(pulse_start_smp[index], pulse_start_smp[index] + \
-                                        pulse_length_smp[index]) - mid_point )  ) ) / 2 / np.tanh( pulse_b_sech[index] * mid_point ) + pulse_phase_np[index] + ph_cor + \
-                                        2*np.pi*freq_cen / self.sample_rate * ( np.arange(0, 0 + pulse_length_smp[index] ) ) )).astype(int64)
-
-
-                    self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_start_smp[index] + pulse_length_smp[index])][1::2] = \
-                                    (self.maxCAD * c / pulse_amp[index] * ( 1 / np.cosh( pulse_b_sech[index] * pulse_length_smp[index] * 2 ** (pulse_n_wurst[index] - 1)  * \
-                                    ( ( np.arange(pulse_start_smp[index], pulse_start_smp[index] + \
-                                        pulse_length_smp[index]) - mid_point ) / pulse_length_smp[index] )** pulse_n_wurst[index] ) ) * \
-                                    np.sin(2*np.pi*(pulse_frequency[index][1] - pulse_frequency[index][0]) / self.sample_rate / pulse_b_sech[index] * np.log( np.cosh( pulse_b_sech[index] \
-                                        * ( np.arange(pulse_start_smp[index], pulse_start_smp[index] + \
-                                        pulse_length_smp[index]) - mid_point )  ) ) / 2 / np.tanh( pulse_b_sech[index] * mid_point ) + pulse_phase_np[index] + self.phase_shift_ch1_seq_mode + ph_cor + \
-                                        2*np.pi*freq_cen / self.sample_rate * ( np.arange(0, 0 + pulse_length_smp[index] ) ) )).astype(int64)
-
-                elif element == 6: #'TEST'
-                    # vectorized version:
-                    # always zero phase: np.arange(0, 0 + pulse_length_smp[index]) )
-                    # one phase: np.arange(pulse_start_smp[index], pulse_start_smp[index] + pulse_length_smp[index]) )
-                    amp = self.maxCAD / pulse_amp[index]
-                    freq_conv = pulse_frequency[index] / self.sample_rate
-                    ph1 = pulse_phase_np[index]
-                    ph2 = pulse_phase_np[index] + self.phase_shift_ch1_seq_mode
-                    pulse_end = (pulse_start_smp[index] + pulse_length_smp[index])
-                    # linear part 128 ns; divisible by 32
-                    l_part = 128
-                    coef = 1/l_part
-
-                    #CH1
-                    self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_end)][0::2] = \
-                                (amp * np.sin(2*np.pi*(( np.arange(0, pulse_length_smp[index]) ))*freq_conv + ph1 )).astype(int64)
-                    # linear part
-                    if index + 1 != len( arguments_array[0] ):
-                        self.pnBuffer[2*pulse_end:2*(pulse_end + l_part)][0::2] = (0 + amp * coef * np.arange(1, l_part+1) + ph1 ).astype(int64)
-                        self.pnBuffer[2*(pulse_end + l_part):2*pulse_start_smp[index + 1]][0::2] = amp
-
-                    #CH2
-                    self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_end)][1::2] = \
-                                (amp * np.sin(2*np.pi*(( np.arange(0, pulse_length_smp[index]) ))*freq_conv + ph2)).astype(int64)
-                    # linear part
-                    if index + 1 != len( arguments_array[0] ):
-                        self.pnBuffer[2*pulse_end:2*(pulse_end + l_part)][1::2] = (amp - amp * coef * np.arange(0, l_part) + ph1 ).astype(int64)
-                        self.pnBuffer[2*(pulse_end + l_part):2*pulse_start_smp[index + 1]][1::2] = self.pnBuffer[2*(pulse_end + l_part) + 1 ]
-
-                elif element == 7: #'TEST2'
-                    # vectorized version:
-                    # always zero phase: np.arange(0, 0 + pulse_length_smp[index]) )
-                    # one phase: np.arange(pulse_start_smp[index], pulse_start_smp[index] + pulse_length_smp[index]) )
-                    amp = self.maxCAD / pulse_amp[index]
-                    freq_0 = pulse_frequency[index][0] / self.sample_rate
-                    freq_1 = pulse_frequency[index][1] / self.sample_rate
-                    ph1 = pulse_phase_np[index]
-                    ph2 = pulse_phase_np[index] + self.phase_shift_ch1_seq_mode
-                    pulse_end = (pulse_start_smp[index] + pulse_length_smp[index])
-                    sw_par = ( freq_1 - freq_0 ) / pulse_length_smp[index]
-
-                    #chirp pulse
-                    # sin(phi0 + 2*pi*(c/2*t^2 + f0*t)), where c=(f1 - f0)/T; T is sweep time
-
-                    #CH1
-                    self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_end)][0::2] = \
-                                (amp * np.sin(2*np.pi*( freq_0*np.arange(0, pulse_length_smp[index]) +  \
-                                0.5*sw_par*np.arange(0, pulse_length_smp[index])*np.arange(0, pulse_length_smp[index]) ) + ph1 )).astype(int64)
-                    # linear part 100 ns
-                    #if index + 1 != len( arguments_array[0] ):
-                    #    self.pnBuffer[2*pulse_end:2*(pulse_end + 100)][0::2] = (0 + amp * 0.01 * np.arange(1, 101) + ph1 ).astype(int64)
-                    #    self.pnBuffer[2*(pulse_end + 100):2*pulse_start_smp[index + 1]][0::2] = amp
-
-                    #CH2
-                    self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_end)][1::2] = \
-                                (amp * np.sin(2*np.pi*( freq_0*np.arange(0, pulse_length_smp[index]) +  \
-                                0.5*sw_par*np.arange(0, pulse_length_smp[index])*np.arange(0, pulse_length_smp[index]) ) + ph2 )).astype(int64)
-                    # linear part 100 ns
-                    #if index + 1 != len( arguments_array[0] ):
-                    #    self.pnBuffer[2*pulse_end:2*(pulse_end + 100)][1::2] = (amp - amp * 0.01 * np.arange(0, 100) + ph1 ).astype(int64)
-                    #    self.pnBuffer[2*(pulse_end + 100):2*pulse_start_smp[index + 1]][1::2] = self.pnBuffer[2*(pulse_end + 100) + 1 ]
-
-                elif element == 8: #'TEST3'
-                    # vectorized version:
-                    # always zero phase: np.arange(0, 0 + pulse_length_smp[index]) )
-                    # one phase: np.arange(pulse_start_smp[index], pulse_start_smp[index] + pulse_length_smp[index]) )
-                    amp = self.maxCAD / pulse_amp[index]
-                    freq_conv = pulse_frequency[index] / self.sample_rate
-                    ph1 = pulse_phase_np[index]
-                    ph2 = pulse_phase_np[index] + self.phase_shift_ch1_seq_mode
-                    pulse_end = (pulse_start_smp[index] + pulse_length_smp[index])
-                    pulse_middle_point = int( (pulse_start_smp[index] + pulse_length_smp[index]/2) )
-                    # linear part 96 ns; divisible by 32
-                    l_part = 96
-                    # amplitude drop
-                    coef = 1/2
-                    coef2 = coef/l_part
-
-                    #CH1
-                    self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_end)][0::2] = \
-                                (amp * np.sin(2*np.pi*(( np.arange(0, pulse_length_smp[index]) ))*freq_conv + ph1 )).astype(int64)
-                    # linear part down
-                    self.pnBuffer[2*(pulse_middle_point-l_part):2*(pulse_middle_point)][0::2] = (0 - amp * coef2 * np.arange(1, l_part+1) + ph1 ).astype(int64)
-                    # linear part up
-                    self.pnBuffer[2*(pulse_middle_point):2*(pulse_middle_point+l_part)][0::2] = (-amp * coef + amp * coef2 * np.arange(1, l_part+1) + ph1 ).astype(int64)
-
-                    #CH2
-                    self.pnBuffer[2*pulse_start_smp[index]:2*(pulse_end)][1::2] = \
-                                (amp * np.sin(2*np.pi*(( np.arange(0, pulse_length_smp[index]) ))*freq_conv + ph2)).astype(int64)
-                    # linear part down
-                    self.pnBuffer[2*(pulse_middle_point-l_part):2*(pulse_middle_point)][1::2] = (amp - amp * coef2 * np.arange(1, l_part+1) + ph1 ).astype(int64)
-                    # linear part up
-                    self.pnBuffer[2*(pulse_middle_point):2*(pulse_middle_point+l_part)][1::2] = (amp * coef + amp * coef2 * np.arange(1, l_part+1) + ph1 ).astype(int64)
-
-            return self.pvBuffer, self.pnBuffer.ctypes.data_as(ptr16) #STANDARD: return self.pvBuffer, self.pnBuffer
-    
-    def double_gauss(self, x, bl, a1, x1, w1, a2, x2, w2):
-        return bl + a1 * np.exp( -(x - x1)**2 / w1  ) + a2 * np.exp( -(x - x2)**2 / w2  )
-
-    def triple_gauss(self, x, bl, a1, x1, w1, a2, x2, w2, a3, x3, w3):
-        return bl + a1 * np.exp( -(x - x1)**2 / w1  ) + a2 * np.exp( -(x - x2)**2 / w2  ) + a3 * np.exp( -(x - x3)**2 / w3  )
-
-    def triple_lorentzian(self, x, bl, a1, x1, w1, a2, x2, w2, a3, x3, w3):
-            return bl + a1 * 0.5 * w1 / np.pi / ( (x - x1)**2 + (0.5 * w1)**2  ) + a2 * 0.5 * w2 / np.pi / ( (x - x2)**2 + (0.5 * w2)**2  ) + a3 * 0.5 * w3 / np.pi / ( (x - x3)**2 + (0.5 * w3)**2  )
-
-    def round_to_closest(self, x, y):
-        """
-        A function to round x to divisible by y
-        """
-        return int( y * ( ( x // y) + (x % y > 0) ) )
-
-def main():
-    pass
-
-if __name__ == "__main__":
-    main()
-
+-002,-2.75126e-002
+ 4.766250000000e-002,-2.75126e-002
+ 4.766875000000e-002,-2.75126e-002
+ 4.767500000000e-002,-2.75126e-002
+ 4.768125000000e-002,-2.75126e-002
+ 4.768750000000e-002,-2.75126e-002
+ 4.769375000000e-002,-2.75126e-002
+ 4.770000000000e-002,-2.75126e-002
+ 4.770625000000e-002,-2.75126e-002
+ 4.771250000000e-002,-2.75126e-002
+ 4.771875000000e-002,-2.75126e-002
+ 4.772500000000e-002,-2.75126e-002
+ 4.773125000000e-002,-2.75126e-002
+ 4.773750000000e-002,-2.75126e-002
+ 4.774375000000e-002,-2.75126e-002
+ 4.775000000000e-002,-2.75126e-002
+ 4.775625000000e-002,-2.75126e-002
+ 4.776250000000e-002,-2.75126e-002
+ 4.776875000000e-002,-2.75126e-002
+ 4.777500000000e-002,-2.75126e-002
+ 4.778125000000e-002,-2.75126e-002
+ 4.778750000000e-002,-2.75126e-002
+ 4.779375000000e-002,-2.75126e-002
+ 4.780000000000e-002,-2.75126e-002
+ 4.780625000000e-002,-2.75126e-002
+ 4.781250000000e-002,-2.75126e-002
+ 4.781875000000e-002,-2.75126e-002
+ 4.782500000000e-002,-2.75126e-002
+ 4.783125000000e-002,-2.75126e-002
+ 4.783750000000e-002,-2.75126e-002
+ 4.784375000000e-002,-2.75126e-002
+ 4.785000000000e-002,-2.75126e-002
+ 4.785625000000e-002,-2.75126e-002
+ 4.786250000000e-002,-2.75126e-002
+ 4.786875000000e-002,-2.75126e-002
+ 4.787500000000e-002,-2.75126e-002
+ 4.788125000000e-002,-2.75126e-002
+ 4.788750000000e-002,-2.75126e-002
+ 4.789375000000e-002,-2.75126e-002
+ 4.790000000000e-002,-2.75126e-002
+ 4.790625000000e-002,-2.75126e-002
+ 4.791250000000e-002,-2.75126e-002
+ 4.791875000000e-002,-2.75126e-002
+ 4.792500000000e-002,-2.75126e-002
+ 4.793125000000e-002,-2.75126e-002
+ 4.793750000000e-002,-2.75126e-002
+ 4.794375000000e-002,-2.75126e-002
+ 4.795000000000e-002,-2.75126e-002
+ 4.795625000000e-002,-2.75126e-002
+ 4.796250000000e-002,-2.75126e-002
+ 4.796875000000e-002,-2.75126e-002
+ 4.797500000000e-002,-2.75126e-002
+ 4.798125000000e-002,-2.75126e-002
+ 4.798750000000e-002,-2.75126e-002
+ 4.799375000000e-002,-2.75126e-002
+ 4.800000000000e-002,-2.75126e-002
+ 4.800625000000e-002,-2.75126e-002
+ 4.801250000000e-002,-2.75126e-002
+ 4.801875000000e-002,-2.75126e-002
+ 4.802500000000e-002,-2.75126e-002
+ 4.803125000000e-002,-2.75126e-002
+ 4.803750000000e-002,-2.24876e-002
+ 4.804375000000e-002,-2.75126e-002
+ 4.805000000000e-002,-2.75126e-002
+ 4.805625000000e-002,-2.75126e-002
+ 4.806250000000e-002,-2.75126e-002
+ 4.806875000000e-002,-2.75126e-002
+ 4.807500000000e-002,-2.75126e-002
+ 4.808125000000e-002,-2.75126e-002
+ 4.808750000000e-002,-2.75126e-002
+ 4.809375000000e-002,-2.75126e-002
+ 4.810000000000e-002,-2.75126e-002
+ 4.810625000000e-002,-2.75126e-002
+ 4.811250000000e-002,-2.75126e-002
+ 4.811875000000e-002,-2.75126e-002
+ 4.812500000000e-002,-2.24876e-002
+ 4.813125000000e-002,-2.24876e-002
+ 4.813750000000e-002,-2.75126e-002
+ 4.814375000000e-002,-2.75126e-002
+ 4.815000000000e-002,-2.75126e-002
+ 4.815625000000e-002,-2.75126e-002
+ 4.816250000000e-002,-2.75126e-002
+ 4.816875000000e-002,-2.75126e-002
+ 4.817500000000e-002,-2.75126e-002
+ 4.818125000000e-002,-2.75126e-002
+ 4.818750000000e-002,-2.75126e-002
+ 4.819375000000e-002,-2.75126e-002
+ 4.820000000000e-002,-2.75126e-002
+ 4.820625000000e-002,-2.75126e-002
+ 4.821250000000e-002,-2.75126e-002
+ 4.821875000000e-002,-2.75126e-002
+ 4.822500000000e-002,-2.75126e-002
+ 4.823125000000e-002,-2.75126e-002
+ 4.823750000000e-002,-2.75126e-002
+ 4.824375000000e-002,-2.75126e-002
+ 4.825000000000e-002,-2.75126e-002
+ 4.825625000000e-002,-2.75126e-002
+ 4.826250000000e-002,-2.75126e-002
+ 4.826875000000e-002,-2.75126e-002
+ 4.827500000000e-002,-2.75126e-002
+ 4.828125000000e-002,-2.75126e-002
+ 4.828750000000e-002,-2.75126e-002
+ 4.829375000000e-002,-2.75126e-002
+ 4.830000000000e-002,-2.75126e-002
+ 4.830625000000e-002,-2.75126e-002
+ 4.831250000000e-002,-2.24876e-002
+ 4.831875000000e-002,-2.75126e-002
+ 4.832500000000e-002,-2.75126e-002
+ 4.833125000000e-002,-2.75126e-002
+ 4.833750000000e-002,-2.75126e-002
+ 4.834375000000e-002,-2.24876e-002
+ 4.835000000000e-002,-2.75126e-002
+ 4.835625000000e-002,-2.24876e-002
+ 4.836250000000e-002,-2.75126e-002
+ 4.836875000000e-002,-2.75126e-002
+ 4.837500000000e-002,-2.75126e-002
+ 4.838125000000e-002,-2.75126e-002
+ 4.838750000000e-002,-2.75126e-002
+ 4.839375000000e-002,-2.75126e-002
+ 4.840000000000e-002,-2.75126e-002
+ 4.840625000000e-002,-2.75126e-002
+ 4.841250000000e-002,-2.75126e-002
+ 4.841875000000e-002,-2.75126e-002
+ 4.842500000000e-002,-2.75126e-002
+ 4.843125000000e-002,-2.75126e-002
+ 4.843750000000e-002,-2.75126e-002
+ 4.844375000000e-002,-2.75126e-002
+ 4.845000000000e-002,-2.75126e-002
+ 4.845625000000e-002,-2.75126e-002
+ 4.846250000000e-002,-2.75126e-002
+ 4.846875000000e-002,-2.75126e-002
+ 4.847500000000e-002,-2.75126e-002
+ 4.848125000000e-002,-2.75126e-002
+ 4.848750000000e-002,-2.75126e-002
+ 4.849375000000e-002,-2.75126e-002
+ 4.850000000000e-002,-2.75126e-002
+ 4.850625000000e-002,-2.75126e-002
+ 4.851250000000e-002,-2.75126e-002
+ 4.851875000000e-002,-2.75126e-002
+ 4.852500000000e-002,-2.75126e-002
+ 4.853125000000e-002,-2.75126e-002
+ 4.853750000000e-002,-2.75126e-002
+ 4.854375000000e-002,-2.75126e-002
+ 4.855000000000e-002,-2.75126e-002
+ 4.855625000000e-002,-2.75126e-002
+ 4.856250000000e-002,-2.75126e-002
+ 4.856875000000e-002,-2.75126e-002
+ 4.857500000000e-002,-2.75126e-002
+ 4.858125000000e-002,-2.75126e-002
+ 4.858750000000e-002,-2.75126e-002
+ 4.859375000000e-002,-2.75126e-002
+ 4.860000000000e-002,-2.75126e-002
+ 4.860625000000e-002,-2.75126e-002
+ 4.861250000000e-002,-2.75126e-002
+ 4.861875000000e-002,-2.75126e-002
+ 4.862500000000e-002,-2.75126e-002
+ 4.863125000000e-002,-2.75126e-002
+ 4.863750000000e-002,-2.75126e-002
+ 4.864375000000e-002,-2.75126e-002
+ 4.865000000000e-002,-2.75126e-002
+ 4.865625000000e-002,-2.75126e-002
+ 4.866250000000e-002,-2.75126e-002
+ 4.866875000000e-002,-2.75126e-002
+ 4.867500000000e-002,-2.75126e-002
+ 4.868125000000e-002,-2.75126e-002
+ 4.868750000000e-002,-2.75126e-002
+ 4.869375000000e-002,-2.75126e-002
+ 4.870000000000e-002,-2.75126e-002
+ 4.870625000000e-002,-2.75126e-002
+ 4.871250000000e-002,-2.75126e-002
+ 4.871875000000e-002,-2.75126e-002
+ 4.872500000000e-002,-2.75126e-002
+ 4.873125000000e-002,-2.75126e-002
+ 4.873750000000e-002,-2.75126e-002
+ 4.874375000000e-002,-2.75126e-002
+ 4.875000000000e-002,-2.75126e-002
+ 4.875625000000e-002,-2.24876e-002
+ 4.876250000000e-002,-2.75126e-002
+ 4.876875000000e-002,-2.75126e-002
+ 4.877500000000e-002,-2.75126e-002
+ 4.878125000000e-002,-2.75126e-002
+ 4.878750000000e-002,-2.75126e-002
+ 4.879375000000e-002,-2.75126e-002
+ 4.880000000000e-002,-2.75126e-002
+ 4.880625000000e-002,-2.75126e-002
+ 4.881250000000e-002,-2.75126e-002
+ 4.881875000000e-002,-2.75126e-002
+ 4.882500000000e-002,-2.75126e-002
+ 4.883125000000e-002,-2.75126e-002
+ 4.883750000000e-002,-2.75126e-002
+ 4.884375000000e-002,-2.75126e-002
+ 4.885000000000e-002,-2.75126e-002
+ 4.885625000000e-002,-2.75126e-002
+ 4.886250000000e-002,-2.75126e-002
+ 4.886875000000e-002,-2.75126e-002
+ 4.887500000000e-002,-2.75126e-002
+ 4.888125000000e-002,-2.75126e-002
+ 4.888750000000e-002,-2.75126e-002
+ 4.889375000000e-002,-2.75126e-002
+ 4.890000000000e-002,-2.75126e-002
+ 4.890625000000e-002,-2.75126e-002
+ 4.891250000000e-002,-2.75126e-002
+ 4.891875000000e-002,-2.75126e-002
+ 4.892500000000e-002,-2.75126e-002
+ 4.893125000000e-002,-2.24876e-002
+ 4.893750000000e-002,-2.75126e-002
+ 4.894375000000e-002,-2.75126e-002
+ 4.895000000000e-002,-2.75126e-002
+ 4.895625000000e-002,-2.75126e-002
+ 4.896250000000e-002,-2.75126e-002
+ 4.896875000000e-002,-2.75126e-002
+ 4.897500000000e-002,-2.75126e-002
+ 4.898125000000e-002,-2.75126e-002
+ 4.898750000000e-002,-2.75126e-002
+ 4.899375000000e-002,-2.75126e-002
+ 4.900000000000e-002,-2.75126e-002
+ 4.900625000000e-002,-2.75126e-002
+ 4.901250000000e-002,-2.75126e-002
+ 4.901875000000e-002,-2.75126e-002
+ 4.902500000000e-002,-2.75126e-002
+ 4.903125000000e-002,-2.75126e-002
+ 4.903750000000e-002,-2.75126e-002
+ 4.904375000000e-002,-2.75126e-002
+ 4.905000000000e-002,-2.75126e-002
+ 4.905625000000e-002,-2.75126e-002
+ 4.906250000000e-002,-2.75126e-002
+ 4.906875000000e-002,-2.75126e-002
+ 4.907500000000e-002,-2.75126e-002
+ 4.908125000000e-002,-2.24876e-002
+ 4.908750000000e-002,-2.75126e-002
+ 4.909375000000e-002,-2.75126e-002
+ 4.910000000000e-002,-2.75126e-002
+ 4.910625000000e-002,-2.75126e-002
+ 4.911250000000e-002,-2.75126e-002
+ 4.911875000000e-002,-2.75126e-002
+ 4.912500000000e-002,-2.75126e-002
+ 4.913125000000e-002,-2.75126e-002
+ 4.913750000000e-002,-2.75126e-002
+ 4.914375000000e-002,-2.75126e-002
+ 4.915000000000e-002,-2.75126e-002
+ 4.915625000000e-002,-2.75126e-002
+ 4.916250000000e-002,-2.75126e-002
+ 4.916875000000e-002,-2.75126e-002
+ 4.917500000000e-002,-2.75126e-002
+ 4.918125000000e-002,-2.75126e-002
+ 4.918750000000e-002,-2.75126e-002
+ 4.919375000000e-002,-2.75126e-002
+ 4.920000000000e-002,-2.75126e-002
+ 4.920625000000e-002,-2.75126e-002
+ 4.921250000000e-002,-2.75126e-002
+ 4.921875000000e-002,-2.75126e-002
+ 4.922500000000e-002,-2.75126e-002
+ 4.923125000000e-002,-2.75126e-002
+ 4.923750000000e-002,-2.75126e-002
+ 4.924375000000e-002,-2.75126e-002
+ 4.925000000000e-002,-2.75126e-002
+ 4.925625000000e-002,-2.75126e-002
+ 4.926250000000e-002,-2.75126e-002
+ 4.926875000000e-002,-2.75126e-002
+ 4.927500000000e-002,-2.75126e-002
+ 4.928125000000e-002,-2.75126e-002
+ 4.928750000000e-002,-2.75126e-002
+ 4.929375000000e-002,-2.75126e-002
+ 4.930000000000e-002,-2.75126e-002
+ 4.930625000000e-002,-2.75126e-002
+ 4.931250000000e-002,-2.24876e-002
+ 4.931875000000e-002,-2.75126e-002
+ 4.932500000000e-002,-2.75126e-002
+ 4.933125000000e-002,-2.75126e-002
+ 4.933750000000e-002,-2.75126e-002
+ 4.934375000000e-002,-2.75126e-002
+ 4.935000000000e-002,-2.75126e-002
+ 4.935625000000e-002,-2.75126e-002
+ 4.936250000000e-002,-2.75126e-002
+ 4.936875000000e-002,-2.75126e-002
+ 4.937500000000e-002,-2.75126e-002
+ 4.938125000000e-002,-2.75126e-002
+ 4.938750000000e-002,-2.75126e-002
+ 4.939375000000e-002,-2.75126e-002
+ 4.940000000000e-002,-2.75126e-002
+ 4.940625000000e-002,-2.75126e-002
+ 4.941250000000e-002,-2.75126e-002
+ 4.941875000000e-002,-2.75126e-002
+ 4.942500000000e-002,-2.75126e-002
+ 4.943125000000e-002,-2.75126e-002
+ 4.943750000000e-002,-2.75126e-002
+ 4.944375000000e-002,-2.75126e-002
+ 4.945000000000e-002,-2.75126e-002
+ 4.945625000000e-002,-2.75126e-002
+ 4.946250000000e-002,-2.75126e-002
+ 4.946875000000e-002,-2.75126e-002
+ 4.947500000000e-002,-2.75126e-002
+ 4.948125000000e-002,-2.75126e-002
+ 4.948750000000e-002,-2.75126e-002
+ 4.949375000000e-002,-2.75126e-002
+ 4.950000000000e-002,-2.75126e-002
+ 4.950625000000e-002,-2.75126e-002
+ 4.951250000000e-002,-2.75126e-002
+ 4.951875000000e-002,-2.75126e-002
+ 4.952500000000e-002,-2.75126e-002
+ 4.953125000000e-002,-2.75126e-002
+ 4.953750000000e-002,-2.75126e-002
+ 4.954375000000e-002,-2.75126e-002
+ 4.955000000000e-002,-2.75126e-002
+ 4.955625000000e-002,-2.75126e-002
+ 4.956250000000e-002,-2.75126e-002
+ 4.956875000000e-002,-2.24876e-002
+ 4.957500000000e-002,-2.75126e-002
+ 4.958125000000e-002,-2.75126e-002
+ 4.958750000000e-002,-2.75126e-002
+ 4.959375000000e-002,-2.75126e-002
+ 4.960000000000e-002,-2.75126e-002
+ 4.960625000000e-002,-2.75126e-002
+ 4.961250000000e-002,-2.75126e-002
+ 4.961875000000e-002,-2.75126e-002
+ 4.962500000000e-002,-2.75126e-002
+ 4.963125000000e-002,-2.75126e-002
+ 4.963750000000e-002,-2.75126e-002
+ 4.964375000000e-002,-2.75126e-002
+ 4.965000000000e-002,-2.75126e-002
+ 4.965625000000e-002,-2.75126e-002
+ 4.966250000000e-002,-2.75126e-002
+ 4.966875000000e-002,-2.75126e-002
+ 4.967500000000e-002,-2.75126e-002
+ 4.968125000000e-002,-2.75126e-002
+ 4.968750000000e-002,-2.75126e-002
+ 4.969375000000e-002,-2.75126e-002
+ 4.970000000000e-002,-2.75126e-002
+ 4.970625000000e-002,-2.75126e-002
+ 4.971250000000e-002,-2.75126e-002
+ 4.971875000000e-002,-2.75126e-002
+ 4.972500000000e-002,-2.75126e-002
+ 4.973125000000e-002,-2.75126e-002
+ 4.973750000000e-002,-2.75126e-002
+ 4.974375000000e-002,-2.75126e-002
+ 4.975000000000e-002,-2.75126e-002
+ 4.975625000000e-002,-2.24876e-002
+ 4.976250000000e-002,-2.75126e-002
+ 4.976875000000e-002,-2.75126e-002
+ 4.977500000000e-002,-2.75126e-002
+ 4.978125000000e-002,-2.75126e-002
+ 4.978750000000e-002,-2.75126e-002
+ 4.979375000000e-002,-2.75126e-002
+ 4.980000000000e-002,-2.75126e-002
+ 4.980625000000e-002,-2.75126e-002
+ 4.981250000000e-002,-2.75126e-002
+ 4.981875000000e-002,-2.75126e-002
+ 4.982500000000e-002,-2.75126e-002
+ 4.983125000000e-002,-2.75126e-002
+ 4.983750000000e-002,-2.75126e-002
+ 4.984375000000e-002,-2.75126e-002
+ 4.985000000000e-002,-2.75126e-002
+ 4.985625000000e-002,-2.75126e-002
+ 4.986250000000e-002,-2.75126e-002
+ 4.986875000000e-002,-2.75126e-002
+ 4.987500000000e-002,-2.75126e-002
+ 4.988125000000e-002,-2.75126e-002
+ 4.988750000000e-002,-2.75126e-002
+ 4.989375000000e-002,-2.75126e-002
+ 4.990000000000e-002,-2.75126e-002
+ 4.990625000000e-002,-2.75126e-002
+ 4.991250000000e-002,-2.75126e-002
+ 4.991875000000e-002,-2.75126e-002
+ 4.992500000000e-002,-2.75126e-002
+ 4.993125000000e-002,-2.75126e-002
+ 4.993750000000e-002,-2.75126e-002
+ 4.994375000000e-002,-2.75126e-002
+ 4.995000000000e-002,-2.75126e-002
+ 4.995625000000e-002,-2.75126e-002
+ 4.996250000000e-002,-2.75126e-002
+ 4.996875000000e-002,-2.75126e-002
+ 4.997500000000e-002,-2.75126e-002
+ 4.998125000000e-002,-2.75126e-002
+ 4.998750000000e-002,-2.75126e-002
+ 4.999375000000e-002,-2.75126e-002
+ 5.000000000000e-002,-2.75126e-002
+ 5.000625000000e-002,-2.75126e-002
+ 5.001250000000e-002,-2.75126e-002
+ 5.001875000000e-002,-2.75126e-002
+ 5.002500000000e-002,-2.75126e-002
+ 5.003125000000e-002,-2.75126e-002
+ 5.003750000000e-002,-2.75126e-002
+ 5.004375000000e-002,-2.75126e-002
+ 5.005000000000e-002,-2.75126e-002
+ 5.005625000000e-002,-2.75126e-002
+ 5.006250000000e-002,-2.75126e-002
+ 5.006875000000e-002,-2.75126e-002
+ 5.007500000000e-002,-2.75126e-002
+ 5.008125000000e-002,-2.75126e-002
+ 5.008750000000e-002,-2.75126e-002
+ 5.009375000000e-002,-2.75126e-002
+ 5.010000000000e-002,-2.75126e-002
+ 5.010625000000e-002,-2.75126e-002
+ 5.011250000000e-002,-2.75126e-002
+ 5.011875000000e-002,-2.75126e-002
+ 5.012500000000e-002,-2.75126e-002
+ 5.013125000000e-002,-2.75126e-002
+ 5.013750000000e-002,-2.75126e-002
+ 5.014375000000e-002,-2.75126e-002
+ 5.015000000000e-002,-2.75126e-002
+ 5.015625000000e-002,-2.75126e-002
+ 5.016250000000e-002,-2.75126e-002
+ 5.016875000000e-002,-2.75126e-002
+ 5.017500000000e-002,-2.75126e-002
+ 5.018125000000e-002,-2.75126e-002
+ 5.018750000000e-002,-2.75126e-002
+ 5.019375000000e-002,-2.75126e-002
+ 5.020000000000e-002,-2.75126e-002
+ 5.020625000000e-002,-2.75126e-002
+ 5.021250000000e-002,-2.75126e-002
+ 5.021875000000e-002,-2.75126e-002
+ 5.022500000000e-002,-2.75126e-002
+ 5.023125000000e-002,-2.75126e-002
+ 5.023750000000e-002,-2.75126e-002
+ 5.024375000000e-002,-2.75126e-002
+ 5.025000000000e-002,-2.75126e-002
+ 5.025625000000e-002,-2.75126e-002
+ 5.026250000000e-002,-2.75126e-002
+ 5.026875000000e-002,-2.75126e-002
+ 5.027500000000e-002,-2.75126e-002
+ 5.028125000000e-002,-2.75126e-002
+ 5.028750000000e-002,-2.75126e-002
+ 5.029375000000e-002,-2.75126e-002
+ 5.030000000000e-002,-2.75126e-002
+ 5.030625000000e-002,-2.75126e-002
+ 5.031250000000e-002,-2.75126e-002
+ 5.031875000000e-002,-2.75126e-002
+ 5.032500000000e-002,-2.75126e-002
+ 5.033125000000e-002,-2.24876e-002
+ 5.033750000000e-002,-2.75126e-002
+ 5.034375000000e-002,-2.75126e-002
+ 5.035000000000e-002,-2.75126e-002
+ 5.035625000000e-002,-2.75126e-002
+ 5.036250000000e-002,-2.75126e-002
+ 5.036875000000e-002,-2.75126e-002
+ 5.037500000000e-002,-2.75126e-002
+ 5.038125000000e-002,-2.75126e-002
+ 5.038750000000e-002,-2.75126e-002
+ 5.039375000000e-002,-2.75126e-002
+ 5.040000000000e-002,-2.75126e-002
+ 5.040625000000e-002,-2.75126e-002
+ 5.041250000000e-002,-2.75126e-002
+ 5.041875000000e-002,-2.75126e-002
+ 5.042500000000e-002,-2.75126e-002
+ 5.043125000000e-002,-2.75126e-002
+ 5.043750000000e-002,-2.75126e-002
+ 5.044375000000e-002,-2.75126e-002
+ 5.045000000000e-002,-2.75126e-002
+ 5.045625000000e-002,-2.75126e-002
+ 5.046250000000e-002,-2.75126e-002
+ 5.046875000000e-002,-2.75126e-002
+ 5.047500000000e-002,-2.75126e-002
+ 5.048125000000e-002,-2.75126e-002
+ 5.048750000000e-002,-2.75126e-002
+ 5.049375000000e-002,-2.75126e-002
+ 5.050000000000e-002,-2.75126e-002
+ 5.050625000000e-002,-2.75126e-002
+ 5.051250000000e-002,-2.75126e-002
+ 5.051875000000e-002,-2.75126e-002
+ 5.052500000000e-002,-2.75126e-002
+ 5.053125000000e-002,-2.75126e-002
+ 5.053750000000e-002,-2.75126e-002
+ 5.054375000000e-002,-2.75126e-002
+ 5.055000000000e-002,-2.75126e-002
+ 5.055625000000e-002,-2.75126e-002
+ 5.056250000000e-002,-2.75126e-002
+ 5.056875000000e-002,-2.75126e-002
+ 5.057500000000e-002,-2.75126e-002
+ 5.058125000000e-002,-2.75126e-002
+ 5.058750000000e-002,-2.75126e-002
+ 5.059375000000e-002,-2.75126e-002
+ 5.060000000000e-002,-2.75126e-002
+ 5.060625000000e-002,-2.75126e-002
+ 5.061250000000e-002,-2.75126e-002
+ 5.061875000000e-002,-2.75126e-002
+ 5.062500000000e-002,-2.75126e-002
+ 5.063125000000e-002,-2.75126e-002
+ 5.063750000000e-002,-2.75126e-002
+ 5.064375000000e-002,-2.75126e-002
+ 5.065000000000e-002,-2.75126e-002
+ 5.065625000000e-002,-2.75126e-002
+ 5.066250000000e-002,-2.75126e-002
+ 5.066875000000e-002,-2.75126e-002
+ 5.067500000000e-002,-2.75126e-002
+ 5.068125000000e-002,-2.75126e-002
+ 5.068750000000e-002,-2.75126e-002
+ 5.069375000000e-002,-2.75126e-002
+ 5.070000000000e-002,-2.75126e-002
+ 5.070625000000e-002,-2.75126e-002
+ 5.071250000000e-002,-2.75126e-002
+ 5.071875000000e-002,-2.75126e-002
+ 5.072500000000e-002,-2.75126e-002
+ 5.073125000000e-002,-2.75126e-002
+ 5.073750000000e-002,-2.75126e-002
+ 5.074375000000e-002,-2.75126e-002
+ 5.075000000000e-002,-2.75126e-002
+ 5.075625000000e-002,-2.75126e-002
+ 5.076250000000e-002,-2.75126e-002
+ 5.076875000000e-002,-2.75126e-002
+ 5.077500000000e-002,-2.75126e-002
+ 5.078125000000e-002,-2.75126e-002
+ 5.078750000000e-002,-2.75126e-002
+ 5.079375000000e-002,-2.24876e-002
+ 5.080000000000e-002,-2.75126e-002
+ 5.080625000000e-002,-2.75126e-002
+ 5.081250000000e-002,-2.75126e-002
+ 5.081875000000e-002,-2.75126e-002
+ 5.082500000000e-002,-2.75126e-002
+ 5.083125000000e-002,-2.75126e-002
+ 5.083750000000e-002,-2.75126e-002
+ 5.084375000000e-002,-2.75126e-002
+ 5.085000000000e-002,-2.75126e-002
+ 5.085625000000e-002,-2.75126e-002
+ 5.086250000000e-002,-2.75126e-002
+ 5.086875000000e-002,-2.75126e-002
+ 5.087500000000e-002,-2.75126e-002
+ 5.088125000000e-002,-2.75126e-002
+ 5.088750000000e-002,-2.75126e-002
+ 5.089375000000e-002,-2.75126e-002
+ 5.090000000000e-002,-2.75126e-002
+ 5.090625000000e-002,-2.75126e-002
+ 5.091250000000e-002,-2.75126e-002
+ 5.091875000000e-002,-2.75126e-002
+ 5.092500000000e-002,-2.75126e-002
+ 5.093125000000e-002,-2.75126e-002
+ 5.093750000000e-002,-2.75126e-002
+ 5.094375000000e-002,-2.75126e-002
+ 5.095000000000e-002,-2.75126e-002
+ 5.095625000000e-002,-2.75126e-002
+ 5.096250000000e-002,-2.75126e-002
+ 5.096875000000e-002,-2.75126e-002
+ 5.097500000000e-002,-2.75126e-002
+ 5.098125000000e-002,-2.75126e-002
+ 5.098750000000e-002,-2.75126e-002
+ 5.099375000000e-002,-2.75126e-002
+ 5.100000000000e-002,-2.75126e-002
+ 5.100625000000e-002,-2.75126e-002
+ 5.101250000000e-002,-2.75126e-002
+ 5.101875000000e-002,-2.75126e-002
+ 5.102500000000e-002,-2.75126e-002
+ 5.103125000000e-002,-2.75126e-002
+ 5.103750000000e-002,-2.75126e-002
+ 5.104375000000e-002,-2.75126e-002
+ 5.105000000000e-002,-2.75126e-002
+ 5.105625000000e-002,-2.24876e-002
+ 5.106250000000e-002,-2.75126e-002
+ 5.106875000000e-002,-2.75126e-002
+ 5.107500000000e-002,-2.75126e-002
+ 5.108125000000e-002,-2.75126e-002
+ 5.108750000000e-002,-2.75126e-002
+ 5.109375000000e-002,-2.75126e-002
+ 5.110000000000e-002,-2.75126e-002
+ 5.110625000000e-002,-2.75126e-002
+ 5.111250000000e-002,-2.75126e-002
+ 5.111875000000e-002,-2.24876e-002
+ 5.112500000000e-002,-2.75126e-002
+ 5.113125000000e-002,-2.75126e-002
+ 5.113750000000e-002,-2.75126e-002
+ 5.114375000000e-002,-2.75126e-002
+ 5.115000000000e-002,-2.75126e-002
+ 5.115625000000e-002,-2.75126e-002
+ 5.116250000000e-002,-2.75126e-002
+ 5.116875000000e-002,-2.75126e-002
+ 5.117500000000e-002,-2.75126e-002
+ 5.118125000000e-002,-2.75126e-002
+ 5.118750000000e-002,-2.75126e-002
+ 5.119375000000e-002,-2.75126e-002
+ 5.120000000000e-002,-2.75126e-002
+ 5.120625000000e-002,-2.75126e-002
+ 5.121250000000e-002,-2.75126e-002
+ 5.121875000000e-002,-2.75126e-002
+ 5.122500000000e-002,-2.75126e-002
+ 5.123125000000e-002,-2.75126e-002
+ 5.123750000000e-002,-2.75126e-002
+ 5.124375000000e-002,-2.75126e-002
+ 5.125000000000e-002,-2.75126e-002
+ 5.125625000000e-002,-2.75126e-002
+ 5.126250000000e-002,-2.75126e-002
+ 5.126875000000e-002,-2.75126e-002
+ 5.127500000000e-002,-2.75126e-002
+ 5.128125000000e-002,-2.75126e-002
+ 5.128750000000e-002,-2.75126e-002
+ 5.129375000000e-002,-2.75126e-002
+ 5.130000000000e-002,-2.75126e-002
+ 5.130625000000e-002,-2.24876e-002
+ 5.131250000000e-002,-2.75126e-002
+ 5.131875000000e-002,-2.75126e-002
+ 5.132500000000e-002,-2.75126e-002
+ 5.133125000000e-002,-2.75126e-002
+ 5.133750000000e-002,-2.75126e-002
+ 5.134375000000e-002,-2.75126e-002
+ 5.135000000000e-002,-2.75126e-002
+ 5.135625000000e-002,-2.75126e-002
+ 5.136250000000e-002,-2.75126e-002
+ 5.136875000000e-002,-2.75126e-002
+ 5.137500000000e-002,-2.75126e-002
+ 5.138125000000e-002,-2.75126e-002
+ 5.138750000000e-002,-2.75126e-002
+ 5.139375000000e-002,-2.75126e-002
+ 5.140000000000e-002,-2.75126e-002
+ 5.140625000000e-002,-2.75126e-002
+ 5.141250000000e-002,-2.75126e-002
+ 5.141875000000e-002,-2.75126e-002
+ 5.142500000000e-002,-2.75126e-002
+ 5.143125000000e-002,-2.75126e-002
+ 5.143750000000e-002,-2.75126e-002
+ 5.144375000000e-002,-2.75126e-002
+ 5.145000000000e-002,-2.75126e-002
+ 5.145625000000e-002,-2.75126e-002
+ 5.146250000000e-002,-2.75126e-002
+ 5.146875000000e-002,-2.75126e-002
+ 5.147500000000e-002,-2.75126e-002
+ 5.148125000000e-002,-2.75126e-002
+ 5.148750000000e-002,-2.75126e-002
+ 5.149375000000e-002,-2.75126e-002
+ 5.150000000000e-002,-2.75126e-002
+ 5.150625000000e-002,-2.75126e-002
+ 5.151250000000e-002,-2.75126e-002
+ 5.151875000000e-002,-2.75126e-002
+ 5.152500000000e-002,-2.75126e-002
+ 5.153125000000e-002,-2.75126e-002
+ 5.153750000000e-002,-2.75126e-002
+ 5.154375000000e-002,-2.75126e-002
+ 5.155000000000e-002,-2.75126e-002
+ 5.155625000000e-002,-2.75126e-002
+ 5.156250000000e-002,-2.75126e-002
+ 5.156875000000e-002,-2.75126e-002
+ 5.157500000000e-002,-2.75126e-002
+ 5.158125000000e-002,-2.75126e-002
+ 5.158750000000e-002,-2.24876e-002
+ 5.159375000000e-002,-2.75126e-002
+ 5.160000000000e-002,-2.75126e-002
+ 5.160625000000e-002,-2.75126e-002
+ 5.161250000000e-002,-2.75126e-002
+ 5.161875000000e-002,-2.75126e-002
+ 5.162500000000e-002,-2.75126e-002
+ 5.163125000000e-002,-2.75126e-002
+ 5.163750000000e-002,-2.75126e-002
+ 5.164375000000e-002,-2.75126e-002
+ 5.165000000000e-002,-2.75126e-002
+ 5.165625000000e-002,-2.75126e-002
+ 5.166250000000e-002,-2.75126e-002
+ 5.166875000000e-002,-2.75126e-002
+ 5.167500000000e-002,-2.75126e-002
+ 5.168125000000e-002,-2.75126e-002
+ 5.168750000000e-002,-2.75126e-002
+ 5.169375000000e-002,-2.75126e-002
+ 5.170000000000e-002,-2.75126e-002
+ 5.170625000000e-002,-2.75126e-002
+ 5.171250000000e-002,-2.75126e-002
+ 5.171875000000e-002,-2.75126e-002
+ 5.172500000000e-002,-2.75126e-002
+ 5.173125000000e-002,-2.75126e-002
+ 5.173750000000e-002,-2.75126e-002
+ 5.174375000000e-002,-2.75126e-002
+ 5.175000000000e-002,-2.75126e-002
+ 5.175625000000e-002,-2.75126e-002
+ 5.176250000000e-002,-2.75126e-002
+ 5.176875000000e-002,-2.75126e-002
+ 5.177500000000e-002,-2.75126e-002
+ 5.178125000000e-002,-2.75126e-002
+ 5.178750000000e-002,-2.75126e-002
+ 5.179375000000e-002,-2.75126e-002
+ 5.180000000000e-002,-2.75126e-002
+ 5.180625000000e-002,-2.75126e-002
+ 5.181250000000e-002,-2.75126e-002
+ 5.181875000000e-002,-2.75126e-002
+ 5.182500000000e-002,-2.75126e-002
+ 5.183125000000e-002,-2.75126e-002
+ 5.183750000000e-002,-2.75126e-002
+ 5.184375000000e-002,-2.75126e-002
+ 5.185000000000e-002,-2.75126e-002
+ 5.185625000000e-002,-2.75126e-002
+ 5.186250000000e-002,-2.75126e-002
+ 5.186875000000e-002,-2.75126e-002
+ 5.187500000000e-002,-2.75126e-002
+ 5.188125000000e-002,-2.75126e-002
+ 5.188750000000e-002,-2.75126e-002
+ 5.189375000000e-002,-2.75126e-002
+ 5.190000000000e-002,-2.75126e-002
+ 5.190625000000e-002,-2.75126e-002
+ 5.191250000000e-002,-2.75126e-002
+ 5.191875000000e-002,-2.75126e-002
+ 5.192500000000e-002,-2.75126e-002
+ 5.193125000000e-002,-2.75126e-002
+ 5.193750000000e-002,-2.75126e-002
+ 5.194375000000e-002,-2.75126e-002
+ 5.195000000000e-002,-2.75126e-002
+ 5.195625000000e-002,-2.75126e-002
+ 5.196250000000e-002,-2.75126e-002
+ 5.196875000000e-002,-2.75126e-002
+ 5.197500000000e-002,-2.75126e-002
+ 5.198125000000e-002,-2.24876e-002
+ 5.198750000000e-002,-2.75126e-002
+ 5.199375000000e-002,-2.75126e-002
+ 5.200000000000e-002,-2.75126e-002
+ 5.200625000000e-002,-2.75126e-002
+ 5.201250000000e-002,-2.75126e-002
+ 5.201875000000e-002,-2.75126e-002
+ 5.202500000000e-002,-2.75126e-002
+ 5.203125000000e-002,-2.75126e-002
+ 5.203750000000e-002,-2.75126e-002
+ 5.204375000000e-002,-2.75126e-002
+ 5.205000000000e-002,-2.75126e-002
+ 5.205625000000e-002,-2.75126e-002
+ 5.206250000000e-002,-2.75126e-002
+ 5.206875000000e-002,-2.75126e-002
+ 5.207500000000e-002,-2.75126e-002
+ 5.208125000000e-002,-2.75126e-002
+ 5.208750000000e-002,-2.75126e-002
+ 5.209375000000e-002,-2.75126e-002
+ 5.210000000000e-002,-2.75126e-002
+ 5.210625000000e-002,-2.75126e-002
+ 5.211250000000e-002,-2.75126e-002
+ 5.211875000000e-002,-2.75126e-002
+ 5.212500000000e-002,-2.75126e-002
+ 5.213125000000e-002,-2.75126e-002
+ 5.213750000000e-002,-2.75126e-002
+ 5.214375000000e-002,-2.75126e-002
+ 5.215000000000e-002,-2.75126e-002
+ 5.215625000000e-002,-2.75126e-002
+ 5.216250000000e-002,-2.75126e-002
+ 5.216875000000e-002,-2.24876e-002
+ 5.217500000000e-002,-2.75126e-002
+ 5.218125000000e-002,-2.75126e-002
+ 5.218750000000e-002,-2.75126e-002
+ 5.219375000000e-002,-2.75126e-002
+ 5.220000000000e-002,-2.75126e-002
+ 5.220625000000e-002,-2.75126e-002
+ 5.221250000000e-002,-2.75126e-002
+ 5.221875000000e-002,-2.75126e-002
+ 5.222500000000e-002,-2.75126e-002
+ 5.223125000000e-002,-2.75126e-002
+ 5.223750000000e-002,-2.75126e-002
+ 5.224375000000e-002,-2.75126e-002
+ 5.225000000000e-002,-2.75126e-002
+ 5.225625000000e-002,-2.75126e-002
+ 5.226250000000e-002,-2.75126e-002
+ 5.226875000000e-002,-2.75126e-002
+ 5.227500000000e-002,-2.75126e-002
+ 5.228125000000e-002,-2.75126e-002
+ 5.228750000000e-002,-2.75126e-002
+ 5.229375000000e-002,-2.75126e-002
+ 5.230000000000e-002,-2.75126e-002
+ 5.230625000000e-002,-2.75126e-002
+ 5.231250000000e-002,-2.75126e-002
+ 5.231875000000e-002,-2.75126e-002
+ 5.232500000000e-002,-2.75126e-002
+ 5.233125000000e-002,-2.75126e-002
+ 5.233750000000e-002,-2.75126e-002
+ 5.234375000000e-002,-2.75126e-002
+ 5.235000000000e-002,-2.75126e-002
+ 5.235625000000e-002,-2.75126e-002
+ 5.236250000000e-002,-2.75126e-002
+ 5.236875000000e-002,-2.75126e-002
+ 5.237500000000e-002,-2.75126e-002
+ 5.238125000000e-002,-2.75126e-002
+ 5.238750000000e-002,-2.75126e-002
+ 5.239375000000e-002,-2.75126e-002
+ 5.240000000000e-002,-2.75126e-002
+ 5.240625000000e-002,-2.75126e-002
+ 5.241250000000e-002,-2.75126e-002
+ 5.241875000000e-002,-2.24876e-002
+ 5.242500000000e-002,-2.75126e-002
+ 5.243125000000e-002,-2.75126e-002
+ 5.243750000000e-002,-2.75126e-002
+ 5.244375000000e-002,-2.75126e-002
+ 5.245000000000e-002,-2.75126e-002
+ 5.245625000000e-002,-2.75126e-002
+ 5.246250000000e-002,-2.75126e-002
+ 5.246875000000e-002,-2.75126e-002
+ 5.247500000000e-002,-2.24876e-002
+ 5.248125000000e-002,-2.75126e-002
+ 5.248750000000e-002,-2.75126e-002
+ 5.249375000000e-002,-2.75126e-002
+ 5.250000000000e-002,-2.75126e-002
+ 5.250625000000e-002,-2.75126e-002
+ 5.251250000000e-002,-2.75126e-002
+ 5.251875000000e-002,-2.75126e-002
+ 5.252500000000e-002,-2.75126e-002
+ 5.253125000000e-002,-2.75126e-002
+ 5.253750000000e-002,-2.75126e-002
+ 5.254375000000e-002,-2.75126e-002
+ 5.255000000000e-002,-2.75126e-002
+ 5.255625000000e-002,-2.75126e-002
+ 5.256250000000e-002,-2.75126e-002
+ 5.256875000000e-002,-2.75126e-002
+ 5.257500000000e-002,-2.75126e-002
+ 5.258125000000e-002,-2.75126e-002
+ 5.258750000000e-002,-2.75126e-002
+ 5.259375000000e-002,-2.75126e-002
+ 5.260000000000e-002,-2.75126e-002
+ 5.260625000000e-002,-2.75126e-002
+ 5.261250000000e-002,-2.75126e-002
+ 5.261875000000e-002,-2.75126e-002
+ 5.262500000000e-002,-2.75126e-002
+ 5.263125000000e-002,-2.75126e-002
+ 5.263750000000e-002,-2.75126e-002
+ 5.264375000000e-002,-2.75126e-002
+ 5.265000000000e-002,-2.75126e-002
+ 5.265625000000e-002,-2.75126e-002
+ 5.266250000000e-002,-2.75126e-002
+ 5.266875000000e-002,-2.75126e-002
+ 5.267500000000e-002,-2.75126e-002
+ 5.268125000000e-002,-2.75126e-002
+ 5.268750000000e-002,-2.75126e-002
+ 5.269375000000e-002,-2.75126e-002
+ 5.270000000000e-002,-2.75126e-002
+ 5.270625000000e-002,-2.75126e-002
+ 5.271250000000e-002,-2.75126e-002
+ 5.271875000000e-002,-2.75126e-002
+ 5.272500000000e-002,-2.75126e-002
+ 5.273125000000e-002,-2.75126e-002
+ 5.273750000000e-002,-2.75126e-002
+ 5.274375000000e-002,-2.75126e-002
+ 5.275000000000e-002,-2.24876e-002
+ 5.275625000000e-002,-2.75126e-002
+ 5.276250000000e-002,-2.75126e-002
+ 5.276875000000e-002,-2.75126e-002
+ 5.277500000000e-002,-2.75126e-002
+ 5.278125000000e-002,-2.75126e-002
+ 5.278750000000e-002,-2.75126e-002
+ 5.279375000000e-002,-2.75126e-002
+ 5.280000000000e-002,-2.75126e-002
+ 5.280625000000e-002,-2.75126e-002
+ 5.281250000000e-002,-2.75126e-002
+ 5.281875000000e-002,-2.75126e-002
+ 5.282500000000e-002,-2.75126e-002
+ 5.283125000000e-002,-2.75126e-002
+ 5.283750000000e-002,-2.75126e-002
+ 5.284375000000e-002,-2.75126e-002
+ 5.285000000000e-002,-2.75126e-002
+ 5.285625000000e-002,-2.75126e-002
+ 5.286250000000e-002,-2.75126e-002
+ 5.286875000000e-002,-2.75126e-002
+ 5.287500000000e-002,-2.75126e-002
+ 5.288125000000e-002,-2.75126e-002
+ 5.288750000000e-002,-2.75126e-002
+ 5.289375000000e-002,-2.75126e-002
+ 5.290000000000e-002,-2.75126e-002
+ 5.290625000000e-002,-2.75126e-002
+ 5.291250000000e-002,-2.75126e-002
+ 5.291875000000e-002,-2.75126e-002
+ 5.292500000000e-002,-2.75126e-002
+ 5.293125000000e-002,-2.75126e-002
+ 5.293750000000e-002,-2.75126e-002
+ 5.294375000000e-002,-2.75126e-002
+ 5.295000000000e-002,-2.75126e-002
+ 5.295625000000e-002,-2.75126e-002
+ 5.296250000000e-002,-2.75126e-002
+ 5.296875000000e-002,-2.75126e-002
+ 5.297500000000e-002,-2.75126e-002
+ 5.298125000000e-002,-2.24876e-002
+ 5.298750000000e-002,-2.75126e-002
+ 5.299375000000e-002,-2.75126e-002
+ 5.300000000000e-002,-2.75126e-002
+ 5.300625000000e-002,-2.75126e-002
+ 5.301250000000e-002,-2.75126e-002
+ 5.301875000000e-002,-2.75126e-002
+ 5.302500000000e-002,-2.75126e-002
+ 5.303125000000e-002,-2.75126e-002
+ 5.303750000000e-002,-2.75126e-002
+ 5.304375000000e-002,-2.75126e-002
+ 5.305000000000e-002,-2.75126e-002
+ 5.305625000000e-002,-2.75126e-002
+ 5.306250000000e-002,-2.75126e-002
+ 5.306875000000e-002,-2.75126e-002
+ 5.307500000000e-002,-2.75126e-002
+ 5.308125000000e-002,-2.75126e-002
+ 5.308750000000e-002,-2.75126e-002
+ 5.309375000000e-002,-2.75126e-002
+ 5.310000000000e-002,-2.24876e-002
+ 5.310625000000e-002,-2.75126e-002
+ 5.311250000000e-002,-2.75126e-002
+ 5.311875000000e-002,-2.75126e-002
+ 5.312500000000e-002,-2.75126e-002
+ 5.313125000000e-002,-2.75126e-002
+ 5.313750000000e-002,-2.75126e-002
+ 5.314375000000e-002,-2.75126e-002
+ 5.315000000000e-002,-2.75126e-002
+ 5.315625000000e-002,-2.75126e-002
+ 5.316250000000e-002,-2.75126e-002
+ 5.316875000000e-002,-2.75126e-002
+ 5.317500000000e-002,-2.75126e-002
+ 5.318125000000e-002,-2.75126e-002
+ 5.318750000000e-002,-2.75126e-002
+ 5.319375000000e-002,-2.75126e-002
+ 5.320000000000e-002,-2.75126e-002
+ 5.320625000000e-002,-2.75126e-002
+ 5.321250000000e-002,-2.75126e-002
+ 5.321875000000e-002,-2.75126e-002
+ 5.322500000000e-002,-2.75126e-002
+ 5.323125000000e-002,-2.75126e-002
+ 5.323750000000e-002,-2.75126e-002
+ 5.324375000000e-002,-2.75126e-002
+ 5.325000000000e-002,-2.75126e-002
+ 5.325625000000e-002,-2.75126e-002
+ 5.326250000000e-002,-2.75126e-002
+ 5.326875000000e-002,-2.75126e-002
+ 5.327500000000e-002,-2.75126e-002
+ 5.328125000000e-002,-2.75126e-002
+ 5.328750000000e-002,-2.75126e-002
+ 5.329375000000e-002,-2.75126e-002
+ 5.330000000000e-002,-2.75126e-002
+ 5.330625000000e-002,-2.75126e-002
+ 5.331250000000e-002,-2.75126e-002
+ 5.331875000000e-002,-2.75126e-002
+ 5.332500000000e-002,-2.75126e-002
+ 5.333125000000e-002,-2.75126e-002
+ 5.333750000000e-002,-2.75126e-002
+ 5.334375000000e-002,-2.75126e-002
+ 5.335000000000e-002,-2.75126e-002
+ 5.335625000000e-002,-2.75126e-002
+ 5.336250000000e-002,-2.75126e-002
+ 5.336875000000e-002,-2.75126e-002
+ 5.337500000000e-002,-2.75126e-002
+ 5.338125000000e-002,-2.75126e-002
+ 5.338750000000e-002,-2.75126e-002
+ 5.339375000000e-002,-2.75126e-002
+ 5.340000000000e-002,-2.75126e-002
+ 5.340625000000e-002,-2.75126e-002
+ 5.341250000000e-002,-2.75126e-002
+ 5.341875000000e-002,-2.75126e-002
+ 5.342500000000e-002,-2.75126e-002
+ 5.343125000000e-002,-2.75126e-002
+ 5.343750000000e-002,-2.24876e-002
+ 5.344375000000e-002,-2.75126e-002
+ 5.345000000000e-002,-2.75126e-002
+ 5.345625000000e-002,-2.75126e-002
+ 5.346250000000e-002,-2.75126e-002
+ 5.346875000000e-002,-2.75126e-002
+ 5.347500000000e-002,-2.75126e-002
+ 5.348125000000e-002,-2.75126e-002
+ 5.348750000000e-002,-2.75126e-002
+ 5.349375000000e-002,-2.75126e-002
+ 5.350000000000e-002,-2.75126e-002
+ 5.350625000000e-002,-2.75126e-002
+ 5.351250000000e-002,-2.75126e-002
+ 5.351875000000e-002,-2.75126e-002
+ 5.352500000000e-002,-2.75126e-002
+ 5.353125000000e-002,-2.75126e-002
+ 5.353750000000e-002,-2.75126e-002
+ 5.354375000000e-002,-2.75126e-002
+ 5.355000000000e-002,-2.75126e-002
+ 5.355625000000e-002,-2.75126e-002
+ 5.356250000000e-002,-2.75126e-002
+ 5.356875000000e-002,-2.75126e-002
+ 5.357500000000e-002,-2.24876e-002
+ 5.358125000000e-002,-2.75126e-002
+ 5.358750000000e-002,-2.75126e-002
+ 5.359375000000e-002,-2.75126e-002
+ 5.360000000000e-002,-2.75126e-002
+ 5.360625000000e-002,-2.75126e-002
+ 5.361250000000e-002,-2.24876e-002
+ 5.361875000000e-002,-2.24876e-002
+ 5.362500000000e-002,-2.75126e-002
+ 5.363125000000e-002,-2.75126e-002
+ 5.363750000000e-002,-2.75126e-002
+ 5.364375000000e-002,-2.75126e-002
+ 5.365000000000e-002,-2.75126e-002
+ 5.365625000000e-002,-2.75126e-002
+ 5.366250000000e-002,-2.75126e-002
+ 5.366875000000e-002,-2.75126e-002
+ 5.367500000000e-002,-2.75126e-002
+ 5.368125000000e-002,-2.75126e-002
+ 5.368750000000e-002,-2.75126e-002
+ 5.369375000000e-002,-2.75126e-002
+ 5.370000000000e-002,-2.75126e-002
+ 5.370625000000e-002,-2.75126e-002
+ 5.371250000000e-002,-2.75126e-002
+ 5.371875000000e-002,-2.75126e-002
+ 5.372500000000e-002,-2.75126e-002
+ 5.373125000000e-002,-2.75126e-002
+ 5.373750000000e-002,-2.75126e-002
+ 5.374375000000e-002,-2.75126e-002
+ 5.375000000000e-002,-2.75126e-002
+ 5.375625000000e-002,-2.75126e-002
+ 5.376250000000e-002,-2.75126e-002
+ 5.376875000000e-002,-2.75126e-002
+ 5.377500000000e-002,-2.75126e-002
+ 5.378125000000e-002,-2.75126e-002
+ 5.378750000000e-002,-2.75126e-002
+ 5.379375000000e-002,-2.75126e-002
+ 5.380000000000e-002,-2.75126e-002
+ 5.380625000000e-002,-2.75126e-002
+ 5.381250000000e-002,-2.75126e-002
+ 5.381875000000e-002,-2.75126e-002
+ 5.382500000000e-002,-2.75126e-002
+ 5.383125000000e-002,-2.75126e-002
+ 5.383750000000e-002,-2.75126e-002
+ 5.384375000000e-002,-2.75126e-002
+ 5.385000000000e-002,-2.75126e-002
+ 5.385625000000e-002,-2.75126e-002
+ 5.386250000000e-002,-2.75126e-002
+ 5.386875000000e-002,-2.75126e-002
+ 5.387500000000e-002,-2.75126e-002
+ 5.388125000000e-002,-2.75126e-002
+ 5.388750000000e-002,-2.75126e-002
+ 5.389375000000e-002,-2.75126e-002
+ 5.390000000000e-002,-2.75126e-002
+ 5.390625000000e-002,-2.75126e-002
+ 5.391250000000e-002,-2.75126e-002
+ 5.391875000000e-002,-2.24876e-002
+ 5.392500000000e-002,-2.75126e-002
+ 5.393125000000e-002,-2.75126e-002
+ 5.393750000000e-002,-2.75126e-002
+ 5.394375000000e-002,-2.75126e-002
+ 5.395000000000e-002,-2.75126e-002
+ 5.395625000000e-002,-2.75126e-002
+ 5.396250000000e-002,-2.75126e-002
+ 5.396875000000e-002,-2.75126e-002
+ 5.397500000000e-002,-2.75126e-002
+ 5.398125000000e-002,-2.75126e-002
+ 5.398750000000e-002,-2.75126e-002
+ 5.399375000000e-002,-2.75126e-002
+ 5.400000000000e-002,-2.75126e-002
+ 5.400625000000e-002,-2.75126e-002
+ 5.401250000000e-002,-2.75126e-002
+ 5.401875000000e-002,-2.75126e-002
+ 5.402500000000e-002,-2.75126e-002
+ 5.403125000000e-002,-2.75126e-002
+ 5.403750000000e-002,-2.75126e-002
+ 5.404375000000e-002,-2.75126e-002
+ 5.405000000000e-002,-2.75126e-002
+ 5.405625000000e-002,-2.75126e-002
+ 5.406250000000e-002,-2.75126e-002
+ 5.406875000000e-002,-2.75126e-002
+ 5.407500000000e-002,-2.75126e-002
+ 5.408125000000e-002,-2.75126e-002
+ 5.408750000000e-002,-2.75126e-002
+ 5.409375000000e-002,-2.75126e-002
+ 5.410000000000e-002,-2.75126e-002
+ 5.410625000000e-002,-2.75126e-002
+ 5.411250000000e-002,-2.75126e-002
+ 5.411875000000e-002,-2.75126e-002
+ 5.412500000000e-002,-2.75126e-002
+ 5.413125000000e-002,-2.75126e-002
+ 5.413750000000e-002,-2.75126e-002
+ 5.414375000000e-002,-2.75126e-002
+ 5.415000000000e-002,-2.75126e-002
+ 5.415625000000e-002,-2.75126e-002
+ 5.416250000000e-002,-2.75126e-002
+ 5.416875000000e-002,-2.75126e-002
+ 5.417500000000e-002,-2.75126e-002
+ 5.418125000000e-002,-2.75126e-002
+ 5.418750000000e-002,-2.75126e-002
+ 5.419375000000e-002,-2.75126e-002
+ 5.420000000000e-002,-2.75126e-002
+ 5.420625000000e-002,-2.75126e-002
+ 5.421250000000e-002,-2.75126e-002
+ 5.421875000000e-002,-2.75126e-002
+ 5.422500000000e-002,-2.75126e-002
+ 5.423125000000e-002,-2.75126e-002
+ 5.423750000000e-002,-2.75126e-002
+ 5.424375000000e-002,-2.75126e-002
+ 5.425000000000e-002,-2.75126e-002
+ 5.425625000000e-002,-2.75126e-002
+ 5.426250000000e-002,-2.75126e-002
+ 5.426875000000e-002,-2.75126e-002
+ 5.427500000000e-002,-2.75126e-002
+ 5.428125000000e-002,-2.75126e-002
+ 5.428750000000e-002,-2.75126e-002
+ 5.429375000000e-002,-2.75126e-002
+ 5.430000000000e-002,-2.75126e-002
+ 5.430625000000e-002,-2.75126e-002
+ 5.431250000000e-002,-2.75126e-002
+ 5.431875000000e-002,-2.75126e-002
+ 5.432500000000e-002,-2.75126e-002
+ 5.433125000000e-002,-2.75126e-002
+ 5.433750000000e-002,-2.75126e-002
+ 5.434375000000e-002,-2.75126e-002
+ 5.435000000000e-002,-2.24876e-002
+ 5.435625000000e-002,-2.75126e-002
+ 5.436250000000e-002,-2.75126e-002
+ 5.436875000000e-002,-2.75126e-002
+ 5.437500000000e-002,-2.75126e-002
+ 5.438125000000e-002,-2.75126e-002
+ 5.438750000000e-002,-2.75126e-002
+ 5.439375000000e-002,-2.75126e-002
+ 5.440000000000e-002,-2.75126e-002
+ 5.440625000000e-002,-2.75126e-002
+ 5.441250000000e-002,-2.75126e-002
+ 5.441875000000e-002,-2.75126e-002
+ 5.442500000000e-002,-2.75126e-002
+ 5.443125000000e-002,-2.75126e-002
+ 5.443750000000e-002,-2.75126e-002
+ 5.444375000000e-002,-2.75126e-002
+ 5.445000000000e-002,-2.75126e-002
+ 5.445625000000e-002,-2.75126e-002
+ 5.446250000000e-002,-2.75126e-002
+ 5.446875000000e-002,-2.75126e-002
+ 5.447500000000e-002,-2.75126e-002
+ 5.448125000000e-002,-2.75126e-002
+ 5.448750000000e-002,-2.75126e-002
+ 5.449375000000e-002,-2.75126e-002
+ 5.450000000000e-002,-2.75126e-002
+ 5.450625000000e-002,-2.24876e-002
+ 5.451250000000e-002,-2.75126e-002
+ 5.451875000000e-002,-2.75126e-002
+ 5.452500000000e-002,-2.75126e-002
+ 5.453125000000e-002,-2.75126e-002
+ 5.453750000000e-002,-2.75126e-002
+ 5.454375000000e-002,-2.75126e-002
+ 5.455000000000e-002,-2.75126e-002
+ 5.455625000000e-002,-2.75126e-002
+ 5.456250000000e-002,-2.75126e-002
+ 5.456875000000e-002,-2.75126e-002
+ 5.457500000000e-002,-2.75126e-002
+ 5.458125000000e-002,-2.75126e-002
+ 5.458750000000e-002,-2.75126e-002
+ 5.459375000000e-002,-2.75126e-002
+ 5.460000000000e-002,-2.24876e-002
+ 5.460625000000e-002,-2.75126e-002
+ 5.461250000000e-002,-2.75126e-002
+ 5.461875000000e-002,-2.75126e-002
+ 5.462500000000e-002,-2.75126e-002
+ 5.463125000000e-002,-2.75126e-002
+ 5.463750000000e-002,-2.75126e-002
+ 5.464375000000e-002,-2.75126e-002
+ 5.465000000000e-002,-2.75126e-002
+ 5.465625000000e-002,-2.75126e-002
+ 5.466250000000e-002,-2.75126e-002
+ 5.466875000000e-002,-2.75126e-002
+ 5.467500000000e-002,-2.75126e-002
+ 5.468125000000e-002,-2.75126e-002
+ 5.468750000000e-002,-2.75126e-002
+ 5.469375000000e-002,-2.75126e-002
+ 5.470000000000e-002,-2.75126e-002
+ 5.470625000000e-002,-2.75126e-002
+ 5.471250000000e-002,-2.75126e-002
+ 5.471875000000e-002,-2.75126e-002
+ 5.472500000000e-002,-2.75126e-002
+ 5.473125000000e-002,-2.75126e-002
+ 5.473750000000e-002,-2.75126e-002
+ 5.474375000000e-002,-2.75126e-002
+ 5.475000000000e-002,-2.75126e-002
+ 5.475625000000e-002,-2.75126e-002
+ 5.476250000000e-002,-2.75126e-002
+ 5.476875000000e-002,-2.24876e-002
+ 5.477500000000e-002,-2.75126e-002
+ 5.478125000000e-002,-2.75126e-002
+ 5.478750000000e-002,-2.75126e-002
+ 5.479375000000e-002,-2.75126e-002
+ 5.480000000000e-002,-2.75126e-002
+ 5.480625000000e-002,-2.75126e-002
+ 5.481250000000e-002,-2.75126e-002
+ 5.481875000000e-002,-2.75126e-002
+ 5.482500000000e-002,-2.75126e-002
+ 5.483125000000e-002,-2.75126e-002
+ 5.483750000000e-002,-2.75126e-002
+ 5.484375000000e-002,-2.75126e-002
+ 5.485000000000e-002,-2.75126e-002
+ 5.485625000000e-002,-2.75126e-002
+ 5.486250000000e-002,-2.75126e-002
+ 5.486875000000e-002,-2.75126e-002
+ 5.487500000000e-002,-2.75126e-002
+ 5.488125000000e-002,-2.24876e-002
+ 5.488750000000e-002,-2.75126e-002
+ 5.489375000000e-002,-2.75126e-002
+ 5.490000000000e-002,-2.75126e-002
+ 5.490625000000e-002,-2.75126e-002
+ 5.491250000000e-002,-2.75126e-002
+ 5.491875000000e-002,-2.75126e-002
+ 5.492500000000e-002,-2.75126e-002
+ 5.493125000000e-002,-2.75126e-002
+ 5.493750000000e-002,-2.75126e-002
+ 5.494375000000e-002,-2.75126e-002
+ 5.495000000000e-002,-2.75126e-002
+ 5.495625000000e-002,-2.75126e-002
+ 5.496250000000e-002,-2.75126e-002
+ 5.496875000000e-002,-2.75126e-002
+ 5.497500000000e-002,-2.75126e-002
+ 5.498125000000e-002,-2.75126e-002
+ 5.498750000000e-002,-2.75126e-002
+ 5.499375000000e-002,-2.75126e-002
+ 5.500000000000e-002,-2.75126e-002
+ 5.500625000000e-002,-2.75126e-002
+ 5.501250000000e-002,-2.75126e-002
+ 5.501875000000e-002,-2.75126e-002
+ 5.502500000000e-002,-2.75126e-002
+ 5.503125000000e-002,-2.75126e-002
+ 5.503750000000e-002,-2.75126e-002
+ 5.504375000000e-002,-2.75126e-002
+ 5.505000000000e-002,-2.75126e-002
+ 5.505625000000e-002,-2.75126e-002
+ 5.506250000000e-002,-2.75126e-002
+ 5.506875000000e-002,-2.75126e-002
+ 5.507500000000e-002,-2.75126e-002
+ 5.508125000000e-002,-2.75126e-002
+ 5.508750000000e-002,-2.75126e-002
+ 5.509375000000e-002,-2.75126e-002
+ 5.510000000000e-002,-2.75126e-002
+ 5.510625000000e-002,-2.75126e-002
+ 5.511250000000e-002,-2.75126e-002
+ 5.511875000000e-002,-2.75126e-002
+ 5.512500000000e-002,-2.75126e-002
+ 5.513125000000e-002,-2.75126e-002
+ 5.513750000000e-002,-2.75126e-002
+ 5.514375000000e-002,-2.75126e-002
+ 5.515000000000e-002,-2.75126e-002
+ 5.515625000000e-002,-2.75126e-002
+ 5.516250000000e-002,-2.75126e-002
+ 5.516875000000e-002,-2.75126e-002
+ 5.517500000000e-002,-2.75126e-002
+ 5.518125000000e-002,-2.75126e-002
+ 5.518750000000e-002,-2.75126e-002
+ 5.519375000000e-002,-2.75126e-002
+ 5.520000000000e-002,-2.75126e-002
+ 5.520625000000e-002,-2.75126e-002
+ 5.521250000000e-002,-2.75126e-002
+ 5.521875000000e-002,-2.75126e-002
+ 5.522500000000e-002,-2.75126e-002
+ 5.523125000000e-002,-2.75126e-002
+ 5.523750000000e-002,-2.75126e-002
+ 5.524375000000e-002,-2.75126e-002
+ 5.525000000000e-002,-2.75126e-002
+ 5.525625000000e-002,-2.75126e-002
+ 5.526250000000e-002,-2.75126e-002
+ 5.526875000000e-002,-2.75126e-002
+ 5.527500000000e-002,-2.75126e-002
+ 5.528125000000e-002,-2.75126e-002
+ 5.528750000000e-002,-2.75126e-002
+ 5.529375000000e-002,-2.75126e-002
+ 5.530000000000e-002,-2.75126e-002
+ 5.530625000000e-002,-2.75126e-002
+ 5.531250000000e-002,-2.75126e-002
+ 5.531875000000e-002,-2.75126e-002
+ 5.532500000000e-002,-2.75126e-002
+ 5.533125000000e-002,-2.75126e-002
+ 5.533750000000e-002,-2.75126e-002
+ 5.534375000000e-002,-2.75126e-002
+ 5.535000000000e-002,-2.75126e-002
+ 5.535625000000e-002,-2.75126e-002
+ 5.536250000000e-002,-2.75126e-002
+ 5.536875000000e-002,-2.75126e-002
+ 5.537500000000e-002,-2.75126e-002
+ 5.538125000000e-002,-2.75126e-002
+ 5.538750000000e-002,-2.75126e-002
+ 5.539375000000e-002,-2.75126e-002
+ 5.540000000000e-002,-2.75126e-002
+ 5.540625000000e-002,-2.75126e-002
+ 5.541250000000e-002,-2.75126e-002
+ 5.541875000000e-002,-2.75126e-002
+ 5.542500000000e-002,-2.75126e-002
+ 5.543125000000e-002,-2.75126e-002
+ 5.543750000000e-002,-2.75126e-002
+ 5.544375000000e-002,-2.75126e-002
+ 5.545000000000e-002,-2.75126e-002
+ 5.545625000000e-002,-2.75126e-002
+ 5.546250000000e-002,-2.24876e-002
+ 5.546875000000e-002,-2.75126e-002
+ 5.547500000000e-002,-2.75126e-002
+ 5.548125000000e-002,-2.75126e-002
+ 5.548750000000e-002,-2.75126e-002
+ 5.549375000000e-002,-2.75126e-002
+ 5.550000000000e-002,-2.75126e-002
+ 5.550625000000e-002,-2.75126e-002
+ 5.551250000000e-002,-2.75126e-002
+ 5.551875000000e-002,-2.75126e-002
+ 5.552500000000e-002,-2.75126e-002
+ 5.553125000000e-002,-2.75126e-002
+ 5.553750000000e-002,-2.75126e-002
+ 5.554375000000e-002,-2.75126e-002
+ 5.555000000000e-002,-2.75126e-002
+ 5.555625000000e-002,-2.75126e-002
+ 5.556250000000e-002,-2.75126e-002
+ 5.556875000000e-002,-2.75126e-002
+ 5.557500000000e-002,-2.75126e-002
+ 5.558125000000e-002,-2.75126e-002
+ 5.558750000000e-002,-2.75126e-002
+ 5.559375000000e-002,-2.75126e-002
+ 5.560000000000e-002,-2.75126e-002
+ 5.560625000000e-002,-2.75126e-002
+ 5.561250000000e-002,-2.75126e-002
+ 5.561875000000e-002,-2.75126e-002
+ 5.562500000000e-002,-2.75126e-002
+ 5.563125000000e-002,-2.75126e-002
+ 5.563750000000e-002,-2.75126e-002
+ 5.564375000000e-002,-2.75126e-002
+ 5.565000000000e-002,-2.75126e-002
+ 5.565625000000e-002,-2.75126e-002
+ 5.566250000000e-002,-2.75126e-002
+ 5.566875000000e-002,-2.75126e-002
+ 5.567500000000e-002,-2.75126e-002
+ 5.568125000000e-002,-2.75126e-002
+ 5.568750000000e-002,-2.75126e-002
+ 5.569375000000e-002,-2.75126e-002
+ 5.570000000000e-002,-2.75126e-002
+ 5.570625000000e-002,-2.75126e-002
+ 5.571250000000e-002,-2.75126e-002
+ 5.571875000000e-002,-2.75126e-002
+ 5.572500000000e-002,-2.75126e-002
+ 5.573125000000e-002,-2.75126e-002
+ 5.573750000000e-002,-2.75126e-002
+ 5.574375000000e-002,-2.75126e-002
+ 5.575000000000e-002,-2.75126e-002
+ 5.575625000000e-002,-2.75126e-002
+ 5.576250000000e-002,-2.75126e-002
+ 5.576875000000e-002,-2.75126e-002
+ 5.577500000000e-002,-2.75126e-002
+ 5.578125000000e-002,-2.75126e-002
+ 5.578750000000e-002,-2.75126e-002
+ 5.579375000000e-002,-2.75126e-002
+ 5.580000000000e-002,-2.75126e-002
+ 5.580625000000e-002,-2.75126e-002
+ 5.581250000000e-002,-2.75126e-002
+ 5.581875000000e-002,-2.75126e-002
+ 5.582500000000e-002,-2.75126e-002
+ 5.583125000000e-002,-2.75126e-002
+ 5.583750000000e-002,-2.75126e-002
+ 5.584375000000e-002,-2.75126e-002
+ 5.585000000000e-002,-2.75126e-002
+ 5.585625000000e-002,-2.24876e-002
+ 5.586250000000e-002,-2.75126e-002
+ 5.586875000000e-002,-2.75126e-002
+ 5.587500000000e-002,-2.75126e-002
+ 5.588125000000e-002,-2.75126e-002
+ 5.588750000000e-002,-2.75126e-002
+ 5.589375000000e-002,-2.75126e-002
+ 5.590000000000e-002,-2.75126e-002
+ 5.590625000000e-002,-2.24876e-002
+ 5.591250000000e-002,-2.75126e-002
+ 5.591875000000e-002,-2.75126e-002
+ 5.592500000000e-002,-2.75126e-002
+ 5.593125000000e-002,-2.75126e-002
+ 5.593750000000e-002,-2.75126e-002
+ 5.594375000000e-002,-2.75126e-002
+ 5.595000000000e-002,-2.75126e-002
+ 5.595625000000e-002,-2.75126e-002
+ 5.596250000000e-002,-2.75126e-002
+ 5.596875000000e-002,-2.75126e-002
+ 5.597500000000e-002,-2.75126e-002
+ 5.598125000000e-002,-2.75126e-002
+ 5.598750000000e-002,-2.75126e-002
+ 5.599375000000e-002,-2.75126e-002
+ 5.600000000000e-002,-2.75126e-002
+ 5.600625000000e-002,-2.75126e-002
+ 5.601250000000e-002,-2.75126e-002
+ 5.601875000000e-002,-2.75126e-002
+ 5.602500000000e-002,-2.75126e-002
+ 5.603125000000e-002,-2.75126e-002
+ 5.603750000000e-002,-2.75126e-002
+ 5.604375000000e-002,-2.75126e-002
+ 5.605000000000e-002,-2.75126e-002
+ 5.605625000000e-002,-2.75126e-002
+ 5.606250000000e-002,-2.75126e-002
+ 5.606875000000e-002,-2.75126e-002
+ 5.607500000000e-002,-2.75126e-002
+ 5.608125000000e-002,-2.75126e-002
+ 5.608750000000e-002,-2.75126e-002
+ 5.609375000000e-002,-2.75126e-002
+ 5.610000000000e-002,-2.75126e-002
+ 5.610625000000e-002,-2.75126e-002
+ 5.611250000000e-002,-2.75126e-002
+ 5.611875000000e-002,-2.75126e-002
+ 5.612500000000e-002,-2.75126e-002
+ 5.613125000000e-002,-2.75126e-002
+ 5.613750000000e-002,-2.75126e-002
+ 5.614375000000e-002,-2.75126e-002
+ 5.615000000000e-002,-2.75126e-002
+ 5.615625000000e-002,-2.75126e-002
+ 5.616250000000e-002,-2.75126e-002
+ 5.616875000000e-002,-2.75126e-002
+ 5.617500000000e-002,-2.75126e-002
+ 5.618125000000e-002,-2.75126e-002
+ 5.618750000000e-002,-2.75126e-002
+ 5.619375000000e-002,-2.75126e-002
+ 5.620000000000e-002,-2.75126e-002
+ 5.620625000000e-002,-2.75126e-002
+ 5.621250000000e-002,-2.75126e-002
+ 5.621875000000e-002,-2.75126e-002
+ 5.622500000000e-002,-2.75126e-002
+ 5.623125000000e-002,-2.75126e-002
+ 5.623750000000e-002,-2.75126e-002
+ 5.624375000000e-002,-2.75126e-002
+ 5.625000000000e-002,-2.75126e-002
+ 5.625625000000e-002,-2.75126e-002
+ 5.626250000000e-002,-2.75126e-002
+ 5.626875000000e-002,-2.75126e-002
+ 5.627500000000e-002,-2.75126e-002
+ 5.628125000000e-002,-2.24876e-002
+ 5.628750000000e-002,-2.75126e-002
+ 5.629375000000e-002,-2.75126e-002
+ 5.630000000000e-002,-2.75126e-002
+ 5.630625000000e-002,-2.75126e-002
+ 5.631250000000e-002,-2.75126e-002
+ 5.631875000000e-002,-2.75126e-002
+ 5.632500000000e-002,-2.75126e-002
+ 5.633125000000e-002,-2.75126e-002
+ 5.633750000000e-002,-2.75126e-002
+ 5.634375000000e-002,-2.75126e-002
+ 5.635000000000e-002,-2.75126e-002
+ 5.635625000000e-002,-2.75126e-002
+ 5.636250000000e-002,-2.75126e-002
+ 5.636875000000e-002,-2.75126e-002
+ 5.637500000000e-002,-2.75126e-002
+ 5.638125000000e-002,-2.75126e-002
+ 5.638750000000e-002,-2.75126e-002
+ 5.639375000000e-002,-2.75126e-002
+ 5.640000000000e-002,-2.75126e-002
+ 5.640625000000e-002,-2.75126e-002
+ 5.641250000000e-002,-2.75126e-002
+ 5.641875000000e-002,-2.75126e-002
+ 5.642500000000e-002,-2.75126e-002
+ 5.643125000000e-002,-2.75126e-002
+ 5.643750000000e-002,-2.75126e-002
+ 5.644375000000e-002,-2.75126e-002
+ 5.645000000000e-002,-2.75126e-002
+ 5.645625000000e-002,-2.75126e-002
+ 5.646250000000e-002,-2.75126e-002
+ 5.646875000000e-002,-2.75126e-002
+ 5.647500000000e-002,-2.75126e-002
+ 5.648125000000e-002,-2.75126e-002
+ 5.648750000000e-002,-2.75126e-002
+ 5.649375000000e-002,-2.75126e-002
+ 5.650000000000e-002,-2.75126e-002
+ 5.650625000000e-002,-2.75126e-002
+ 5.651250000000e-002,-2.75126e-002
+ 5.651875000000e-002,-2.75126e-002
+ 5.652500000000e-002,-2.75126e-002
+ 5.653125000000e-002,-2.75126e-002
+ 5.653750000000e-002,-2.75126e-002
+ 5.654375000000e-002,-2.75126e-002
+ 5.655000000000e-002,-2.75126e-002
+ 5.655625000000e-002,-2.75126e-002
+ 5.656250000000e-002,-2.75126e-002
+ 5.656875000000e-002,-2.75126e-002
+ 5.657500000000e-002,-2.75126e-002
+ 5.658125000000e-002,-2.75126e-002
+ 5.658750000000e-002,-2.24876e-002
+ 5.659375000000e-002,-2.75126e-002
+ 5.660000000000e-002,-2.75126e-002
+ 5.660625000000e-002,-2.75126e-002
+ 5.661250000000e-002,-2.75126e-002
+ 5.661875000000e-002,-2.75126e-002
+ 5.662500000000e-002,-2.75126e-002
+ 5.663125000000e-002,-2.75126e-002
+ 5.663750000000e-002,-2.75126e-002
+ 5.664375000000e-002,-2.75126e-002
+ 5.665000000000e-002,-2.75126e-002
+ 5.665625000000e-002,-2.75126e-002
+ 5.666250000000e-002,-2.75126e-002
+ 5.666875000000e-002,-2.75126e-002
+ 5.667500000000e-002,-2.75126e-002
+ 5.668125000000e-002,-2.75126e-002
+ 5.668750000000e-002,-2.75126e-002
+ 5.669375000000e-002,-2.75126e-002
+ 5.670000000000e-002,-2.75126e-002
+ 5.670625000000e-002,-2.75126e-002
+ 5.671250000000e-002,-2.75126e-002
+ 5.671875000000e-002,-2.75126e-002
+ 5.672500000000e-002,-2.75126e-002
+ 5.673125000000e-002,-2.75126e-002
+ 5.673750000000e-002,-2.75126e-002
+ 5.674375000000e-002,-2.75126e-002
+ 5.675000000000e-002,-2.75126e-002
+ 5.675625000000e-002,-2.75126e-002
+ 5.676250000000e-002,-2.75126e-002
+ 5.676875000000e-002,-2.75126e-002
+ 5.677500000000e-002,-2.75126e-002
+ 5.678125000000e-002,-2.75126e-002
+ 5.678750000000e-002,-2.75126e-002
+ 5.679375000000e-002,-2.75126e-002
+ 5.680000000000e-002,-2.75126e-002
+ 5.680625000000e-002,-2.75126e-002
+ 5.681250000000e-002,-2.75126e-002
+ 5.681875000000e-002,-2.75126e-002
+ 5.682500000000e-002,-2.75126e-002
+ 5.683125000000e-002,-2.75126e-002
+ 5.683750000000e-002,-2.75126e-002
+ 5.684375000000e-002,-2.75126e-002
+ 5.685000000000e-002,-2.75126e-002
+ 5.685625000000e-002,-2.75126e-002
+ 5.686250000000e-002,-2.75126e-002
+ 5.686875000000e-002,-2.75126e-002
+ 5.687500000000e-002,-2.75126e-002
+ 5.688125000000e-002,-2.75126e-002
+ 5.688750000000e-002,-2.75126e-002
+ 5.689375000000e-002,-2.24876e-002
+ 5.690000000000e-002,-2.24876e-002
+ 5.690625000000e-002,-2.75126e-002
+ 5.691250000000e-002,-2.75126e-002
+ 5.691875000000e-002,-2.75126e-002
+ 5.692500000000e-002,-2.75126e-002
+ 5.693125000000e-002,-2.75126e-002
+ 5.693750000000e-002,-2.75126e-002
+ 5.694375000000e-002,-2.75126e-002
+ 5.695000000000e-002,-2.75126e-002
+ 5.695625000000e-002,-2.75126e-002
+ 5.696250000000e-002,-2.75126e-002
+ 5.696875000000e-002,-2.75126e-002
+ 5.697500000000e-002,-2.75126e-002
+ 5.698125000000e-002,-2.75126e-002
+ 5.698750000000e-002,-2.75126e-002
+ 5.699375000000e-002,-2.75126e-002
+ 5.700000000000e-002,-2.75126e-002
+ 5.700625000000e-002,-2.75126e-002
+ 5.701250000000e-002,-2.75126e-002
+ 5.701875000000e-002,-2.75126e-002
+ 5.702500000000e-002,-2.75126e-002
+ 5.703125000000e-002,-2.75126e-002
+ 5.703750000000e-002,-2.75126e-002
+ 5.704375000000e-002,-2.75126e-002
+ 5.705000000000e-002,-2.75126e-002
+ 5.705625000000e-002,-2.75126e-002
+ 5.706250000000e-002,-2.75126e-002
+ 5.706875000000e-002,-2.75126e-002
+ 5.707500000000e-002,-2.75126e-002
+ 5.708125000000e-002,-2.75126e-002
+ 5.708750000000e-002,-2.75126e-002
+ 5.709375000000e-002,-2.75126e-002
+ 5.710000000000e-002,-2.75126e-002
+ 5.710625000000e-002,-2.75126e-002
+ 5.711250000000e-002,-2.75126e-002
+ 5.711875000000e-002,-2.75126e-002
+ 5.712500000000e-002,-2.75126e-002
+ 5.713125000000e-002,-2.75126e-002
+ 5.713750000000e-002,-2.75126e-002
+ 5.714375000000e-002,-2.75126e-002
+ 5.715000000000e-002,-2.75126e-002
+ 5.715625000000e-002,-2.75126e-002
+ 5.716250000000e-002,-2.75126e-002
+ 5.716875000000e-002,-2.75126e-002
+ 5.717500000000e-002,-2.75126e-002
+ 5.718125000000e-002,-2.75126e-002
+ 5.718750000000e-002,-2.75126e-002
+ 5.719375000000e-002,-2.75126e-002
+ 5.720000000000e-002,-2.75126e-002
+ 5.720625000000e-002,-2.75126e-002
+ 5.721250000000e-002,-2.75126e-002
+ 5.721875000000e-002,-2.75126e-002
+ 5.722500000000e-002,-2.75126e-002
+ 5.723125000000e-002,-2.75126e-002
+ 5.723750000000e-002,-2.75126e-002
+ 5.724375000000e-002,-2.24876e-002
+ 5.725000000000e-002,-2.75126e-002
+ 5.725625000000e-002,-2.75126e-002
+ 5.726250000000e-002,-2.75126e-002
+ 5.726875000000e-002,-2.75126e-002
+ 5.727500000000e-002,-2.75126e-002
+ 5.728125000000e-002,-2.75126e-002
+ 5.728750000000e-002,-2.75126e-002
+ 5.729375000000e-002,-2.75126e-002
+ 5.730000000000e-002,-2.75126e-002
+ 5.730625000000e-002,-2.75126e-002
+ 5.731250000000e-002,-2.75126e-002
+ 5.731875000000e-002,-2.75126e-002
+ 5.732500000000e-002,-2.75126e-002
+ 5.733125000000e-002,-2.75126e-002
+ 5.733750000000e-002,-2.24876e-002
+ 5.734375000000e-002,-2.75126e-002
+ 5.735000000000e-002,-2.75126e-002
+ 5.735625000000e-002,-2.75126e-002
+ 5.736250000000e-002,-2.75126e-002
+ 5.736875000000e-002,-2.75126e-002
+ 5.737500000000e-002,-2.75126e-002
+ 5.738125000000e-002,-2.75126e-002
+ 5.738750000000e-002,-2.75126e-002
+ 5.739375000000e-002,-2.75126e-002
+ 5.740000000000e-002,-2.75126e-002
+ 5.740625000000e-002,-2.75126e-002
+ 5.741250000000e-002,-2.75126e-002
+ 5.741875000000e-002,-2.24876e-002
+ 5.742500000000e-002,-2.75126e-002
+ 5.743125000000e-002,-2.75126e-002
+ 5.743750000000e-002,-2.75126e-002
+ 5.744375000000e-002,-2.75126e-002
+ 5.745000000000e-002,-2.75126e-002
+ 5.745625000000e-002,-2.75126e-002
+ 5.746250000000e-002,-2.75126e-002
+ 5.746875000000e-002,-2.75126e-002
+ 5.747500000000e-002,-2.75126e-002
+ 5.748125000000e-002,-2.75126e-002
+ 5.748750000000e-002,-2.75126e-002
+ 5.749375000000e-002,-2.75126e-002
+ 5.750000000000e-002,-2.75126e-002
+ 5.750625000000e-002,-2.75126e-002
+ 5.751250000000e-002,-2.75126e-002
+ 5.751875000000e-002,-2.75126e-002
+ 5.752500000000e-002,-2.75126e-002
+ 5.753125000000e-002,-2.75126e-002
+ 5.753750000000e-002,-2.75126e-002
+ 5.754375000000e-002,-2.75126e-002
+ 5.755000000000e-002,-2.75126e-002
+ 5.755625000000e-002,-2.75126e-002
+ 5.756250000000e-002,-2.75126e-002
+ 5.756875000000e-002,-2.75126e-002
+ 5.757500000000e-002,-2.75126e-002
+ 5.758125000000e-002,-2.75126e-002
+ 5.758750000000e-002,-2.75126e-002
+ 5.759375000000e-002,-2.75126e-002
+ 5.760000000000e-002,-2.75126e-002
+ 5.760625000000e-002,-2.75126e-002
+ 5.761250000000e-002,-2.75126e-002
+ 5.761875000000e-002,-2.75126e-002
+ 5.762500000000e-002,-2.75126e-002
+ 5.763125000000e-002,-2.75126e-002
+ 5.763750000000e-002,-2.75126e-002
+ 5.764375000000e-002,-2.75126e-002
+ 5.765000000000e-002,-2.75126e-002
+ 5.765625000000e-002,-2.75126e-002
+ 5.766250000000e-002,-2.75126e-002
+ 5.766875000000e-002,-2.75126e-002
+ 5.767500000000e-002,-2.75126e-002
+ 5.768125000000e-002,-2.75126e-002
+ 5.768750000000e-002,-2.75126e-002
+ 5.769375000000e-002,-2.75126e-002
+ 5.770000000000e-002,-2.75126e-002
+ 5.770625000000e-002,-2.75126e-002
+ 5.771250000000e-002,-2.75126e-002
+ 5.771875000000e-002,-2.75126e-002
+ 5.772500000000e-002,-2.75126e-002
+ 5.773125000000e-002,-2.24876e-002
+ 5.773750000000e-002,-2.75126e-002
+ 5.774375000000e-002,-2.75126e-002
+ 5.775000000000e-002,-2.75126e-002
+ 5.775625000000e-002,-2.75126e-002
+ 5.776250000000e-002,-2.75126e-002
+ 5.776875000000e-002,-2.75126e-002
+ 5.777500000000e-002,-2.75126e-002
+ 5.778125000000e-002,-2.75126e-002
+ 5.778750000000e-002,-2.75126e-002
+ 5.779375000000e-002,-2.75126e-002
+ 5.780000000000e-002,-2.75126e-002
+ 5.780625000000e-002,-2.75126e-002
+ 5.781250000000e-002,-2.75126e-002
+ 5.781875000000e-002,-2.75126e-002
+ 5.782500000000e-002,-2.24876e-002
+ 5.783125000000e-002,-2.75126e-002
+ 5.783750000000e-002,-2.75126e-002
+ 5.784375000000e-002,-2.75126e-002
+ 5.785000000000e-002,-2.75126e-002
+ 5.785625000000e-002,-2.75126e-002
+ 5.786250000000e-002,-2.75126e-002
+ 5.786875000000e-002,-2.75126e-002
+ 5.787500000000e-002,-2.75126e-002
+ 5.788125000000e-002,-2.75126e-002
+ 5.788750000000e-002,-2.75126e-002
+ 5.789375000000e-002,-2.75126e-002
+ 5.790000000000e-002,-2.75126e-002
+ 5.790625000000e-002,-2.75126e-002
+ 5.791250000000e-002,-2.75126e-002
+ 5.791875000000e-002,-2.75126e-002
+ 5.792500000000e-002,-2.75126e-002
+ 5.793125000000e-002,-2.75126e-002
+ 5.793750000000e-002,-2.75126e-002
+ 5.794375000000e-002,-2.75126e-002
+ 5.795000000000e-002,-2.75126e-002
+ 5.795625000000e-002,-2.75126e-002
+ 5.796250000000e-002,-2.75126e-002
+ 5.796875000000e-002,-2.75126e-002
+ 5.797500000000e-002,-2.75126e-002
+ 5.798125000000e-002,-2.75126e-002
+ 5.798750000000e-002,-2.75126e-002
+ 5.799375000000e-002,-2.75126e-002
+ 5.800000000000e-002,-2.75126e-002
+ 5.800625000000e-002,-2.75126e-002
+ 5.801250000000e-002,-2.75126e-002
+ 5.801875000000e-002,-2.75126e-002
+ 5.802500000000e-002,-2.75126e-002
+ 5.803125000000e-002,-2.75126e-002
+ 5.803750000000e-002,-2.75126e-002
+ 5.804375000000e-002,-2.75126e-002
+ 5.805000000000e-002,-2.75126e-002
+ 5.805625000000e-002,-2.75126e-002
+ 5.806250000000e-002,-2.75126e-002
+ 5.806875000000e-002,-2.24876e-002
+ 5.807500000000e-002,-2.75126e-002
+ 5.808125000000e-002,-2.75126e-002
+ 5.808750000000e-002,-2.75126e-002
+ 5.809375000000e-002,-2.75126e-002
+ 5.810000000000e-002,-2.75126e-002
+ 5.810625000000e-002,-2.75126e-002
+ 5.811250000000e-002,-2.75126e-002
+ 5.811875000000e-002,-2.75126e-002
+ 5.812500000000e-002,-2.75126e-002
+ 5.813125000000e-002,-2.75126e-002
+ 5.813750000000e-002,-2.75126e-002
+ 5.814375000000e-002,-2.75126e-002
+ 5.815000000000e-002,-2.75126e-002
+ 5.815625000000e-002,-2.75126e-002
+ 5.816250000000e-002,-2.75126e-002
+ 5.816875000000e-002,-2.75126e-002
+ 5.817500000000e-002,-2.75126e-002
+ 5.818125000000e-002,-2.75126e-002
+ 5.818750000000e-002,-2.75126e-002
+ 5.819375000000e-002,-2.75126e-002
+ 5.820000000000e-002,-2.75126e-002
+ 5.820625000000e-002,-2.75126e-002
+ 5.821250000000e-002,-2.75126e-002
+ 5.821875000000e-002,-2.75126e-002
+ 5.822500000000e-002,-2.75126e-002
+ 5.823125000000e-002,-2.75126e-002
+ 5.823750000000e-002,-2.75126e-002
+ 5.824375000000e-002,-2.75126e-002
+ 5.825000000000e-002,-2.75126e-002
+ 5.825625000000e-002,-2.24876e-002
+ 5.826250000000e-002,-2.75126e-002
+ 5.826875000000e-002,-2.75126e-002
+ 5.827500000000e-002,-2.75126e-002
+ 5.828125000000e-002,-2.75126e-002
+ 5.828750000000e-002,-2.75126e-002
+ 5.829375000000e-002,-2.75126e-002
+ 5.830000000000e-002,-2.75126e-002
+ 5.830625000000e-002,-2.75126e-002
+ 5.831250000000e-002,-2.75126e-002
+ 5.831875000000e-002,-2.75126e-002
+ 5.832500000000e-002,-2.75126e-002
+ 5.833125000000e-002,-2.75126e-002
+ 5.833750000000e-002,-2.75126e-002
+ 5.834375000000e-002,-2.75126e-002
+ 5.835000000000e-002,-2.75126e-002
+ 5.835625000000e-002,-2.75126e-002
+ 5.836250000000e-002,-2.24876e-002
+ 5.836875000000e-002,-2.75126e-002
+ 5.837500000000e-002,-2.75126e-002
+ 5.838125000000e-002,-2.75126e-002
+ 5.838750000000e-002,-2.75126e-002
+ 5.839375000000e-002,-2.75126e-002
+ 5.840000000000e-002,-2.75126e-002
+ 5.840625000000e-002,-2.75126e-002
+ 5.841250000000e-002,-2.75126e-002
+ 5.841875000000e-002,-2.75126e-002
+ 5.842500000000e-002,-2.75126e-002
+ 5.843125000000e-002,-2.75126e-002
+ 5.843750000000e-002,-2.75126e-002
+ 5.844375000000e-002,-2.75126e-002
+ 5.845000000000e-002,-2.75126e-002
+ 5.845625000000e-002,-2.75126e-002
+ 5.846250000000e-002,-2.75126e-002
+ 5.846875000000e-002,-2.75126e-002
+ 5.847500000000e-002,-2.75126e-002
+ 5.848125000000e-002,-2.75126e-002
+ 5.848750000000e-002,-2.75126e-002
+ 5.849375000000e-002,-2.75126e-002
+ 5.850000000000e-002,-2.75126e-002
+ 5.850625000000e-002,-2.75126e-002
+ 5.851250000000e-002,-2.75126e-002
+ 5.851875000000e-002,-2.75126e-002
+ 5.852500000000e-002,-2.75126e-002
+ 5.853125000000e-002,-2.24876e-002
+ 5.853750000000e-002,-2.75126e-002
+ 5.854375000000e-002,-2.75126e-002
+ 5.855000000000e-002,-2.75126e-002
+ 5.855625000000e-002,-2.75126e-002
+ 5.856250000000e-002,-2.75126e-002
+ 5.856875000000e-002,-2.75126e-002
+ 5.857500000000e-002,-2.75126e-002
+ 5.858125000000e-002,-2.75126e-002
+ 5.858750000000e-002,-2.75126e-002
+ 5.859375000000e-002,-2.75126e-002
+ 5.860000000000e-002,-2.75126e-002
+ 5.860625000000e-002,-2.75126e-002
+ 5.861250000000e-002,-2.75126e-002
+ 5.861875000000e-002,-2.75126e-002
+ 5.862500000000e-002,-2.75126e-002
+ 5.863125000000e-002,-2.75126e-002
+ 5.863750000000e-002,-2.75126e-002
+ 5.864375000000e-002,-2.75126e-002
+ 5.865000000000e-002,-2.75126e-002
+ 5.865625000000e-002,-2.75126e-002
+ 5.866250000000e-002,-2.75126e-002
+ 5.866875000000e-002,-2.24876e-002
+ 5.867500000000e-002,-2.75126e-002
+ 5.868125000000e-002,-2.75126e-002
+ 5.868750000000e-002,-2.75126e-002
+ 5.869375000000e-002,-2.75126e-002
+ 5.870000000000e-002,-2.75126e-002
+ 5.870625000000e-002,-2.75126e-002
+ 5.871250000000e-002,-2.75126e-002
+ 5.871875000000e-002,-2.75126e-002
+ 5.872500000000e-002,-2.75126e-002
+ 5.873125000000e-002,-2.75126e-002
+ 5.873750000000e-002,-2.75126e-002
+ 5.874375000000e-002,-2.75126e-002
+ 5.875000000000e-002,-2.75126e-002
+ 5.875625000000e-002,-2.75126e-002
+ 5.876250000000e-002,-2.75126e-002
+ 5.876875000000e-002,-2.75126e-002
+ 5.877500000000e-002,-2.75126e-002
+ 5.878125000000e-002,-2.75126e-002
+ 5.878750000000e-002,-2.75126e-002
+ 5.879375000000e-002,-2.75126e-002
+ 5.880000000000e-002,-2.75126e-002
+ 5.880625000000e-002,-2.75126e-002
+ 5.881250000000e-002,-2.24876e-002
+ 5.881875000000e-002,-2.75126e-002
+ 5.882500000000e-002,-2.75126e-002
+ 5.883125000000e-002,-2.75126e-002
+ 5.883750000000e-002,-2.75126e-002
+ 5.884375000000e-002,-2.75126e-002
+ 5.885000000000e-002,-2.75126e-002
+ 5.885625000000e-002,-2.75126e-002
+ 5.886250000000e-002,-2.75126e-002
+ 5.886875000000e-002,-2.75126e-002
+ 5.887500000000e-002,-2.75126e-002
+ 5.888125000000e-002,-2.75126e-002
+ 5.888750000000e-002,-2.75126e-002
+ 5.889375000000e-002,-2.75126e-002
+ 5.890000000000e-002,-2.75126e-002
+ 5.890625000000e-002,-2.75126e-002
+ 5.891250000000e-002,-2.75126e-002
+ 5.891875000000e-002,-2.75126e-002
+ 5.892500000000e-002,-2.75126e-002
+ 5.893125000000e-002,-2.75126e-002
+ 5.893750000000e-002,-2.75126e-002
+ 5.894375000000e-002,-2.75126e-002
+ 5.895000000000e-002,-2.75126e-002
+ 5.895625000000e-002,-2.75126e-002
+ 5.896250000000e-002,-2.75126e-002
+ 5.896875000000e-002,-2.75126e-002
+ 5.897500000000e-002,-2.75126e-002
+ 5.898125000000e-002,-2.75126e-002
+ 5.898750000000e-002,-2.75126e-002
+ 5.899375000000e-002,-2.75126e-002
+ 5.900000000000e-002,-2.75126e-002
+ 5.900625000000e-002,-2.75126e-002
+ 5.901250000000e-002,-2.75126e-002
+ 5.901875000000e-002,-2.75126e-002
+ 5.902500000000e-002,-2.75126e-002
+ 5.903125000000e-002,-2.75126e-002
+ 5.903750000000e-002,-2.75126e-002
+ 5.904375000000e-002,-2.75126e-002
+ 5.905000000000e-002,-2.75126e-002
+ 5.905625000000e-002,-2.75126e-002
+ 5.906250000000e-002,-2.75126e-002
+ 5.906875000000e-002,-2.75126e-002
+ 5.907500000000e-002,-2.75126e-002
+ 5.908125000000e-002,-2.75126e-002
+ 5.908750000000e-002,-2.75126e-002
+ 5.909375000000e-002,-2.75126e-002
+ 5.910000000000e-002,-2.75126e-002
+ 5.910625000000e-002,-2.75126e-002
+ 5.911250000000e-002,-2.75126e-002
+ 5.911875000000e-002,-2.75126e-002
+ 5.912500000000e-002,-2.75126e-002
+ 5.913125000000e-002,-2.75126e-002
+ 5.913750000000e-002,-2.75126e-002
+ 5.914375000000e-002,-2.75126e-002
+ 5.915000000000e-002,-2.75126e-002
+ 5.915625000000e-002,-2.75126e-002
+ 5.916250000000e-002,-2.75126e-002
+ 5.916875000000e-002,-2.75126e-002
+ 5.917500000000e-002,-2.75126e-002
+ 5.918125000000e-002,-2.75126e-002
+ 5.918750000000e-002,-2.75126e-002
+ 5.919375000000e-002,-2.75126e-002
+ 5.920000000000e-002,-2.75126e-002
+ 5.920625000000e-002,-2.75126e-002
+ 5.921250000000e-002,-2.75126e-002
+ 5.921875000000e-002,-2.75126e-002
+ 5.922500000000e-002,-2.75126e-002
+ 5.923125000000e-002,-2.75126e-002
+ 5.923750000000e-002,-2.75126e-002
+ 5.924375000000e-002,-2.75126e-002
+ 5.925000000000e-002,-2.75126e-002
+ 5.925625000000e-002,-2.75126e-002
+ 5.926250000000e-002,-2.75126e-002
+ 5.926875000000e-002,-2.75126e-002
+ 5.927500000000e-002,-2.75126e-002
+ 5.928125000000e-002,-2.75126e-002
+ 5.928750000000e-002,-2.75126e-002
+ 5.929375000000e-002,-2.75126e-002
+ 5.930000000000e-002,-2.75126e-002
+ 5.930625000000e-002,-2.75126e-002
+ 5.931250000000e-002,-2.75126e-002
+ 5.931875000000e-002,-2.75126e-002
+ 5.932500000000e-002,-2.75126e-002
+ 5.933125000000e-002,-2.75126e-002
+ 5.933750000000e-002,-2.75126e-002
+ 5.934375000000e-002,-2.75126e-002
+ 5.935000000000e-002,-2.75126e-002
+ 5.935625000000e-002,-2.75126e-002
+ 5.936250000000e-002,-2.75126e-002
+ 5.936875000000e-002,-2.24876e-002
+ 5.937500000000e-002,-2.75126e-002
+ 5.938125000000e-002,-2.75126e-002
+ 5.938750000000e-002,-2.75126e-002
+ 5.939375000000e-002,-2.75126e-002
+ 5.940000000000e-002,-2.75126e-002
+ 5.940625000000e-002,-2.75126e-002
+ 5.941250000000e-002,-2.75126e-002
+ 5.941875000000e-002,-2.75126e-002
+ 5.942500000000e-002,-2.75126e-002
+ 5.943125000000e-002,-2.75126e-002
+ 5.943750000000e-002,-2.75126e-002
+ 5.944375000000e-002,-2.75126e-002
+ 5.945000000000e-002,-2.75126e-002
+ 5.945625000000e-002,-2.75126e-002
+ 5.946250000000e-002,-2.75126e-002
+ 5.946875000000e-002,-2.75126e-002
+ 5.947500000000e-002,-2.75126e-002
+ 5.948125000000e-002,-2.75126e-002
+ 5.948750000000e-002,-2.75126e-002
+ 5.949375000000e-002,-2.75126e-002
+ 5.950000000000e-002,-2.75126e-002
+ 5.950625000000e-002,-2.75126e-002
+ 5.951250000000e-002,-2.75126e-002
+ 5.951875000000e-002,-2.75126e-002
+ 5.952500000000e-002,-2.75126e-002
+ 5.953125000000e-002,-2.75126e-002
+ 5.953750000000e-002,-2.75126e-002
+ 5.954375000000e-002,-2.75126e-002
+ 5.955000000000e-002,-2.75126e-002
+ 5.955625000000e-002,-2.75126e-002
+ 5.956250000000e-002,-2.75126e-002
+ 5.956875000000e-002,-2.75126e-002
+ 5.957500000000e-002,-2.75126e-002
+ 5.958125000000e-002,-2.75126e-002
+ 5.958750000000e-002,-2.75126e-002
+ 5.959375000000e-002,-2.75126e-002
+ 5.960000000000e-002,-2.75126e-002
+ 5.960625000000e-002,-2.75126e-002
+ 5.961250000000e-002,-2.75126e-002
+ 5.961875000000e-002,-2.75126e-002
+ 5.962500000000e-002,-2.75126e-002
+ 5.963125000000e-002,-2.75126e-002
+ 5.963750000000e-002,-2.75126e-002
+ 5.964375000000e-002,-2.75126e-002
+ 5.965000000000e-002,-2.75126e-002
+ 5.965625000000e-002,-2.75126e-002
+ 5.966250000000e-002,-2.75126e-002
+ 5.966875000000e-002,-2.75126e-002
+ 5.967500000000e-002,-2.75126e-002
+ 5.968125000000e-002,-2.75126e-002
+ 5.968750000000e-002,-2.75126e-002
+ 5.969375000000e-002,-2.75126e-002
+ 5.970000000000e-002,-2.75126e-002
+ 5.970625000000e-002,-2.75126e-002
+ 5.971250000000e-002,-2.75126e-002
+ 5.971875000000e-002,-2.75126e-002
+ 5.972500000000e-002,-2.75126e-002
+ 5.973125000000e-002,-2.75126e-002
+ 5.973750000000e-002,-2.75126e-002
+ 5.974375000000e-002,-2.75126e-002
+ 5.975000000000e-002,-2.75126e-002
+ 5.975625000000e-002,-2.75126e-002
+ 5.976250000000e-002,-2.75126e-002
+ 5.976875000000e-002,-2.75126e-002
+ 5.977500000000e-002,-2.24876e-002
+ 5.978125000000e-002,-2.75126e-002
+ 5.978750000000e-002,-2.75126e-002
+ 5.979375000000e-002,-2.75126e-002
+ 5.980000000000e-002,-2.75126e-002
+ 5.980625000000e-002,-2.75126e-002
+ 5.981250000000e-002,-2.75126e-002
+ 5.981875000000e-002,-2.75126e-002
+ 5.982500000000e-002,-2.75126e-002
+ 5.983125000000e-002,-2.75126e-002
+ 5.983750000000e-002,-2.75126e-002
+ 5.984375000000e-002,-2.75126e-002
+ 5.985000000000e-002,-2.75126e-002
+ 5.985625000000e-002,-2.75126e-002
+ 5.986250000000e-002,-2.24876e-002
+ 5.986875000000e-002,-2.75126e-002
+ 5.987500000000e-002,-2.75126e-002
+ 5.988125000000e-002,-2.24876e-002
+ 5.988750000000e-002,-2.75126e-002
+ 5.989375000000e-002,-2.75126e-002
+ 5.990000000000e-002,-2.75126e-002
+ 5.990625000000e-002,-2.75126e-002
+ 5.991250000000e-002,-2.75126e-002
+ 5.991875000000e-002,-2.75126e-002
+ 5.992500000000e-002,-2.75126e-002
+ 5.993125000000e-002,-2.75126e-002
+ 5.993750000000e-002,-2.75126e-002
+ 5.994375000000e-002,-2.75126e-002
+ 5.995000000000e-002,-2.75126e-002
+ 5.995625000000e-002,-2.75126e-002
+ 5.996250000000e-002,-2.75126e-002
+ 5.996875000000e-002,-2.75126e-002
+ 5.997500000000e-002,-2.75126e-002
+ 5.998125000000e-002,-2.75126e-002
+ 5.998750000000e-002,-2.75126e-002
+ 5.999375000000e-002,-2.75126e-002
+ 6.000000000000e-002,-2.75126e-002
+ 6.000625000000e-002,-2.75126e-002
+ 6.001250000000e-002,-2.75126e-002
+ 6.001875000000e-002,-2.75126e-002
+ 6.002500000000e-002,-2.75126e-002
+ 6.003125000000e-002,-2.75126e-002
+ 6.003750000000e-002,-2.75126e-002
+ 6.004375000000e-002,-2.75126e-002
+ 6.005000000000e-002,-2.75126e-002
+ 6.005625000000e-002,-2.75126e-002
+ 6.006250000000e-002,-2.75126e-002
+ 6.006875000000e-002,-2.24876e-002
+ 6.007500000000e-002,-2.24876e-002
+ 6.008125000000e-002,-2.75126e-002
+ 6.008750000000e-002,-2.75126e-002
+ 6.009375000000e-002,-2.75126e-002
+ 6.010000000000e-002,-2.75126e-002
+ 6.010625000000e-002,-2.75126e-002
+ 6.011250000000e-002,-2.75126e-002
+ 6.011875000000e-002,-2.75126e-002
+ 6.012500000000e-002,-2.75126e-002
+ 6.013125000000e-002,-2.75126e-002
+ 6.013750000000e-002,-2.75126e-002
+ 6.014375000000e-002,-2.75126e-002
+ 6.015000000000e-002,-2.75126e-002
+ 6.015625000000e-002,-2.75126e-002
+ 6.016250000000e-002,-2.75126e-002
+ 6.016875000000e-002,-2.75126e-002
+ 6.017500000000e-002,-2.75126e-002
+ 6.018125000000e-002,-2.75126e-002
+ 6.018750000000e-002,-2.75126e-002
+ 6.019375000000e-002,-2.75126e-002
+ 6.020000000000e-002,-2.75126e-002
+ 6.020625000000e-002,-2.75126e-002
+ 6.021250000000e-002,-2.75126e-002
+ 6.021875000000e-002,-2.24876e-002
+ 6.022500000000e-002,-2.75126e-002
+ 6.023125000000e-002,-2.75126e-002
+ 6.023750000000e-002,-2.75126e-002
+ 6.024375000000e-002,-2.75126e-002
+ 6.025000000000e-002,-2.75126e-002
+ 6.025625000000e-002,-2.75126e-002
+ 6.026250000000e-002,-2.75126e-002
+ 6.026875000000e-002,-2.75126e-002
+ 6.027500000000e-002,-2.75126e-002
+ 6.028125000000e-002,-2.75126e-002
+ 6.028750000000e-002,-2.24876e-002
+ 6.029375000000e-002,-2.75126e-002
+ 6.030000000000e-002,-2.75126e-002
+ 6.030625000000e-002,-2.75126e-002
+ 6.031250000000e-002,-2.75126e-002
+ 6.031875000000e-002,-2.75126e-002
+ 6.032500000000e-002,-2.75126e-002
+ 6.033125000000e-002,-2.75126e-002
+ 6.033750000000e-002,-2.75126e-002
+ 6.034375000000e-002,-2.24876e-002
+ 6.035000000000e-002,-2.75126e-002
+ 6.035625000000e-002,-2.75126e-002
+ 6.036250000000e-002,-2.75126e-002
+ 6.036875000000e-002,-2.75126e-002
+ 6.037500000000e-002,-2.75126e-002
+ 6.038125000000e-002,-2.75126e-002
+ 6.038750000000e-002,-2.75126e-002
+ 6.039375000000e-002,-2.75126e-002
+ 6.040000000000e-002,-2.75126e-002
+ 6.040625000000e-002,-2.75126e-002
+ 6.041250000000e-002,-2.75126e-002
+ 6.041875000000e-002,-2.75126e-002
+ 6.042500000000e-002,-2.75126e-002
+ 6.043125000000e-002,-2.75126e-002
+ 6.043750000000e-002,-2.75126e-002
+ 6.044375000000e-002,-2.75126e-002
+ 6.045000000000e-002,-2.75126e-002
+ 6.045625000000e-002,-2.75126e-002
+ 6.046250000000e-002,-2.75126e-002
+ 6.046875000000e-002,-2.75126e-002
+ 6.047500000000e-002,-2.75126e-002
+ 6.048125000000e-002,-2.75126e-002
+ 6.048750000000e-002,-2.75126e-002
+ 6.049375000000e-002,-2.75126e-002
+ 6.050000000000e-002,-2.75126e-002
+ 6.050625000000e-002,-2.75126e-002
+ 6.051250000000e-002,-2.75126e-002
+ 6.051875000000e-002,-2.75126e-002
+ 6.052500000000e-002,-2.75126e-002
+ 6.053125000000e-002,-2.75126e-002
+ 6.053750000000e-002,-2.75126e-002
+ 6.054375000000e-002,-2.75126e-002
+ 6.055000000000e-002,-2.75126e-002
+ 6.055625000000e-002,-2.75126e-002
+ 6.056250000000e-002,-2.75126e-002
+ 6.056875000000e-002,-2.75126e-002
+ 6.057500000000e-002,-2.75126e-002
+ 6.058125000000e-002,-2.75126e-002
+ 6.058750000000e-002,-2.75126e-002
+ 6.059375000000e-002,-2.75126e-002
+ 6.060000000000e-002,-2.75126e-002
+ 6.060625000000e-002,-2.75126e-002
+ 6.061250000000e-002,-2.24876e-002
+ 6.061875000000e-002,-2.75126e-002
+ 6.062500000000e-002,-2.75126e-002
+ 6.063125000000e-002,-2.75126e-002
+ 6.063750000000e-002,-2.75126e-002
+ 6.064375000000e-002,-2.75126e-002
+ 6.065000000000e-002,-2.75126e-002
+ 6.065625000000e-002,-2.75126e-002
+ 6.066250000000e-002,-2.75126e-002
+ 6.066875000000e-002,-2.75126e-002
+ 6.067500000000e-002,-2.75126e-002
+ 6.068125000000e-002,-2.75126e-002
+ 6.068750000000e-002,-2.75126e-002
+ 6.069375000000e-002,-2.75126e-002
+ 6.070000000000e-002,-2.75126e-002
+ 6.070625000000e-002,-2.75126e-002
+ 6.071250000000e-002,-2.75126e-002
+ 6.071875000000e-002,-2.75126e-002
+ 6.072500000000e-002,-2.75126e-002
+ 6.073125000000e-002,-2.24876e-002
+ 6.073750000000e-002,-2.75126e-002
+ 6.074375000000e-002,-2.75126e-002
+ 6.075000000000e-002,-2.75126e-002
+ 6.075625000000e-002,-2.75126e-002
+ 6.076250000000e-002,-2.75126e-002
+ 6.076875000000e-002,-2.75126e-002
+ 6.077500000000e-002,-2.75126e-002
+ 6.078125000000e-002,-2.75126e-002
+ 6.078750000000e-002,-2.75126e-002
+ 6.079375000000e-002,-2.75126e-002
+ 6.080000000000e-002,-2.75126e-002
+ 6.080625000000e-002,-2.75126e-002
+ 6.081250000000e-002,-2.75126e-002
+ 6.081875000000e-002,-2.75126e-002
+ 6.082500000000e-002,-2.75126e-002
+ 6.083125000000e-002,-2.75126e-002
+ 6.083750000000e-002,-2.75126e-002
+ 6.084375000000e-002,-2.24876e-002
+ 6.085000000000e-002,-2.75126e-002
+ 6.085625000000e-002,-2.75126e-002
+ 6.086250000000e-002,-2.75126e-002
+ 6.086875000000e-002,-2.75126e-002
+ 6.087500000000e-002,-2.75126e-002
+ 6.088125000000e-002,-2.75126e-002
+ 6.088750000000e-002,-2.75126e-002
+ 6.089375000000e-002,-2.75126e-002
+ 6.090000000000e-002,-2.75126e-002
+ 6.090625000000e-002,-2.75126e-002
+ 6.091250000000e-002,-2.75126e-002
+ 6.091875000000e-002,-2.75126e-002
+ 6.092500000000e-002,-2.75126e-002
+ 6.093125000000e-002,-2.75126e-002
+ 6.093750000000e-002,-2.75126e-002
+ 6.094375000000e-002,-2.75126e-002
+ 6.095000000000e-002,-2.75126e-002
+ 6.095625000000e-002,-2.75126e-002
+ 6.096250000000e-002,-2.75126e-002
+ 6.096875000000e-002,-2.75126e-002
+ 6.097500000000e-002,-2.75126e-002
+ 6.098125000000e-002,-2.75126e-002
+ 6.098750000000e-002,-2.75126e-002
+ 6.099375000000e-002,-2.75126e-002
+ 6.100000000000e-002,-2.75126e-002
+ 6.100625000000e-002,-2.24876e-002
+ 6.101250000000e-002,-2.75126e-002
+ 6.101875000000e-002,-2.75126e-002
+ 6.102500000000e-002,-2.75126e-002
+ 6.103125000000e-002,-2.75126e-002
+ 6.103750000000e-002,-2.75126e-002
+ 6.104375000000e-002,-2.75126e-002
+ 6.105000000000e-002,-2.75126e-002
+ 6.105625000000e-002,-2.75126e-002
+ 6.106250000000e-002,-2.75126e-002
+ 6.106875000000e-002,-2.75126e-002
+ 6.107500000000e-002,-2.75126e-002
+ 6.108125000000e-002,-2.75126e-002
+ 6.108750000000e-002,-2.75126e-002
+ 6.109375000000e-002,-2.75126e-002
+ 6.110000000000e-002,-2.75126e-002
+ 6.110625000000e-002,-2.75126e-002
+ 6.111250000000e-002,-2.75126e-002
+ 6.111875000000e-002,-2.75126e-002
+ 6.112500000000e-002,-2.75126e-002
+ 6.113125000000e-002,-2.75126e-002
+ 6.113750000000e-002,-2.75126e-002
+ 6.114375000000e-002,-2.75126e-002
+ 6.115000000000e-002,-2.75126e-002
+ 6.115625000000e-002,-2.75126e-002
+ 6.116250000000e-002,-2.75126e-002
+ 6.116875000000e-002,-2.24876e-002
+ 6.117500000000e-002,-2.75126e-002
+ 6.118125000000e-002,-2.75126e-002
+ 6.118750000000e-002,-2.75126e-002
+ 6.119375000000e-002,-2.24876e-002
+ 6.120000000000e-002,-2.75126e-002
+ 6.120625000000e-002,-2.75126e-002
+ 6.121250000000e-002,-2.75126e-002
+ 6.121875000000e-002,-2.75126e-002
+ 6.122500000000e-002,-2.75126e-002
+ 6.123125000000e-002,-2.75126e-002
+ 6.123750000000e-002,-2.75126e-002
+ 6.124375000000e-002,-2.75126e-002
+ 6.125000000000e-002,-2.75126e-002
+ 6.125625000000e-002,-2.75126e-002
+ 6.126250000000e-002,-2.75126e-002
+ 6.126875000000e-002,-2.75126e-002
+ 6.127500000000e-002,-2.75126e-002
+ 6.128125000000e-002,-2.75126e-002
+ 6.128750000000e-002,-2.75126e-002
+ 6.129375000000e-002,-2.75126e-002
+ 6.130000000000e-002,-2.75126e-002
+ 6.130625000000e-002,-2.75126e-002
+ 6.131250000000e-002,-2.75126e-002
+ 6.131875000000e-002,-2.24876e-002
+ 6.132500000000e-002,-2.75126e-002
+ 6.133125000000e-002,-2.75126e-002
+ 6.133750000000e-002,-2.75126e-002
+ 6.134375000000e-002,-2.75126e-002
+ 6.135000000000e-002,-2.75126e-002
+ 6.135625000000e-002,-2.75126e-002
+ 6.136250000000e-002,-2.75126e-002
+ 6.136875000000e-002,-2.75126e-002
+ 6.137500000000e-002,-2.75126e-002
+ 6.138125000000e-002,-2.75126e-002
+ 6.138750000000e-002,-2.75126e-002
+ 6.139375000000e-002,-2.75126e-002
+ 6.140000000000e-002,-2.75126e-002
+ 6.140625000000e-002,-2.75126e-002
+ 6.141250000000e-002,-2.75126e-002
+ 6.141875000000e-002,-2.75126e-002
+ 6.142500000000e-002,-2.75126e-002
+ 6.143125000000e-002,-2.75126e-002
+ 6.143750000000e-002,-2.75126e-002
+ 6.144375000000e-002,-2.75126e-002
+ 6.145000000000e-002,-2.75126e-002
+ 6.145625000000e-002,-2.75126e-002
+ 6.146250000000e-002,-2.75126e-002
+ 6.146875000000e-002,-2.24876e-002
+ 6.147500000000e-002,-2.75126e-002
+ 6.148125000000e-002,-2.75126e-002
+ 6.148750000000e-002,-2.75126e-002
+ 6.149375000000e-002,-2.75126e-002
+ 6.150000000000e-002,-2.75126e-002
+ 6.150625000000e-002,-2.75126e-002
+ 6.151250000000e-002,-2.75126e-002
+ 6.151875000000e-002,-2.75126e-002
+ 6.152500000000e-002,-2.75126e-002
+ 6.153125000000e-002,-2.75126e-002
+ 6.153750000000e-002,-2.75126e-002
+ 6.154375000000e-002,-2.75126e-002
+ 6.155000000000e-002,-2.75126e-002
+ 6.155625000000e-002,-2.75126e-002
+ 6.156250000000e-002,-2.75126e-002
+ 6.156875000000e-002,-2.75126e-002
+ 6.157500000000e-002,-2.75126e-002
+ 6.158125000000e-002,-2.75126e-002
+ 6.158750000000e-002,-2.75126e-002
+ 6.159375000000e-002,-2.75126e-002
+ 6.160000000000e-002,-2.75126e-002
+ 6.160625000000e-002,-2.75126e-002
+ 6.161250000000e-002,-2.75126e-002
+ 6.161875000000e-002,-2.75126e-002
+ 6.162500000000e-002,-2.75126e-002
+ 6.163125000000e-002,-2.75126e-002
+ 6.163750000000e-002,-2.75126e-002
+ 6.164375000000e-002,-2.75126e-002
+ 6.165000000000e-002,-2.75126e-002
+ 6.165625000000e-002,-2.75126e-002
+ 6.166250000000e-002,-2.75126e-002
+ 6.166875000000e-002,-2.75126e-002
+ 6.167500000000e-002,-2.24876e-002
+ 6.168125000000e-002,-2.75126e-002
+ 6.168750000000e-002,-2.75126e-002
+ 6.169375000000e-002,-2.75126e-002
+ 6.170000000000e-002,-2.75126e-002
+ 6.170625000000e-002,-2.75126e-002
+ 6.171250000000e-002,-2.75126e-002
+ 6.171875000000e-002,-2.75126e-002
+ 6.172500000000e-002,-2.75126e-002
+ 6.173125000000e-002,-2.75126e-002
+ 6.173750000000e-002,-2.75126e-002
+ 6.174375000000e-002,-2.75126e-002
+ 6.175000000000e-002,-2.75126e-002
+ 6.175625000000e-002,-2.75126e-002
+ 6.176250000000e-002,-2.75126e-002
+ 6.176875000000e-002,-2.75126e-002
+ 6.177500000000e-002,-2.75126e-002
+ 6.178125000000e-002,-2.75126e-002
+ 6.178750000000e-002,-2.75126e-002
+ 6.179375000000e-002,-2.75126e-002
+ 6.180000000000e-002,-2.75126e-002
+ 6.180625000000e-002,-2.75126e-002
+ 6.181250000000e-002,-2.75126e-002
+ 6.181875000000e-002,-2.75126e-002
+ 6.182500000000e-002,-2.75126e-002
+ 6.183125000000e-002,-2.75126e-002
+ 6.183750000000e-002,-2.75126e-002
+ 6.184375000000e-002,-2.75126e-002
+ 6.185000000000e-002,-2.75126e-002
+ 6.185625000000e-002,-2.75126e-002
+ 6.186250000000e-002,-2.75126e-002
+ 6.186875000000e-002,-2.75126e-002
+ 6.187500000000e-002,-2.75126e-002
+ 6.188125000000e-002,-2.24876e-002
+ 6.188750000000e-002,-2.75126e-002
+ 6.189375000000e-002,-2.75126e-002
+ 6.190000000000e-002,-2.75126e-002
+ 6.190625000000e-002,-2.75126e-002
+ 6.191250000000e-002,-2.75126e-002
+ 6.191875000000e-002,-2.75126e-002
+ 6.192500000000e-002,-2.75126e-002
+ 6.193125000000e-002,-2.75126e-002
+ 6.193750000000e-002,-2.75126e-002
+ 6.194375000000e-002,-2.75126e-002
+ 6.195000000000e-002,-2.75126e-002
+ 6.195625000000e-002,-2.24876e-002
+ 6.196250000000e-002,-2.75126e-002
+ 6.196875000000e-002,-2.75126e-002
+ 6.197500000000e-002,-2.75126e-002
+ 6.198125000000e-002,-2.75126e-002
+ 6.198750000000e-002,-2.75126e-002
+ 6.199375000000e-002,-2.75126e-002
+ 6.200000000000e-002,-2.75126e-002
+ 6.200625000000e-002,-2.75126e-002
+ 6.201250000000e-002,-2.75126e-002
+ 6.201875000000e-002,-2.75126e-002
+ 6.202500000000e-002,-2.75126e-002
+ 6.203125000000e-002,-2.75126e-002
+ 6.203750000000e-002,-2.75126e-002
+ 6.204375000000e-002,-2.75126e-002
+ 6.205000000000e-002,-2.75126e-002
+ 6.205625000000e-002,-2.75126e-002
+ 6.206250000000e-002,-2.75126e-002
+ 6.206875000000e-002,-2.75126e-002
+ 6.207500000000e-002,-2.75126e-002
+ 6.208125000000e-002,-2.75126e-002
+ 6.208750000000e-002,-2.75126e-002
+ 6.209375000000e-002,-2.75126e-002
+ 6.210000000000e-002,-2.75126e-002
+ 6.210625000000e-002,-2.75126e-002
+ 6.211250000000e-002,-2.75126e-002
+ 6.211875000000e-002,-2.75126e-002
+ 6.212500000000e-002,-2.75126e-002
+ 6.213125000000e-002,-2.75126e-002
+ 6.213750000000e-002,-2.75126e-002
+ 6.214375000000e-002,-2.75126e-002
+ 6.215000000000e-002,-2.75126e-002
+ 6.215625000000e-002,-2.75126e-002
+ 6.216250000000e-002,-2.75126e-002
+ 6.216875000000e-002,-2.75126e-002
+ 6.217500000000e-002,-2.75126e-002
+ 6.218125000000e-002,-2.75126e-002
+ 6.218750000000e-002,-2.75126e-002
+ 6.219375000000e-002,-2.75126e-002
+ 6.220000000000e-002,-2.75126e-002
+ 6.220625000000e-002,-2.75126e-002
+ 6.221250000000e-002,-2.75126e-002
+ 6.221875000000e-002,-2.75126e-002
+ 6.222500000000e-002,-2.75126e-002
+ 6.223125000000e-002,-2.75126e-002
+ 6.223750000000e-002,-2.75126e-002
+ 6.224375000000e-002,-2.75126e-002
+ 6.225000000000e-002,-2.75126e-002
+ 6.225625000000e-002,-2.75126e-002
+ 6.226250000000e-002,-2.75126e-002
+ 6.226875000000e-002,-2.75126e-002
+ 6.227500000000e-002,-2.75126e-002
+ 6.228125000000e-002,-2.24876e-002
+ 6.228750000000e-002,-2.75126e-002
+ 6.229375000000e-002,-2.75126e-002
+ 6.230000000000e-002,-2.75126e-002
+ 6.230625000000e-002,-2.75126e-002
+ 6.231250000000e-002,-2.75126e-002
+ 6.231875000000e-002,-2.75126e-002
+ 6.232500000000e-002,-2.75126e-002
+ 6.233125000000e-002,-2.75126e-002
+ 6.233750000000e-002,-2.75126e-002
+ 6.234375000000e-002,-2.75126e-002
+ 6.235000000000e-002,-2.75126e-002
+ 6.235625000000e-002,-2.75126e-002
+ 6.236250000000e-002,-2.75126e-002
+ 6.236875000000e-002,-2.75126e-002
+ 6.237500000000e-002,-2.75126e-002
+ 6.238125000000e-002,-2.75126e-002
+ 6.238750000000e-002,-2.75126e-002
+ 6.239375000000e-002,-2.75126e-002
+ 6.240000000000e-002,-2.75126e-002
+ 6.240625000000e-002,-2.75126e-002
+ 6.241250000000e-002,-2.75126e-002
+ 6.241875000000e-002,-2.75126e-002
+ 6.242500000000e-002,-2.75126e-002
+ 6.243125000000e-002,-2.75126e-002
+ 6.243750000000e-002,-2.75126e-002
+ 6.244375000000e-002,-2.75126e-002
+ 6.245000000000e-002,-2.75126e-002
+ 6.245625000000e-002,-2.75126e-002
+ 6.246250000000e-002,-2.75126e-002
+ 6.246875000000e-002,-2.75126e-002
+ 6.247500000000e-002,-2.75126e-002
+ 6.248125000000e-002,-2.75126e-002
+ 6.248750000000e-002,-2.75126e-002
+ 6.249375000000e-002,-2.75126e-002
+ 6.250000000000e-002,-2.75126e-002
+ 6.250625000000e-002,-2.75126e-002
+ 6.251250000000e-002,-2.24876e-002
+ 6.251875000000e-002,-2.75126e-002
+ 6.252500000000e-002,-2.75126e-002
+ 6.253125000000e-002,-2.75126e-002
+ 6.253750000000e-002,-2.75126e-002
+ 6.254375000000e-002,-2.75126e-002
+ 6.255000000000e-002,-2.75126e-002
+ 6.255625000000e-002,-2.75126e-002
+ 6.256250000000e-002,-2.75126e-002
+ 6.256875000000e-002,-2.75126e-002
+ 6.257500000000e-002,-2.75126e-002
+ 6.258125000000e-002,-2.24876e-002
+ 6.258750000000e-002,-2.75126e-002
+ 6.259375000000e-002,-2.24876e-002
+ 6.260000000000e-002,-2.75126e-002
+ 6.260625000000e-002,-2.75126e-002
+ 6.261250000000e-002,-2.75126e-002
+ 6.261875000000e-002,-2.75126e-002
+ 6.262500000000e-002,-2.75126e-002
+ 6.263125000000e-002,-2.75126e-002
+ 6.263750000000e-002,-2.75126e-002
+ 6.264375000000e-002,-2.24876e-002
+ 6.265000000000e-002,-2.75126e-002
+ 6.265625000000e-002,-2.75126e-002
+ 6.266250000000e-002,-2.75126e-002
+ 6.266875000000e-002,-2.75126e-002
+ 6.267500000000e-002,-2.75126e-002
+ 6.268125000000e-002,-2.75126e-002
+ 6.268750000000e-002,-2.75126e-002
+ 6.269375000000e-002,-2.75126e-002
+ 6.270000000000e-002,-2.75126e-002
+ 6.270625000000e-002,-2.75126e-002
+ 6.271250000000e-002,-2.24876e-002
+ 6.271875000000e-002,-2.75126e-002
+ 6.272500000000e-002,-2.75126e-002
+ 6.273125000000e-002,-2.75126e-002
+ 6.273750000000e-002,-2.75126e-002
+ 6.274375000000e-002,-2.75126e-002
+ 6.275000000000e-002,-2.75126e-002
+ 6.275625000000e-002,-2.75126e-002
+ 6.276250000000e-002,-2.75126e-002
+ 6.276875000000e-002,-2.75126e-002
+ 6.277500000000e-002,-2.75126e-002
+ 6.278125000000e-002,-2.24876e-002
+ 6.278750000000e-002,-2.75126e-002
+ 6.279375000000e-002,-2.75126e-002
+ 6.280000000000e-002,-2.75126e-002
+ 6.280625000000e-002,-2.75126e-002
+ 6.281250000000e-002,-2.75126e-002
+ 6.281875000000e-002,-2.75126e-002
+ 6.282500000000e-002,-2.75126e-002
+ 6.283125000000e-002,-2.75126e-002
+ 6.283750000000e-002,-2.75126e-002
+ 6.284375000000e-002,-2.75126e-002
+ 6.285000000000e-002,-2.75126e-002
+ 6.285625000000e-002,-2.75126e-002
+ 6.286250000000e-002,-2.75126e-002
+ 6.286875000000e-002,-2.75126e-002
+ 6.287500000000e-002,-2.75126e-002
+ 6.288125000000e-002,-2.75126e-002
+ 6.288750000000e-002,-2.75126e-002
+ 6.289375000000e-002,-2.75126e-002
+ 6.290000000000e-002,-2.75126e-002
+ 6.290625000000e-002,-2.75126e-002
+ 6.291250000000e-002,-2.75126e-002
+ 6.291875000000e-002,-2.75126e-002
+ 6.292500000000e-002,-2.75126e-002
+ 6.293125000000e-002,-2.75126e-002
+ 6.293750000000e-002,-2.75126e-002
+ 6.294375000000e-002,-2.75126e-002
+ 6.295000000000e-002,-2.75126e-002
+ 6.295625000000e-002,-2.75126e-002
+ 6.296250000000e-002,-2.75126e-002
+ 6.296875000000e-002,-2.75126e-002
+ 6.297500000000e-002,-2.75126e-002
+ 6.298125000000e-002,-2.75126e-002
+ 6.298750000000e-002,-2.75126e-002
+ 6.299375000000e-002,-2.75126e-002
+ 6.300000000000e-002,-2.75126e-002
+ 6.300625000000e-002,-2.75126e-002
+ 6.301250000000e-002,-2.75126e-002
+ 6.301875000000e-002,-2.75126e-002
+ 6.302500000000e-002,-2.75126e-002
+ 6.303125000000e-002,-2.75126e-002
+ 6.303750000000e-002,-2.75126e-002
+ 6.304375000000e-002,-2.75126e-002
+ 6.305000000000e-002,-2.75126e-002
+ 6.305625000000e-002,-2.75126e-002
+ 6.306250000000e-002,-2.75126e-002
+ 6.306875000000e-002,-2.75126e-002
+ 6.307500000000e-002,-2.75126e-002
+ 6.308125000000e-002,-2.75126e-002
+ 6.308750000000e-002,-2.75126e-002
+ 6.309375000000e-002,-2.75126e-002
+ 6.310000000000e-002,-2.75126e-002
+ 6.310625000000e-002,-2.75126e-002
+ 6.311250000000e-002,-2.75126e-002
+ 6.311875000000e-002,-2.75126e-002
+ 6.312500000000e-002,-2.75126e-002
+ 6.313125000000e-002,-2.75126e-002
+ 6.313750000000e-002,-2.75126e-002
+ 6.314375000000e-002,-2.75126e-002
+ 6.315000000000e-002,-2.75126e-002
+ 6.315625000000e-002,-2.75126e-002
+ 6.316250000000e-002,-2.75126e-002
+ 6.316875000000e-002,-2.75126e-002
+ 6.317500000000e-002,-2.75126e-002
+ 6.318125000000e-002,-2.75126e-002
+ 6.318750000000e-002,-2.75126e-002
+ 6.319375000000e-002,-2.75126e-002
+ 6.320000000000e-002,-2.75126e-002
+ 6.320625000000e-002,-2.75126e-002
+ 6.321250000000e-002,-2.75126e-002
+ 6.321875000000e-002,-2.75126e-002
+ 6.322500000000e-002,-2.75126e-002
+ 6.323125000000e-002,-2.75126e-002
+ 6.323750000000e-002,-2.75126e-002
+ 6.324375000000e-002,-2.75126e-002
+ 6.325000000000e-002,-2.75126e-002
+ 6.325625000000e-002,-2.75126e-002
+ 6.326250000000e-002,-2.75126e-002
+ 6.326875000000e-002,-2.75126e-002
+ 6.327500000000e-002,-2.75126e-002
+ 6.328125000000e-002,-2.75126e-002
+ 6.328750000000e-002,-2.75126e-002
+ 6.329375000000e-002,-2.75126e-002
+ 6.330000000000e-002,-2.75126e-002
+ 6.330625000000e-002,-2.75126e-002
+ 6.331250000000e-002,-2.75126e-002
+ 6.331875000000e-002,-2.75126e-002
+ 6.332500000000e-002,-2.75126e-002
+ 6.333125000000e-002,-2.75126e-002
+ 6.333750000000e-002,-2.75126e-002
+ 6.334375000000e-002,-2.75126e-002
+ 6.335000000000e-002,-2.75126e-002
+ 6.335625000000e-002,-2.75126e-002
+ 6.336250000000e-002,-2.75126e-002
+ 6.336875000000e-002,-2.75126e-002
+ 6.337500000000e-002,-2.75126e-002
+ 6.338125000000e-002,-2.75126e-002
+ 6.338750000000e-002,-2.75126e-002
+ 6.339375000000e-002,-2.75126e-002
+ 6.340000000000e-002,-2.75126e-002
+ 6.340625000000e-002,-2.75126e-002
+ 6.341250000000e-002,-2.75126e-002
+ 6.341875000000e-002,-2.75126e-002
+ 6.342500000000e-002,-2.75126e-002
+ 6.343125000000e-002,-2.75126e-002
+ 6.343750000000e-002,-2.75126e-002
+ 6.344375000000e-002,-2.75126e-002
+ 6.345000000000e-002,-2.75126e-002
+ 6.345625000000e-002,-2.75126e-002
+ 6.346250000000e-002,-2.75126e-002
+ 6.346875000000e-002,-2.75126e-002
+ 6.347500000000e-002,-2.75126e-002
+ 6.348125000000e-002,-2.75126e-002
+ 6.348750000000e-002,-2.75126e-002
+ 6.349375000000e-002,-2.75126e-002
+ 6.350000000000e-002,-2.75126e-002
+ 6.350625000000e-002,-2.75126e-002
+ 6.351250000000e-002,-2.75126e-002
+ 6.351875000000e-002,-2.75126e-002
+ 6.352500000000e-002,-2.75126e-002
+ 6.353125000000e-002,-2.75126e-002
+ 6.353750000000e-002,-2.75126e-002
+ 6.354375000000e-002,-2.75126e-002
+ 6.355000000000e-002,-2.75126e-002
+ 6.355625000000e-002,-2.75126e-002
+ 6.356250000000e-002,-2.75126e-002
+ 6.356875000000e-002,-2.75126e-002
+ 6.357500000000e-002,-2.75126e-002
+ 6.358125000000e-002,-2.75126e-002
+ 6.358750000000e-002,-2.24876e-002
+ 6.359375000000e-002,-2.75126e-002
+ 6.360000000000e-002,-2.75126e-002
+ 6.360625000000e-002,-2.75126e-002
+ 6.361250000000e-002,-2.75126e-002
+ 6.361875000000e-002,-2.75126e-002
+ 6.362500000000e-002,-2.75126e-002
+ 6.363125000000e-002,-2.75126e-002
+ 6.363750000000e-002,-2.75126e-002
+ 6.364375000000e-002,-2.75126e-002
+ 6.365000000000e-002,-2.75126e-002
+ 6.365625000000e-002,-2.75126e-002
+ 6.366250000000e-002,-2.75126e-002
+ 6.366875000000e-002,-2.75126e-002
+ 6.367500000000e-002,-2.75126e-002
+ 6.368125000000e-002,-2.75126e-002
+ 6.368750000000e-002,-2.75126e-002
+ 6.369375000000e-002,-2.75126e-002
+ 6.370000000000e-002,-2.75126e-002
+ 6.370625000000e-002,-2.75126e-002
+ 6.371250000000e-002,-2.75126e-002
+ 6.371875000000e-002,-2.75126e-002
+ 6.372500000000e-002,-2.75126e-002
+ 6.373125000000e-002,-2.75126e-002
+ 6.373750000000e-002,-2.75126e-002
+ 6.374375000000e-002,-2.75126e-002
+ 6.375000000000e-002,-2.75126e-002
+ 6.375625000000e-002,-2.75126e-002
+ 6.376250000000e-002,-2.75126e-002
+ 6.376875000000e-002,-2.75126e-002
+ 6.377500000000e-002,-2.75126e-002
+ 6.378125000000e-002,-2.75126e-002
+ 6.378750000000e-002,-2.75126e-002
+ 6.379375000000e-002,-2.75126e-002
+ 6.380000000000e-002,-2.75126e-002
+ 6.380625000000e-002,-2.75126e-002
+ 6.381250000000e-002,-2.75126e-002
+ 6.381875000000e-002,-2.75126e-002
+ 6.382500000000e-002,-2.75126e-002
+ 6.383125000000e-002,-2.75126e-002
+ 6.383750000000e-002,-2.75126e-002
+ 6.384375000000e-002,-2.75126e-002
+ 6.385000000000e-002,-2.75126e-002
+ 6.385625000000e-002,-2.75126e-002
+ 6.386250000000e-002,-2.75126e-002
+ 6.386875000000e-002,-2.75126e-002
+ 6.387500000000e-002,-2.75126e-002
+ 6.388125000000e-002,-2.75126e-002
+ 6.388750000000e-002,-2.75126e-002
+ 6.389375000000e-002,-2.75126e-002
+ 6.390000000000e-002,-2.75126e-002
+ 6.390625000000e-002,-2.75126e-002
+ 6.391250000000e-002,-2.24876e-002
+ 6.391875000000e-002,-2.75126e-002
+ 6.392500000000e-002,-2.75126e-002
+ 6.393125000000e-002,-2.75126e-002
+ 6.393750000000e-002,-2.75126e-002
+ 6.394375000000e-002,-2.75126e-002
+ 6.395000000000e-002,-2.75126e-002
+ 6.395625000000e-002,-2.75126e-002
+ 6.396250000000e-002,-2.75126e-002
+ 6.396875000000e-002,-2.75126e-002
+ 6.397500000000e-002,-2.75126e-002
+ 6.398125000000e-002,-2.75126e-002
+ 6.398750000000e-002,-2.75126e-002
+ 6.399375000000e-002,-2.75126e-002
+ 6.400000000000e-002,-2.75126e-002
+ 6.400625000000e-002,-2.75126e-002
+ 6.401250000000e-002,-2.75126e-002
+ 6.401875000000e-002,-2.75126e-002
+ 6.402500000000e-002,-2.75126e-002
+ 6.403125000000e-002,-2.75126e-002
+ 6.403750000000e-002,-2.75126e-002
+ 6.404375000000e-002,-2.75126e-002
+ 6.405000000000e-002,-2.75126e-002
+ 6.405625000000e-002,-2.75126e-002
+ 6.406250000000e-002,-2.75126e-002
+ 6.406875000000e-002,-2.75126e-002
+ 6.407500000000e-002,-2.75126e-002
+ 6.408125000000e-002,-2.75126e-002
+ 6.408750000000e-002,-2.75126e-002
+ 6.409375000000e-002,-2.75126e-002
+ 6.410000000000e-002,-2.75126e-002
+ 6.410625000000e-002,-2.75126e-002
+ 6.411250000000e-002,-2.75126e-002
+ 6.411875000000e-002,-2.75126e-002
+ 6.412500000000e-002,-2.75126e-002
+ 6.413125000000e-002,-2.75126e-002
+ 6.413750000000e-002,-2.75126e-002
+ 6.414375000000e-002,-2.75126e-002
+ 6.415000000000e-002,-2.75126e-002
+ 6.415625000000e-002,-2.75126e-002
+ 6.416250000000e-002,-2.75126e-002
+ 6.416875000000e-002,-2.75126e-002
+ 6.417500000000e-002,-2.75126e-002
+ 6.418125000000e-002,-2.75126e-002
+ 6.418750000000e-002,-2.75126e-002
+ 6.419375000000e-002,-2.75126e-002
+ 6.420000000000e-002,-2.75126e-002
+ 6.420625000000e-002,-2.75126e-002
+ 6.421250000000e-002,-2.75126e-002
+ 6.421875000000e-002,-2.75126e-002
+ 6.422500000000e-002,-2.75126e-002
+ 6.423125000000e-002,-2.75126e-002
+ 6.423750000000e-002,-2.75126e-002
+ 6.424375000000e-002,-2.75126e-002
+ 6.425000000000e-002,-2.75126e-002
+ 6.425625000000e-002,-2.75126e-002
+ 6.426250000000e-002,-2.75126e-002
+ 6.426875000000e-002,-2.75126e-002
+ 6.427500000000e-002,-2.75126e-002
+ 6.428125000000e-002,-2.75126e-002
+ 6.428750000000e-002,-2.75126e-002
+ 6.429375000000e-002,-2.75126e-002
+ 6.430000000000e-002,-2.75126e-002
+ 6.430625000000e-002,-2.75126e-002
+ 6.431250000000e-002,-2.75126e-002
+ 6.431875000000e-002,-2.24876e-002
+ 6.432500000000e-002,-2.75126e-002
+ 6.433125000000e-002,-2.75126e-002
+ 6.433750000000e-002,-2.75126e-002
+ 6.434375000000e-002,-2.75126e-002
+ 6.435000000000e-002,-2.75126e-002
+ 6.435625000000e-002,-2.75126e-002
+ 6.436250000000e-002,-2.75126e-002
+ 6.436875000000e-002,-2.75126e-002
+ 6.437500000000e-002,-2.75126e-002
+ 6.438125000000e-002,-2.75126e-002
+ 6.438750000000e-002,-2.75126e-002
+ 6.439375000000e-002,-2.75126e-002
+ 6.440000000000e-002,-2.75126e-002
+ 6.440625000000e-002,-2.75126e-002
+ 6.441250000000e-002,-2.75126e-002
+ 6.441875000000e-002,-2.75126e-002
+ 6.442500000000e-002,-2.75126e-002
+ 6.443125000000e-002,-2.75126e-002
+ 6.443750000000e-002,-2.75126e-002
+ 6.444375000000e-002,-2.75126e-002
+ 6.445000000000e-002,-2.75126e-002
+ 6.445625000000e-002,-2.75126e-002
+ 6.446250000000e-002,-2.75126e-002
+ 6.446875000000e-002,-2.75126e-002
+ 6.447500000000e-002,-2.75126e-002
+ 6.448125000000e-002,-2.75126e-002
+ 6.448750000000e-002,-2.75126e-002
+ 6.449375000000e-002,-2.75126e-002
+ 6.450000000000e-002,-2.75126e-002
+ 6.450625000000e-002,-2.75126e-002
+ 6.451250000000e-002,-2.75126e-002
+ 6.451875000000e-002,-2.75126e-002
+ 6.452500000000e-002,-2.75126e-002
+ 6.453125000000e-002,-2.75126e-002
+ 6.453750000000e-002,-2.75126e-002
+ 6.454375000000e-002,-2.75126e-002
+ 6.455000000000e-002,-2.75126e-002
+ 6.455625000000e-002,-2.75126e-002
+ 6.456250000000e-002,-2.75126e-002
+ 6.456875000000e-002,-2.75126e-002
+ 6.457500000000e-002,-2.75126e-002
+ 6.458125000000e-002,-2.75126e-002
+ 6.458750000000e-002,-2.75126e-002
+ 6.459375000000e-002,-2.75126e-002
+ 6.460000000000e-002,-2.75126e-002
+ 6.460625000000e-002,-2.75126e-002
+ 6.461250000000e-002,-2.75126e-002
+ 6.461875000000e-002,-2.75126e-002
+ 6.462500000000e-002,-2.75126e-002
+ 6.463125000000e-002,-2.75126e-002
+ 6.463750000000e-002,-2.75126e-002
+ 6.464375000000e-002,-2.75126e-002
+ 6.465000000000e-002,-2.75126e-002
+ 6.465625000000e-002,-2.75126e-002
+ 6.466250000000e-002,-2.75126e-002
+ 6.466875000000e-002,-2.75126e-002
+ 6.467500000000e-002,-2.75126e-002
+ 6.468125000000e-002,-2.75126e-002
+ 6.468750000000e-002,-2.75126e-002
+ 6.469375000000e-002,-2.75126e-002
+ 6.470000000000e-002,-2.75126e-002
+ 6.470625000000e-002,-2.75126e-002
+ 6.471250000000e-002,-2.75126e-002
+ 6.471875000000e-002,-2.75126e-002
+ 6.472500000000e-002,-2.75126e-002
+ 6.473125000000e-002,-2.75126e-002
+ 6.473750000000e-002,-2.75126e-002
+ 6.474375000000e-002,-2.75126e-002
+ 6.475000000000e-002,-2.75126e-002
+ 6.475625000000e-002,-2.75126e-002
+ 6.476250000000e-002,-2.75126e-002
+ 6.476875000000e-002,-2.75126e-002
+ 6.477500000000e-002,-2.75126e-002
+ 6.478125000000e-002,-2.75126e-002
+ 6.478750000000e-002,-2.75126e-002
+ 6.479375000000e-002,-2.75126e-002
+ 6.480000000000e-002,-2.75126e-002
+ 6.480625000000e-002,-2.75126e-002
+ 6.481250000000e-002,-2.75126e-002
+ 6.481875000000e-002,-2.75126e-002
+ 6.482500000000e-002,-2.75126e-002
+ 6.483125000000e-002,-2.75126e-002
+ 6.483750000000e-002,-2.75126e-002
+ 6.484375000000e-002,-2.75126e-002
+ 6.485000000000e-002,-2.75126e-002
+ 6.485625000000e-002,-2.75126e-002
+ 6.486250000000e-002,-2.75126e-002
+ 6.486875000000e-002,-2.75126e-002
+ 6.487500000000e-002,-2.75126e-002
+ 6.488125000000e-002,-2.75126e-002
+ 6.488750000000e-002,-2.75126e-002
+ 6.489375000000e-002,-2.75126e-002
+ 6.490000000000e-002,-2.75126e-002
+ 6.490625000000e-002,-2.75126e-002
+ 6.491250000000e-002,-2.75126e-002
+ 6.491875000000e-002,-2.75126e-002
+ 6.492500000000e-002,-2.75126e-002
+ 6.493125000000e-002,-2.75126e-002
+ 6.493750000000e-002,-2.75126e-002
+ 6.494375000000e-002,-2.75126e-002
+ 6.495000000000e-002,-2.75126e-002
+ 6.495625000000e-002,-2.75126e-002
+ 6.496250000000e-002,-2.75126e-002
+ 6.496875000000e-002,-2.75126e-002
+ 6.497500000000e-002,-2.75126e-002
+ 6.498125000000e-002,-2.75126e-002
+ 6.498750000000e-002,-2.75126e-002
+ 6.499375000000e-002,-2.75126e-002
+ 6.500000000000e-002,-2.75126e-002
+ 6.500625000000e-002,-2.75126e-002
+ 6.501250000000e-002,-2.75126e-002
+ 6.501875000000e-002,-2.75126e-002
+ 6.502500000000e-002,-2.75126e-002
+ 6.503125000000e-002,-2.75126e-002
+ 6.503750000000e-002,-2.75126e-002
+ 6.504375000000e-002,-2.75126e-002
+ 6.505000000000e-002,-2.75126e-002
+ 6.505625000000e-002,-2.75126e-002
+ 6.506250000000e-002,-2.75126e-002
+ 6.506875000000e-002,-2.75126e-002
+ 6.507500000000e-002,-2.75126e-002
+ 6.508125000000e-002,-2.75126e-002
+ 6.508750000000e-002,-2.75126e-002
+ 6.509375000000e-002,-2.75126e-002
+ 6.510000000000e-002,-2.75126e-002
+ 6.510625000000e-002,-2.75126e-002
+ 6.511250000000e-002,-2.75126e-002
+ 6.511875000000e-002,-2.75126e-002
+ 6.512500000000e-002,-2.75126e-002
+ 6.513125000000e-002,-2.75126e-002
+ 6.513750000000e-002,-2.75126e-002
+ 6.514375000000e-002,-2.75126e-002
+ 6.515000000000e-002,-2.75126e-002
+ 6.515625000000e-002,-2.75126e-002
+ 6.516250000000e-002,-2.75126e-002
+ 6.516875000000e-002,-2.75126e-002
+ 6.517500000000e-002,-2.75126e-002
+ 6.518125000000e-002,-2.75126e-002
+ 6.518750000000e-002,-2.75126e-002
+ 6.519375000000e-002,-2.75126e-002
+ 6.520000000000e-002,-2.75126e-002
+ 6.520625000000e-002,-2.75126e-002
+ 6.521250000000e-002,-2.75126e-002
+ 6.521875000000e-002,-2.75126e-002
+ 6.522500000000e-002,-2.75126e-002
+ 6.523125000000e-002,-2.75126e-002
+ 6.523750000000e-002,-2.75126e-002
+ 6.524375000000e-002,-2.75126e-002
+ 6.525000000000e-002,-2.75126e-002
+ 6.525625000000e-002,-2.75126e-002
+ 6.526250000000e-002,-2.75126e-002
+ 6.526875000000e-002,-2.75126e-002
+ 6.527500000000e-002,-2.75126e-002
+ 6.528125000000e-002,-2.75126e-002
+ 6.528750000000e-002,-2.75126e-002
+ 6.529375000000e-002,-2.75126e-002
+ 6.530000000000e-002,-2.75126e-002
+ 6.530625000000e-002,-2.75126e-002
+ 6.531250000000e-002,-2.75126e-002
+ 6.531875000000e-002,-2.75126e-002
+ 6.532500000000e-002,-2.75126e-002
+ 6.533125000000e-002,-2.75126e-002
+ 6.533750000000e-002,-2.75126e-002
+ 6.534375000000e-002,-2.75126e-002
+ 6.535000000000e-002,-2.75126e-002
+ 6.535625000000e-002,-2.75126e-002
+ 6.536250000000e-002,-2.75126e-002
+ 6.536875000000e-002,-2.75126e-002
+ 6.537500000000e-002,-2.75126e-002
+ 6.538125000000e-002,-2.75126e-002
+ 6.538750000000e-002,-2.75126e-002
+ 6.539375000000e-002,-2.75126e-002
+ 6.540000000000e-002,-2.75126e-002
+ 6.540625000000e-002,-2.75126e-002
+ 6.541250000000e-002,-2.75126e-002
+ 6.541875000000e-002,-2.75126e-002
+ 6.542500000000e-002,-2.75126e-002
+ 6.543125000000e-002,-2.75126e-002
+ 6.543750000000e-002,-2.75126e-002
+ 6.544375000000e-002,-2.75126e-002
+ 6.545000000000e-002,-2.75126e-002
+ 6.545625000000e-002,-2.75126e-002
+ 6.546250000000e-002,-2.75126e-002
+ 6.546875000000e-002,-2.75126e-002
+ 6.547500000000e-002,-2.75126e-002
+ 6.548125000000e-002,-2.75126e-002
+ 6.548750000000e-002,-2.75126e-002
+ 6.549375000000e-002,-2.75126e-002
+ 6.550000000000e-002,-2.75126e-002
+ 6.550625000000e-002,-2.75126e-002
+ 6.551250000000e-002,-2.75126e-002
+ 6.551875000000e-002,-2.75126e-002
+ 6.552500000000e-002,-2.75126e-002
+ 6.553125000000e-002,-2.75126e-002
+ 6.553750000000e-002,-2.75126e-002
+ 6.554375000000e-002,-2.75126e-002
+ 6.555000000000e-002,-2.75126e-002
+ 6.555625000000e-002,-2.75126e-002
+ 6.556250000000e-002,-2.75126e-002
+ 6.556875000000e-002,-2.75126e-002
+ 6.557500000000e-002,-2.75126e-002
+ 6.558125000000e-002,-2.75126e-002
+ 6.558750000000e-002,-2.75126e-002
+ 6.559375000000e-002,-2.75126e-002
+ 6.560000000000e-002,-2.75126e-002
+ 6.560625000000e-002,-2.75126e-002
+ 6.561250000000e-002,-2.75126e-002
+ 6.561875000000e-002,-2.75126e-002
+ 6.562500000000e-002,-2.75126e-002
+ 6.563125000000e-002,-2.75126e-002
+ 6.563750000000e-002,-2.75126e-002
+ 6.564375000000e-002,-2.75126e-002
+ 6.565000000000e-002,-2.75126e-002
+ 6.565625000000e-002,-2.75126e-002
+ 6.566250000000e-002,-2.75126e-002
+ 6.566875000000e-002,-2.75126e-002
+ 6.567500000000e-002,-2.75126e-002
+ 6.568125000000e-002,-2.24876e-002
+ 6.568750000000e-002,-2.75126e-002
+ 6.569375000000e-002,-2.75126e-002
+ 6.570000000000e-002,-2.75126e-002
+ 6.570625000000e-002,-2.75126e-002
+ 6.571250000000e-002,-2.75126e-002
+ 6.571875000000e-002,-2.75126e-002
+ 6.572500000000e-002,-2.75126e-002
+ 6.573125000000e-002,-2.75126e-002
+ 6.573750000000e-002,-2.75126e-002
+ 6.574375000000e-002,-2.75126e-002
+ 6.575000000000e-002,-2.75126e-002
+ 6.575625000000e-002,-2.75126e-002
+ 6.576250000000e-002,-2.75126e-002
+ 6.576875000000e-002,-2.75126e-002
+ 6.577500000000e-002,-2.75126e-002
+ 6.578125000000e-002,-2.75126e-002
+ 6.578750000000e-002,-2.75126e-002
+ 6.579375000000e-002,-2.75126e-002
+ 6.580000000000e-002,-2.75126e-002
+ 6.580625000000e-002,-2.75126e-002
+ 6.581250000000e-002,-2.75126e-002
+ 6.581875000000e-002,-2.75126e-002
+ 6.582500000000e-002,-2.75126e-002
+ 6.583125000000e-002,-2.75126e-002
+ 6.583750000000e-002,-2.75126e-002
+ 6.584375000000e-002,-2.75126e-002
+ 6.585000000000e-002,-2.24876e-002
+ 6.585625000000e-002,-2.75126e-002
+ 6.586250000000e-002,-2.75126e-002
+ 6.586875000000e-002,-2.75126e-002
+ 6.587500000000e-002,-2.75126e-002
+ 6.588125000000e-002,-2.75126e-002
+ 6.588750000000e-002,-2.75126e-002
+ 6.589375000000e-002,-2.75126e-002
+ 6.590000000000e-002,-2.75126e-002
+ 6.590625000000e-002,-2.75126e-002
+ 6.591250000000e-002,-2.75126e-002
+ 6.591875000000e-002,-2.75126e-002
+ 6.592500000000e-002,-2.75126e-002
+ 6.593125000000e-002,-2.75126e-002
+ 6.593750000000e-002,-2.75126e-002
+ 6.594375000000e-002,-2.75126e-002
+ 6.595000000000e-002,-2.75126e-002
+ 6.595625000000e-002,-2.75126e-002
+ 6.596250000000e-002,-2.75126e-002
+ 6.596875000000e-002,-2.75126e-002
+ 6.597500000000e-002,-2.75126e-002
+ 6.598125000000e-002,-2.75126e-002
+ 6.598750000000e-002,-2.75126e-002
+ 6.599375000000e-002,-2.75126e-002
+ 6.600000000000e-002,-2.75126e-002
+ 6.600625000000e-002,-2.75126e-002
+ 6.601250000000e-002,-2.75126e-002
+ 6.601875000000e-002,-2.75126e-002
+ 6.602500000000e-002,-2.75126e-002
+ 6.603125000000e-002,-2.75126e-002
+ 6.603750000000e-002,-2.75126e-002
+ 6.604375000000e-002,-2.24876e-002
+ 6.605000000000e-002,-2.75126e-002
+ 6.605625000000e-002,-2.75126e-002
+ 6.606250000000e-002,-2.75126e-002
+ 6.606875000000e-002,-2.75126e-002
+ 6.607500000000e-002,-2.75126e-002
+ 6.608125000000e-002,-2.75126e-002
+ 6.608750000000e-002,-2.75126e-002
+ 6.609375000000e-002,-2.75126e-002
+ 6.610000000000e-002,-2.75126e-002
+ 6.610625000000e-002,-2.75126e-002
+ 6.611250000000e-002,-2.75126e-002
+ 6.611875000000e-002,-2.75126e-002
+ 6.612500000000e-002,-2.75126e-002
+ 6.613125000000e-002,-2.75126e-002
+ 6.613750000000e-002,-2.75126e-002
+ 6.614375000000e-002,-2.75126e-002
+ 6.615000000000e-002,-2.75126e-002
+ 6.615625000000e-002,-2.75126e-002
+ 6.616250000000e-002,-2.75126e-002
+ 6.616875000000e-002,-2.75126e-002
+ 6.617500000000e-002,-2.75126e-002
+ 6.618125000000e-002,-2.75126e-002
+ 6.618750000000e-002,-2.75126e-002
+ 6.619375000000e-002,-2.75126e-002
+ 6.620000000000e-002,-2.75126e-002
+ 6.620625000000e-002,-2.75126e-002
+ 6.621250000000e-002,-2.75126e-002
+ 6.621875000000e-002,-2.75126e-002
+ 6.622500000000e-002,-2.75126e-002
+ 6.623125000000e-002,-2.75126e-002
+ 6.623750000000e-002,-2.75126e-002
+ 6.624375000000e-002,-2.75126e-002
+ 6.625000000000e-002,-2.75126e-002
+ 6.625625000000e-002,-2.75126e-002
+ 6.626250000000e-002,-2.75126e-002
+ 6.626875000000e-002,-2.75126e-002
+ 6.627500000000e-002,-2.75126e-002
+ 6.628125000000e-002,-2.75126e-002
+ 6.628750000000e-002,-2.75126e-002
+ 6.629375000000e-002,-2.75126e-002
+ 6.630000000000e-002,-2.75126e-002
+ 6.630625000000e-002,-2.75126e-002
+ 6.631250000000e-002,-2.75126e-002
+ 6.631875000000e-002,-2.75126e-002
+ 6.632500000000e-002,-2.75126e-002
+ 6.633125000000e-002,-2.75126e-002
+ 6.633750000000e-002,-2.75126e-002
+ 6.634375000000e-002,-2.75126e-002
+ 6.635000000000e-002,-2.75126e-002
+ 6.635625000000e-002,-2.75126e-002
+ 6.636250000000e-002,-2.75126e-002
+ 6.636875000000e-002,-2.75126e-002
+ 6.637500000000e-002,-2.75126e-002
+ 6.638125000000e-002,-2.75126e-002
+ 6.638750000000e-002,-2.75126e-002
+ 6.639375000000e-002,-2.75126e-002
+ 6.640000000000e-002,-2.75126e-002
+ 6.640625000000e-002,-2.75126e-002
+ 6.641250000000e-002,-2.75126e-002
+ 6.641875000000e-002,-2.75126e-002
+ 6.642500000000e-002,-2.75126e-002
+ 6.643125000000e-002,-2.75126e-002
+ 6.643750000000e-002,-2.75126e-002
+ 6.644375000000e-002,-2.75126e-002
+ 6.645000000000e-002,-2.75126e-002
+ 6.645625000000e-002,-2.75126e-002
+ 6.646250000000e-002,-2.75126e-002
+ 6.646875000000e-002,-2.75126e-002
+ 6.647500000000e-002,-2.75126e-002
+ 6.648125000000e-002,-2.75126e-002
+ 6.648750000000e-002,-2.75126e-002
+ 6.649375000000e-002,-2.75126e-002
+ 6.650000000000e-002,-2.75126e-002
+ 6.650625000000e-002,-2.75126e-002
+ 6.651250000000e-002,-2.75126e-002
+ 6.651875000000e-002,-2.75126e-002
+ 6.652500000000e-002,-2.75126e-002
+ 6.653125000000e-002,-2.75126e-002
+ 6.653750000000e-002,-2.75126e-002
+ 6.654375000000e-002,-2.75126e-002
+ 6.655000000000e-002,-2.75126e-002
+ 6.655625000000e-002,-2.75126e-002
+ 6.656250000000e-002,-2.75126e-002
+ 6.656875000000e-002,-2.75126e-002
+ 6.657500000000e-002,-2.75126e-002
+ 6.658125000000e-002,-2.75126e-002
+ 6.658750000000e-002,-2.75126e-002
+ 6.659375000000e-002,-2.75126e-002
+ 6.660000000000e-002,-2.75126e-002
+ 6.660625000000e-002,-2.75126e-002
+ 6.661250000000e-002,-2.75126e-002
+ 6.661875000000e-002,-2.75126e-002
+ 6.662500000000e-002,-2.75126e-002
+ 6.663125000000e-002,-2.75126e-002
+ 6.663750000000e-002,-2.75126e-002
+ 6.664375000000e-002,-2.75126e-002
+ 6.665000000000e-002,-2.75126e-002
+ 6.665625000000e-002,-2.75126e-002
+ 6.666250000000e-002,-2.75126e-002
+ 6.666875000000e-002,-2.75126e-002
+ 6.667500000000e-002,-2.75126e-002
+ 6.668125000000e-002,-2.75126e-002
+ 6.668750000000e-002,-2.75126e-002
+ 6.669375000000e-002,-2.75126e-002
+ 6.670000000000e-002,-2.75126e-002
+ 6.670625000000e-002,-2.75126e-002
+ 6.671250000000e-002,-2.75126e-002
+ 6.671875000000e-002,-2.75126e-002
+ 6.672500000000e-002,-2.75126e-002
+ 6.673125000000e-002,-2.75126e-002
+ 6.673750000000e-002,-2.75126e-002
+ 6.674375000000e-002,-2.75126e-002
+ 6.675000000000e-002,-2.75126e-002
+ 6.675625000000e-002,-2.75126e-002
+ 6.676250000000e-002,-2.75126e-002
+ 6.676875000000e-002,-2.75126e-002
+ 6.677500000000e-002,-2.75126e-002
+ 6.678125000000e-002,-2.75126e-002
+ 6.678750000000e-002,-2.75126e-002
+ 6.679375000000e-002,-2.75126e-002
+ 6.680000000000e-002,-2.75126e-002
+ 6.680625000000e-002,-2.75126e-002
+ 6.681250000000e-002,-2.75126e-002
+ 6.681875000000e-002,-2.75126e-002
+ 6.682500000000e-002,-2.75126e-002
+ 6.683125000000e-002,-2.75126e-002
+ 6.683750000000e-002,-2.75126e-002
+ 6.684375000000e-002,-2.75126e-002
+ 6.685000000000e-002,-2.75126e-002
+ 6.685625000000e-002,-2.75126e-002
+ 6.686250000000e-002,-2.75126e-002
+ 6.686875000000e-002,-2.75126e-002
+ 6.687500000000e-002,-2.75126e-002
+ 6.688125000000e-002,-2.75126e-002
+ 6.688750000000e-002,-2.75126e-002
+ 6.689375000000e-002,-2.75126e-002
+ 6.690000000000e-002,-2.75126e-002
+ 6.690625000000e-002,-2.75126e-002
+ 6.691250000000e-002,-2.75126e-002
+ 6.691875000000e-002,-2.75126e-002
+ 6.692500000000e-002,-2.75126e-002
+ 6.693125000000e-002,-2.75126e-002
+ 6.693750000000e-002,-2.75126e-002
+ 6.694375000000e-002,-2.75126e-002
+ 6.695000000000e-002,-2.75126e-002
+ 6.695625000000e-002,-2.75126e-002
+ 6.696250000000e-002,-2.75126e-002
+ 6.696875000000e-002,-2.75126e-002
+ 6.697500000000e-002,-2.75126e-002
+ 6.698125000000e-002,-2.75126e-002
+ 6.698750000000e-002,-2.75126e-002
+ 6.699375000000e-002,-2.75126e-002
+ 6.700000000000e-002,-2.75126e-002
+ 6.700625000000e-002,-2.75126e-002
+ 6.701250000000e-002,-2.75126e-002
+ 6.701875000000e-002,-2.75126e-002
+ 6.702500000000e-002,-2.75126e-002
+ 6.703125000000e-002,-2.75126e-002
+ 6.703750000000e-002,-2.75126e-002
+ 6.704375000000e-002,-2.75126e-002
+ 6.705000000000e-002,-2.75126e-002
+ 6.705625000000e-002,-2.75126e-002
+ 6.706250000000e-002,-2.75126e-002
+ 6.706875000000e-002,-2.75126e-002
+ 6.707500000000e-002,-2.75126e-002
+ 6.708125000000e-002,-2.75126e-002
+ 6.708750000000e-002,-2.75126e-002
+ 6.709375000000e-002,-2.75126e-002
+ 6.710000000000e-002,-2.75126e-002
+ 6.710625000000e-002,-2.75126e-002
+ 6.711250000000e-002,-2.75126e-002
+ 6.711875000000e-002,-2.75126e-002
+ 6.712500000000e-002,-2.75126e-002
+ 6.713125000000e-002,-2.75126e-002
+ 6.713750000000e-002,-2.75126e-002
+ 6.714375000000e-002,-2.75126e-002
+ 6.715000000000e-002,-2.75126e-002
+ 6.715625000000e-002,-2.75126e-002
+ 6.716250000000e-002,-2.75126e-002
+ 6.716875000000e-002,-2.75126e-002
+ 6.717500000000e-002,-2.75126e-002
+ 6.718125000000e-002,-2.75126e-002
+ 6.718750000000e-002,-2.75126e-002
+ 6.719375000000e-002,-2.75126e-002
+ 6.720000000000e-002,-2.75126e-002
+ 6.720625000000e-002,-2.75126e-002
+ 6.721250000000e-002,-2.75126e-002
+ 6.721875000000e-002,-2.75126e-002
+ 6.722500000000e-002,-2.75126e-002
+ 6.723125000000e-002,-2.75126e-002
+ 6.723750000000e-002,-2.75126e-002
+ 6.724375000000e-002,-2.75126e-002
+ 6.725000000000e-002,-2.75126e-002
+ 6.725625000000e-002,-2.75126e-002
+ 6.726250000000e-002,-2.75126e-002
+ 6.726875000000e-002,-2.75126e-002
+ 6.727500000000e-002,-2.75126e-002
+ 6.728125000000e-002,-2.75126e-002
+ 6.728750000000e-002,-2.75126e-002
+ 6.729375000000e-002,-2.75126e-002
+ 6.730000000000e-002,-2.75126e-002
+ 6.730625000000e-002,-2.75126e-002
+ 6.731250000000e-002,-2.75126e-002
+ 6.731875000000e-002,-2.75126e-002
+ 6.732500000000e-002,-2.75126e-002
+ 6.733125000000e-002,-2.75126e-002
+ 6.733750000000e-002,-2.75126e-002
+ 6.734375000000e-002,-2.75126e-002
+ 6.735000000000e-002,-2.75126e-002
+ 6.735625000000e-002,-2.75126e-002
+ 6.736250000000e-002,-2.75126e-002
+ 6.736875000000e-002,-2.75126e-002
+ 6.737500000000e-002,-2.75126e-002
+ 6.738125000000e-002,-2.75126e-002
+ 6.738750000000e-002,-2.75126e-002
+ 6.739375000000e-002,-2.75126e-002
+ 6.740000000000e-002,-2.75126e-002
+ 6.740625000000e-002,-2.75126e-002
+ 6.741250000000e-002,-2.75126e-002
+ 6.741875000000e-002,-2.75126e-002
+ 6.742500000000e-002,-2.75126e-002
+ 6.743125000000e-002,-2.75126e-002
+ 6.743750000000e-002,-2.75126e-002
+ 6.744375000000e-002,-2.75126e-002
+ 6.745000000000e-002,-2.75126e-002
+ 6.745625000000e-002,-2.75126e-002
+ 6.746250000000e-002,-2.75126e-002
+ 6.746875000000e-002,-2.75126e-002
+ 6.747500000000e-002,-2.75126e-002
+ 6.748125000000e-002,-2.75126e-002
+ 6.748750000000e-002,-2.75126e-002
+ 6.749375000000e-002,-2.75126e-002
+ 6.750000000000e-002,-2.75126e-002
+ 6.750625000000e-002,-2.75126e-002
+ 6.751250000000e-002,-2.75126e-002
+ 6.751875000000e-002,-2.75126e-002
+ 6.752500000000e-002,-2.75126e-002
+ 6.753125000000e-002,-2.75126e-002
+ 6.753750000000e-002,-2.75126e-002
+ 6.754375000000e-002,-2.75126e-002
+ 6.755000000000e-002,-2.75126e-002
+ 6.755625000000e-002,-2.75126e-002
+ 6.756250000000e-002,-2.75126e-002
+ 6.756875000000e-002,-2.75126e-002
+ 6.757500000000e-002,-2.75126e-002
+ 6.758125000000e-002,-2.75126e-002
+ 6.758750000000e-002,-2.75126e-002
+ 6.759375000000e-002,-2.75126e-002
+ 6.760000000000e-002,-2.75126e-002
+ 6.760625000000e-002,-2.75126e-002
+ 6.761250000000e-002,-2.75126e-002
+ 6.761875000000e-002,-2.75126e-002
+ 6.762500000000e-002,-2.75126e-002
+ 6.763125000000e-002,-2.75126e-002
+ 6.763750000000e-002,-2.75126e-002
+ 6.764375000000e-002,-2.75126e-002
+ 6.765000000000e-002,-2.75126e-002
+ 6.765625000000e-002,-2.75126e-002
+ 6.766250000000e-002,-2.24876e-002
+ 6.766875000000e-002,-2.75126e-002
+ 6.767500000000e-002,-2.75126e-002
+ 6.768125000000e-002,-2.75126e-002
+ 6.768750000000e-002,-2.75126e-002
+ 6.769375000000e-002,-2.75126e-002
+ 6.770000000000e-002,-2.75126e-002
+ 6.770625000000e-002,-2.75126e-002
+ 6.771250000000e-002,-2.75126e-002
+ 6.771875000000e-002,-2.75126e-002
+ 6.772500000000e-002,-2.75126e-002
+ 6.773125000000e-002,-2.75126e-002
+ 6.773750000000e-002,-2.75126e-002
+ 6.774375000000e-002,-2.75126e-002
+ 6.775000000000e-002,-2.75126e-002
+ 6.775625000000e-002,-2.75126e-002
+ 6.776250000000e-002,-2.75126e-002
+ 6.776875000000e-002,-2.75126e-002
+ 6.777500000000e-002,-2.75126e-002
+ 6.778125000000e-002,-2.75126e-002
+ 6.778750000000e-002,-2.75126e-002
+ 6.779375000000e-002,-2.75126e-002
+ 6.780000000000e-002,-2.75126e-002
+ 6.780625000000e-002,-2.75126e-002
+ 6.781250000000e-002,-2.75126e-002
+ 6.781875000000e-002,-2.75126e-002
+ 6.782500000000e-002,-2.75126e-002
+ 6.783125000000e-002,-2.75126e-002
+ 6.783750000000e-002,-2.75126e-002
+ 6.784375000000e-002,-2.75126e-002
+ 6.785000000000e-002,-2.75126e-002
+ 6.785625000000e-002,-2.75126e-002
+ 6.786250000000e-002,-2.75126e-002
+ 6.786875000000e-002,-2.75126e-002
+ 6.787500000000e-002,-2.75126e-002
+ 6.788125000000e-002,-2.75126e-002
+ 6.788750000000e-002,-2.75126e-002
+ 6.789375000000e-002,-2.75126e-002
+ 6.790000000000e-002,-2.75126e-002
+ 6.790625000000e-002,-2.75126e-002
+ 6.791250000000e-002,-2.75126e-002
+ 6.791875000000e-002,-2.75126e-002
+ 6.792500000000e-002,-2.75126e-002
+ 6.793125000000e-002,-2.75126e-002
+ 6.793750000000e-002,-2.75126e-002
+ 6.794375000000e-002,-2.75126e-002
+ 6.795000000000e-002,-2.75126e-002
+ 6.795625000000e-002,-2.75126e-002
+ 6.796250000000e-002,-2.75126e-002
+ 6.796875000000e-002,-2.24876e-002
+ 6.797500000000e-002,-2.75126e-002
+ 6.798125000000e-002,-2.75126e-002
+ 6.798750000000e-002,-2.75126e-002
+ 6.799375000000e-002,-2.75126e-002
+ 6.800000000000e-002,-2.75126e-002
+ 6.800625000000e-002,-2.75126e-002
+ 6.801250000000e-002,-2.75126e-002
+ 6.801875000000e-002,-2.75126e-002
+ 6.802500000000e-002,-2.75126e-002
+ 6.803125000000e-002,-2.24876e-002
+ 6.803750000000e-002,-2.75126e-002
+ 6.804375000000e-002,-2.75126e-002
+ 6.805000000000e-002,-2.75126e-002
+ 6.805625000000e-002,-2.75126e-002
+ 6.806250000000e-002,-2.75126e-002
+ 6.806875000000e-002,-2.75126e-002
+ 6.807500000000e-002,-2.75126e-002
+ 6.808125000000e-002,-2.75126e-002
+ 6.808750000000e-002,-2.75126e-002
+ 6.809375000000e-002,-2.75126e-002
+ 6.810000000000e-002,-2.75126e-002
+ 6.810625000000e-002,-2.75126e-002
+ 6.811250000000e-002,-2.75126e-002
+ 6.811875000000e-002,-2.75126e-002
+ 6.812500000000e-002,-2.75126e-002
+ 6.813125000000e-002,-2.75126e-002
+ 6.813750000000e-002,-2.75126e-002
+ 6.814375000000e-002,-2.75126e-002
+ 6.815000000000e-002,-2.75126e-002
+ 6.815625000000e-002,-2.75126e-002
+ 6.816250000000e-002,-2.75126e-002
+ 6.816875000000e-002,-2.75126e-002
+ 6.817500000000e-002,-2.75126e-002
+ 6.818125000000e-002,-2.75126e-002
+ 6.818750000000e-002,-2.75126e-002
+ 6.819375000000e-002,-2.75126e-002
+ 6.820000000000e-002,-2.75126e-002
+ 6.820625000000e-002,-2.75126e-002
+ 6.821250000000e-002,-2.75126e-002
+ 6.821875000000e-002,-2.75126e-002
+ 6.822500000000e-002,-2.75126e-002
+ 6.823125000000e-002,-2.75126e-002
+ 6.823750000000e-002,-2.75126e-002
+ 6.824375000000e-002,-2.75126e-002
+ 6.825000000000e-002,-2.75126e-002
+ 6.825625000000e-002,-2.75126e-002
+ 6.826250000000e-002,-2.75126e-002
+ 6.826875000000e-002,-2.75126e-002
+ 6.827500000000e-002,-2.75126e-002
+ 6.828125000000e-002,-2.75126e-002
+ 6.828750000000e-002,-2.75126e-002
+ 6.829375000000e-002,-2.75126e-002
+ 6.830000000000e-002,-2.75126e-002
+ 6.830625000000e-002,-2.75126e-002
+ 6.831250000000e-002,-2.75126e-002
+ 6.831875000000e-002,-2.75126e-002
+ 6.832500000000e-002,-2.75126e-002
+ 6.833125000000e-002,-2.75126e-002
+ 6.833750000000e-002,-2.75126e-002
+ 6.834375000000e-002,-2.75126e-002
+ 6.835000000000e-002,-2.75126e-002
+ 6.835625000000e-002,-2.75126e-002
+ 6.836250000000e-002,-2.75126e-002
+ 6.836875000000e-002,-2.75126e-002
+ 6.837500000000e-002,-2.75126e-002
+ 6.838125000000e-002,-2.75126e-002
+ 6.838750000000e-002,-2.75126e-002
+ 6.839375000000e-002,-2.75126e-002
+ 6.840000000000e-002,-2.75126e-002
+ 6.840625000000e-002,-2.75126e-002
+ 6.841250000000e-002,-2.75126e-002
+ 6.841875000000e-002,-2.75126e-002
+ 6.842500000000e-002,-2.75126e-002
+ 6.843125000000e-002,-2.75126e-002
+ 6.843750000000e-002,-2.75126e-002
+ 6.844375000000e-002,-2.75126e-002
+ 6.845000000000e-002,-2.75126e-002
+ 6.845625000000e-002,-2.75126e-002
+ 6.846250000000e-002,-2.75126e-002
+ 6.846875000000e-002,-2.75126e-002
+ 6.847500000000e-002,-2.75126e-002
+ 6.848125000000e-002,-2.75126e-002
+ 6.848750000000e-002,-2.75126e-002
+ 6.849375000000e-002,-2.75126e-002
+ 6.850000000000e-002,-2.75126e-002
+ 6.850625000000e-002,-2.75126e-002
+ 6.851250000000e-002,-2.75126e-002
+ 6.851875000000e-002,-2.75126e-002
+ 6.852500000000e-002,-2.75126e-002
+ 6.853125000000e-002,-2.75126e-002
+ 6.853750000000e-002,-2.24876e-002
+ 6.854375000000e-002,-2.75126e-002
+ 6.855000000000e-002,-2.75126e-002
+ 6.855625000000e-002,-2.75126e-002
+ 6.856250000000e-002,-2.75126e-002
+ 6.856875000000e-002,-2.75126e-002
+ 6.857500000000e-002,-2.75126e-002
+ 6.858125000000e-002,-2.75126e-002
+ 6.858750000000e-002,-2.75126e-002
+ 6.859375000000e-002,-2.75126e-002
+ 6.860000000000e-002,-2.75126e-002
+ 6.860625000000e-002,-2.75126e-002
+ 6.861250000000e-002,-2.75126e-002
+ 6.861875000000e-002,-2.75126e-002
+ 6.862500000000e-002,-2.75126e-002
+ 6.863125000000e-002,-2.75126e-002
+ 6.863750000000e-002,-2.75126e-002
+ 6.864375000000e-002,-2.75126e-002
+ 6.865000000000e-002,-2.75126e-002
+ 6.865625000000e-002,-2.75126e-002
+ 6.866250000000e-002,-2.75126e-002
+ 6.866875000000e-002,-2.75126e-002
+ 6.867500000000e-002,-2.75126e-002
+ 6.868125000000e-002,-2.75126e-002
+ 6.868750000000e-002,-2.75126e-002
+ 6.869375000000e-002,-2.75126e-002
+ 6.870000000000e-002,-2.75126e-002
+ 6.870625000000e-002,-2.75126e-002
+ 6.871250000000e-002,-2.75126e-002
+ 6.871875000000e-002,-2.75126e-002
+ 6.872500000000e-002,-2.75126e-002
+ 6.873125000000e-002,-2.75126e-002
+ 6.873750000000e-002,-2.75126e-002
+ 6.874375000000e-002,-2.75126e-002
+ 6.875000000000e-002,-2.75126e-002
+ 6.875625000000e-002,-2.75126e-002
+ 6.876250000000e-002,-2.75126e-002
+ 6.876875000000e-002,-2.75126e-002
+ 6.877500000000e-002,-2.75126e-002
+ 6.878125000000e-002,-2.75126e-002
+ 6.878750000000e-002,-2.75126e-002
+ 6.879375000000e-002,-2.75126e-002
+ 6.880000000000e-002,-2.75126e-002
+ 6.880625000000e-002,-2.24876e-002
+ 6.881250000000e-002,-2.75126e-002
+ 6.881875000000e-002,-2.75126e-002
+ 6.882500000000e-002,-2.75126e-002
+ 6.883125000000e-002,-2.75126e-002
+ 6.883750000000e-002,-2.75126e-002
+ 6.884375000000e-002,-2.75126e-002
+ 6.885000000000e-002,-2.75126e-002
+ 6.885625000000e-002,-2.75126e-002
+ 6.886250000000e-002,-2.75126e-002
+ 6.886875000000e-002,-2.75126e-002
+ 6.887500000000e-002,-2.24876e-002
+ 6.888125000000e-002,-2.75126e-002
+ 6.888750000000e-002,-2.75126e-002
+ 6.889375000000e-002,-2.75126e-002
+ 6.890000000000e-002,-2.75126e-002
+ 6.890625000000e-002,-2.75126e-002
+ 6.891250000000e-002,-2.24876e-002
+ 6.891875000000e-002,-2.75126e-002
+ 6.892500000000e-002,-2.75126e-002
+ 6.893125000000e-002,-2.75126e-002
+ 6.893750000000e-002,-2.75126e-002
+ 6.894375000000e-002,-2.75126e-002
+ 6.895000000000e-002,-2.75126e-002
+ 6.895625000000e-002,-2.75126e-002
+ 6.896250000000e-002,-2.75126e-002
+ 6.896875000000e-002,-2.75126e-002
+ 6.897500000000e-002,-2.75126e-002
+ 6.898125000000e-002,-2.75126e-002
+ 6.898750000000e-002,-2.75126e-002
+ 6.899375000000e-002,-2.75126e-002
+ 6.900000000000e-002,-2.75126e-002
+ 6.900625000000e-002,-2.75126e-002
+ 6.901250000000e-002,-2.75126e-002
+ 6.901875000000e-002,-2.75126e-002
+ 6.902500000000e-002,-2.75126e-002
+ 6.903125000000e-002,-2.75126e-002
+ 6.903750000000e-002,-2.75126e-002
+ 6.904375000000e-002,-2.75126e-002
+ 6.905000000000e-002,-2.75126e-002
+ 6.905625000000e-002,-2.75126e-002
+ 6.906250000000e-002,-2.75126e-002
+ 6.906875000000e-002,-2.75126e-002
+ 6.907500000000e-002,-2.75126e-002
+ 6.908125000000e-002,-2.75126e-002
+ 6.908750000000e-002,-2.75126e-002
+ 6.909375000000e-002,-2.75126e-002
+ 6.910000000000e-002,-2.75126e-002
+ 6.910625000000e-002,-2.75126e-002
+ 6.911250000000e-002,-2.75126e-002
+ 6.911875000000e-002,-2.75126e-002
+ 6.912500000000e-002,-2.75126e-002
+ 6.913125000000e-002,-2.24876e-002
+ 6.913750000000e-002,-2.75126e-002
+ 6.914375000000e-002,-2.75126e-002
+ 6.915000000000e-002,-2.75126e-002
+ 6.915625000000e-002,-2.75126e-002
+ 6.916250000000e-002,-2.75126e-002
+ 6.916875000000e-002,-2.75126e-002
+ 6.917500000000e-002,-2.75126e-002
+ 6.918125000000e-002,-2.75126e-002
+ 6.918750000000e-002,-2.75126e-002
+ 6.919375000000e-002,-2.75126e-002
+ 6.920000000000e-002,-2.75126e-002
+ 6.920625000000e-002,-2.75126e-002
+ 6.921250000000e-002,-2.75126e-002
+ 6.921875000000e-002,-2.75126e-002
+ 6.922500000000e-002,-2.75126e-002
+ 6.923125000000e-002,-2.75126e-002
+ 6.923750000000e-002,-2.75126e-002
+ 6.924375000000e-002,-2.75126e-002
+ 6.925000000000e-002,-2.75126e-002
+ 6.925625000000e-002,-2.75126e-002
+ 6.926250000000e-002,-2.75126e-002
+ 6.926875000000e-002,-2.75126e-002
+ 6.927500000000e-002,-2.75126e-002
+ 6.928125000000e-002,-2.75126e-002
+ 6.928750000000e-002,-2.75126e-002
+ 6.929375000000e-002,-2.75126e-002
+ 6.930000000000e-002,-2.75126e-002
+ 6.930625000000e-002,-2.75126e-002
+ 6.931250000000e-002,-2.75126e-002
+ 6.931875000000e-002,-2.75126e-002
+ 6.932500000000e-002,-2.75126e-002
+ 6.933125000000e-002,-2.75126e-002
+ 6.933750000000e-002,-2.75126e-002
+ 6.934375000000e-002,-2.75126e-002
+ 6.935000000000e-002,-2.75126e-002
+ 6.935625000000e-002,-2.75126e-002
+ 6.936250000000e-002,-2.75126e-002
+ 6.936875000000e-002,-2.75126e-002
+ 6.937500000000e-002,-2.75126e-002
+ 6.938125000000e-002,-2.75126e-002
+ 6.938750000000e-002,-2.75126e-002
+ 6.939375000000e-002,-2.75126e-002
+ 6.940000000000e-002,-2.75126e-002
+ 6.940625000000e-002,-2.75126e-002
+ 6.941250000000e-002,-2.75126e-002
+ 6.941875000000e-002,-2.24876e-002
+ 6.942500000000e-002,-2.75126e-002
+ 6.943125000000e-002,-2.75126e-002
+ 6.943750000000e-002,-2.75126e-002
+ 6.944375000000e-002,-2.24876e-002
+ 6.945000000000e-002,-2.75126e-002
+ 6.945625000000e-002,-2.75126e-002
+ 6.946250000000e-002,-2.75126e-002
+ 6.946875000000e-002,-2.75126e-002
+ 6.947500000000e-002,-2.75126e-002
+ 6.948125000000e-002,-2.75126e-002
+ 6.948750000000e-002,-2.75126e-002
+ 6.949375000000e-002,-2.75126e-002
+ 6.950000000000e-002,-2.75126e-002
+ 6.950625000000e-002,-2.75126e-002
+ 6.951250000000e-002,-2.75126e-002
+ 6.951875000000e-002,-2.75126e-002
+ 6.952500000000e-002,-2.75126e-002
+ 6.953125000000e-002,-2.75126e-002
+ 6.953750000000e-002,-2.75126e-002
+ 6.954375000000e-002,-2.75126e-002
+ 6.955000000000e-002,-2.75126e-002
+ 6.955625000000e-002,-2.75126e-002
+ 6.956250000000e-002,-2.75126e-002
+ 6.956875000000e-002,-2.75126e-002
+ 6.957500000000e-002,-2.75126e-002
+ 6.958125000000e-002,-2.75126e-002
+ 6.958750000000e-002,-2.75126e-002
+ 6.959375000000e-002,-2.75126e-002
+ 6.960000000000e-002,-2.75126e-002
+ 6.960625000000e-002,-2.75126e-002
+ 6.961250000000e-002,-2.75126e-002
+ 6.961875000000e-002,-2.75126e-002
+ 6.962500000000e-002,-2.75126e-002
+ 6.963125000000e-002,-2.75126e-002
+ 6.963750000000e-002,-2.75126e-002
+ 6.964375000000e-002,-2.75126e-002
+ 6.965000000000e-002,-2.75126e-002
+ 6.965625000000e-002,-2.75126e-002
+ 6.966250000000e-002,-2.75126e-002
+ 6.966875000000e-002,-2.75126e-002
+ 6.967500000000e-002,-2.75126e-002
+ 6.968125000000e-002,-2.75126e-002
+ 6.968750000000e-002,-2.75126e-002
+ 6.969375000000e-002,-2.75126e-002
+ 6.970000000000e-002,-2.75126e-002
+ 6.970625000000e-002,-2.75126e-002
+ 6.971250000000e-002,-2.75126e-002
+ 6.971875000000e-002,-2.75126e-002
+ 6.972500000000e-002,-2.75126e-002
+ 6.973125000000e-002,-2.75126e-002
+ 6.973750000000e-002,-2.75126e-002
+ 6.974375000000e-002,-2.75126e-002
+ 6.975000000000e-002,-2.75126e-002
+ 6.975625000000e-002,-2.75126e-002
+ 6.976250000000e-002,-2.75126e-002
+ 6.976875000000e-002,-2.75126e-002
+ 6.977500000000e-002,-2.75126e-002
+ 6.978125000000e-002,-2.75126e-002
+ 6.978750000000e-002,-2.75126e-002
+ 6.979375000000e-002,-2.75126e-002
+ 6.980000000000e-002,-2.75126e-002
+ 6.980625000000e-002,-2.75126e-002
+ 6.981250000000e-002,-2.75126e-002
+ 6.981875000000e-002,-2.75126e-002
+ 6.982500000000e-002,-2.75126e-002
+ 6.983125000000e-002,-2.75126e-002
+ 6.983750000000e-002,-2.75126e-002
+ 6.984375000000e-002,-2.75126e-002
+ 6.985000000000e-002,-2.75126e-002
+ 6.985625000000e-002,-2.75126e-002
+ 6.986250000000e-002,-2.75126e-002
+ 6.986875000000e-002,-2.75126e-002
+ 6.987500000000e-002,-2.24876e-002
+ 6.988125000000e-002,-2.75126e-002
+ 6.988750000000e-002,-2.75126e-002
+ 6.989375000000e-002,-2.75126e-002
+ 6.990000000000e-002,-2.75126e-002
+ 6.990625000000e-002,-2.75126e-002
+ 6.991250000000e-002,-2.75126e-002
+ 6.991875000000e-002,-2.75126e-002
+ 6.992500000000e-002,-2.75126e-002
+ 6.993125000000e-002,-2.75126e-002
+ 6.993750000000e-002,-2.75126e-002
+ 6.994375000000e-002,-2.24876e-002
+ 6.995000000000e-002,-2.75126e-002
+ 6.995625000000e-002,-2.75126e-002
+ 6.996250000000e-002,-2.75126e-002
+ 6.996875000000e-002,-2.75126e-002
+ 6.997500000000e-002,-2.75126e-002
+ 6.998125000000e-002,-2.75126e-002
+ 6.998750000000e-002,-2.75126e-002
+ 6.999375000000e-002,-2.75126e-002
+ 7.000000000000e-002,-2.75126e-002
+ 7.000625000000e-002,-2.75126e-002
+ 7.001250000000e-002,-2.75126e-002
+ 7.001875000000e-002,-2.75126e-002
+ 7.002500000000e-002,-2.75126e-002
+ 7.003125000000e-002,-2.75126e-002
+ 7.003750000000e-002,-2.75126e-002
+ 7.004375000000e-002,-2.75126e-002
+ 7.005000000000e-002,-2.75126e-002
+ 7.005625000000e-002,-2.75126e-002
+ 7.006250000000e-002,-2.75126e-002
+ 7.006875000000e-002,-2.75126e-002
+ 7.007500000000e-002,-2.75126e-002
+ 7.008125000000e-002,-2.75126e-002
+ 7.008750000000e-002,-2.75126e-002
+ 7.009375000000e-002,-2.75126e-002
+ 7.010000000000e-002,-2.75126e-002
+ 7.010625000000e-002,-2.75126e-002
+ 7.011250000000e-002,-2.75126e-002
+ 7.011875000000e-002,-2.75126e-002
+ 7.012500000000e-002,-2.75126e-002
+ 7.013125000000e-002,-2.75126e-002
+ 7.013750000000e-002,-2.75126e-002
+ 7.014375000000e-002,-2.75126e-002
+ 7.015000000000e-002,-2.75126e-002
+ 7.015625000000e-002,-2.75126e-002
+ 7.016250000000e-002,-2.75126e-002
+ 7.016875000000e-002,-2.75126e-002
+ 7.017500000000e-002,-2.75126e-002
+ 7.018125000000e-002,-2.75126e-002
+ 7.018750000000e-002,-2.75126e-002
+ 7.019375000000e-002,-2.75126e-002
+ 7.020000000000e-002,-2.75126e-002
+ 7.020625000000e-002,-2.75126e-002
+ 7.021250000000e-002,-2.75126e-002
+ 7.021875000000e-002,-2.75126e-002
+ 7.022500000000e-002,-2.75126e-002
+ 7.023125000000e-002,-2.75126e-002
+ 7.023750000000e-002,-2.75126e-002
+ 7.024375000000e-002,-2.75126e-002
+ 7.025000000000e-002,-2.75126e-002
+ 7.025625000000e-002,-2.75126e-002
+ 7.026250000000e-002,-2.75126e-002
+ 7.026875000000e-002,-2.75126e-002
+ 7.027500000000e-002,-2.75126e-002
+ 7.028125000000e-002,-2.75126e-002
+ 7.028750000000e-002,-2.75126e-002
+ 7.029375000000e-002,-2.75126e-002
+ 7.030000000000e-002,-2.75126e-002
+ 7.030625000000e-002,-2.75126e-002
+ 7.031250000000e-002,-2.75126e-002
+ 7.031875000000e-002,-2.75126e-002
+ 7.032500000000e-002,-2.75126e-002
+ 7.033125000000e-002,-2.75126e-002
+ 7.033750000000e-002,-2.75126e-002
+ 7.034375000000e-002,-2.75126e-002
+ 7.035000000000e-002,-2.75126e-002
+ 7.035625000000e-002,-2.75126e-002
+ 7.036250000000e-002,-2.75126e-002
+ 7.036875000000e-002,-2.75126e-002
+ 7.037500000000e-002,-2.75126e-002
+ 7.038125000000e-002,-2.75126e-002
+ 7.038750000000e-002,-2.75126e-002
+ 7.039375000000e-002,-2.75126e-002
+ 7.040000000000e-002,-2.75126e-002
+ 7.040625000000e-002,-2.75126e-002
+ 7.041250000000e-002,-2.75126e-002
+ 7.041875000000e-002,-2.75126e-002
+ 7.042500000000e-002,-2.75126e-002
+ 7.043125000000e-002,-2.75126e-002
+ 7.043750000000e-002,-2.75126e-002
+ 7.044375000000e-002,-2.75126e-002
+ 7.045000000000e-002,-2.75126e-002
+ 7.045625000000e-002,-2.75126e-002
+ 7.046250000000e-002,-2.75126e-002
+ 7.046875000000e-002,-2.75126e-002
+ 7.047500000000e-002,-2.75126e-002
+ 7.048125000000e-002,-2.75126e-002
+ 7.048750000000e-002,-2.75126e-002
+ 7.049375000000e-002,-2.75126e-002
+ 7.050000000000e-002,-2.75126e-002
+ 7.050625000000e-002,-2.75126e-002
+ 7.051250000000e-002,-2.75126e-002
+ 7.051875000000e-002,-2.75126e-002
+ 7.052500000000e-002,-2.75126e-002
+ 7.053125000000e-002,-2.75126e-002
+ 7.053750000000e-002,-2.75126e-002
+ 7.054375000000e-002,-2.75126e-002
+ 7.055000000000e-002,-2.75126e-002
+ 7.055625000000e-002,-2.75126e-002
+ 7.056250000000e-002,-2.75126e-002
+ 7.056875000000e-002,-2.75126e-002
+ 7.057500000000e-002,-2.75126e-002
+ 7.058125000000e-002,-2.75126e-002
+ 7.058750000000e-002,-2.75126e-002
+ 7.059375000000e-002,-2.75126e-002
+ 7.060000000000e-002,-2.75126e-002
+ 7.060625000000e-002,-2.75126e-002
+ 7.061250000000e-002,-2.75126e-002
+ 7.061875000000e-002,-2.75126e-002
+ 7.062500000000e-002,-2.75126e-002
+ 7.063125000000e-002,-2.75126e-002
+ 7.063750000000e-002,-2.75126e-002
+ 7.064375000000e-002,-2.75126e-002
+ 7.065000000000e-002,-2.75126e-002
+ 7.065625000000e-002,-2.75126e-002
+ 7.066250000000e-002,-2.75126e-002
+ 7.066875000000e-002,-2.75126e-002
+ 7.067500000000e-002,-2.75126e-002
+ 7.068125000000e-002,-2.75126e-002
+ 7.068750000000e-002,-2.75126e-002
+ 7.069375000000e-002,-2.75126e-002
+ 7.070000000000e-002,-2.75126e-002
+ 7.070625000000e-002,-2.75126e-002
+ 7.071250000000e-002,-2.75126e-002
+ 7.071875000000e-002,-2.75126e-002
+ 7.072500000000e-002,-2.75126e-002
+ 7.073125000000e-002,-2.75126e-002
+ 7.073750000000e-002,-2.75126e-002
+ 7.074375000000e-002,-2.75126e-002
+ 7.075000000000e-002,-2.75126e-002
+ 7.075625000000e-002,-2.75126e-002
+ 7.076250000000e-002,-2.75126e-002
+ 7.076875000000e-002,-2.75126e-002
+ 7.077500000000e-002,-2.75126e-002
+ 7.078125000000e-002,-2.75126e-002
+ 7.078750000000e-002,-2.75126e-002
+ 7.079375000000e-002,-2.75126e-002
+ 7.080000000000e-002,-2.75126e-002
+ 7.080625000000e-002,-2.75126e-002
+ 7.081250000000e-002,-2.75126e-002
+ 7.081875000000e-002,-2.75126e-002
+ 7.082500000000e-002,-2.75126e-002
+ 7.083125000000e-002,-2.75126e-002
+ 7.083750000000e-002,-2.75126e-002
+ 7.084375000000e-002,-2.75126e-002
+ 7.085000000000e-002,-2.75126e-002
+ 7.085625000000e-002,-2.75126e-002
+ 7.086250000000e-002,-2.75126e-002
+ 7.086875000000e-002,-2.75126e-002
+ 7.087500000000e-002,-2.75126e-002
+ 7.088125000000e-002,-2.75126e-002
+ 7.088750000000e-002,-2.75126e-002
+ 7.089375000000e-002,-2.75126e-002
+ 7.090000000000e-002,-2.75126e-002
+ 7.090625000000e-002,-2.75126e-002
+ 7.091250000000e-002,-2.75126e-002
+ 7.091875000000e-002,-2.75126e-002
+ 7.092500000000e-002,-2.75126e-002
+ 7.093125000000e-002,-2.75126e-002
+ 7.093750000000e-002,-2.75126e-002
+ 7.094375000000e-002,-2.75126e-002
+ 7.095000000000e-002,-2.75126e-002
+ 7.095625000000e-002,-2.75126e-002
+ 7.096250000000e-002,-2.75126e-002
+ 7.096875000000e-002,-2.75126e-002
+ 7.097500000000e-002,-2.75126e-002
+ 7.098125000000e-002,-2.75126e-002
+ 7.098750000000e-002,-2.75126e-002
+ 7.099375000000e-002,-2.75126e-002
+ 7.100000000000e-002,-2.75126e-002
+ 7.100625000000e-002,-2.75126e-002
+ 7.101250000000e-002,-2.75126e-002
+ 7.101875000000e-002,-2.75126e-002
+ 7.102500000000e-002,-2.75126e-002
+ 7.103125000000e-002,-2.75126e-002
+ 7.103750000000e-002,-2.75126e-002
+ 7.104375000000e-002,-2.75126e-002
+ 7.105000000000e-002,-2.75126e-002
+ 7.105625000000e-002,-2.75126e-002
+ 7.106250000000e-002,-2.75126e-002
+ 7.106875000000e-002,-2.75126e-002
+ 7.107500000000e-002,-2.75126e-002
+ 7.108125000000e-002,-2.75126e-002
+ 7.108750000000e-002,-2.75126e-002
+ 7.109375000000e-002,-2.75126e-002
+ 7.110000000000e-002,-2.75126e-002
+ 7.110625000000e-002,-2.75126e-002
+ 7.111250000000e-002,-2.75126e-002
+ 7.111875000000e-002,-2.75126e-002
+ 7.112500000000e-002,-2.75126e-002
+ 7.113125000000e-002,-2.24876e-002
+ 7.113750000000e-002,-2.75126e-002
+ 7.114375000000e-002,-2.75126e-002
+ 7.115000000000e-002,-2.75126e-002
+ 7.115625000000e-002,-2.75126e-002
+ 7.116250000000e-002,-2.75126e-002
+ 7.116875000000e-002,-2.75126e-002
+ 7.117500000000e-002,-2.75126e-002
+ 7.118125000000e-002,-2.75126e-002
+ 7.118750000000e-002,-2.75126e-002
+ 7.119375000000e-002,-2.75126e-002
+ 7.120000000000e-002,-2.75126e-002
+ 7.120625000000e-002,-2.75126e-002
+ 7.121250000000e-002,-2.24876e-002
+ 7.121875000000e-002,-2.75126e-002
+ 7.122500000000e-002,-2.75126e-002
+ 7.123125000000e-002,-2.75126e-002
+ 7.123750000000e-002,-2.75126e-002
+ 7.124375000000e-002,-2.75126e-002
+ 7.125000000000e-002,-2.75126e-002
+ 7.125625000000e-002,-2.75126e-002
+ 7.126250000000e-002,-2.75126e-002
+ 7.126875000000e-002,-2.75126e-002
+ 7.127500000000e-002,-2.75126e-002
+ 7.128125000000e-002,-2.75126e-002
+ 7.128750000000e-002,-2.75126e-002
+ 7.129375000000e-002,-2.75126e-002
+ 7.130000000000e-002,-2.75126e-002
+ 7.130625000000e-002,-2.75126e-002
+ 7.131250000000e-002,-2.75126e-002
+ 7.131875000000e-002,-2.75126e-002
+ 7.132500000000e-002,-2.75126e-002
+ 7.133125000000e-002,-2.75126e-002
+ 7.133750000000e-002,-2.75126e-002
+ 7.134375000000e-002,-2.75126e-002
+ 7.135000000000e-002,-2.75126e-002
+ 7.135625000000e-002,-2.75126e-002
+ 7.136250000000e-002,-2.75126e-002
+ 7.136875000000e-002,-2.75126e-002
+ 7.137500000000e-002,-2.75126e-002
+ 7.138125000000e-002,-2.75126e-002
+ 7.138750000000e-002,-2.75126e-002
+ 7.139375000000e-002,-2.75126e-002
+ 7.140000000000e-002,-2.75126e-002
+ 7.140625000000e-002,-2.75126e-002
+ 7.141250000000e-002,-2.75126e-002
+ 7.141875000000e-002,-2.75126e-002
+ 7.142500000000e-002,-2.75126e-002
+ 7.143125000000e-002,-2.75126e-002
+ 7.143750000000e-002,-2.75126e-002
+ 7.144375000000e-002,-2.75126e-002
+ 7.145000000000e-002,-2.75126e-002
+ 7.145625000000e-002,-2.75126e-002
+ 7.146250000000e-002,-2.75126e-002
+ 7.146875000000e-002,-2.75126e-002
+ 7.147500000000e-002,-2.75126e-002
+ 7.148125000000e-002,-2.75126e-002
+ 7.148750000000e-002,-2.75126e-002
+ 7.149375000000e-002,-2.75126e-002
+ 7.150000000000e-002,-2.75126e-002
+ 7.150625000000e-002,-2.75126e-002
+ 7.151250000000e-002,-2.75126e-002
+ 7.151875000000e-002,-2.75126e-002
+ 7.152500000000e-002,-2.75126e-002
+ 7.153125000000e-002,-2.75126e-002
+ 7.153750000000e-002,-2.75126e-002
+ 7.154375000000e-002,-2.75126e-002
+ 7.155000000000e-002,-2.75126e-002
+ 7.155625000000e-002,-2.75126e-002
+ 7.156250000000e-002,-2.75126e-002
+ 7.156875000000e-002,-2.75126e-002
+ 7.157500000000e-002,-2.75126e-002
+ 7.158125000000e-002,-2.75126e-002
+ 7.158750000000e-002,-2.75126e-002
+ 7.159375000000e-002,-2.75126e-002
+ 7.160000000000e-002,-2.75126e-002
+ 7.160625000000e-002,-2.75126e-002
+ 7.161250000000e-002,-2.75126e-002
+ 7.161875000000e-002,-2.75126e-002
+ 7.162500000000e-002,-2.75126e-002
+ 7.163125000000e-002,-2.75126e-002
+ 7.163750000000e-002,-2.75126e-002
+ 7.164375000000e-002,-2.75126e-002
+ 7.165000000000e-002,-2.75126e-002
+ 7.165625000000e-002,-2.75126e-002
+ 7.166250000000e-002,-2.75126e-002
+ 7.166875000000e-002,-2.75126e-002
+ 7.167500000000e-002,-2.75126e-002
+ 7.168125000000e-002,-2.75126e-002
+ 7.168750000000e-002,-2.75126e-002
+ 7.169375000000e-002,-2.75126e-002
+ 7.170000000000e-002,-2.75126e-002
+ 7.170625000000e-002,-2.75126e-002
+ 7.171250000000e-002,-2.75126e-002
+ 7.171875000000e-002,-2.75126e-002
+ 7.172500000000e-002,-2.75126e-002
+ 7.173125000000e-002,-2.75126e-002
+ 7.173750000000e-002,-2.75126e-002
+ 7.174375000000e-002,-2.75126e-002
+ 7.175000000000e-002,-2.75126e-002
+ 7.175625000000e-002,-2.75126e-002
+ 7.176250000000e-002,-2.75126e-002
+ 7.176875000000e-002,-2.75126e-002
+ 7.177500000000e-002,-2.75126e-002
+ 7.178125000000e-002,-2.75126e-002
+ 7.178750000000e-002,-2.75126e-002
+ 7.179375000000e-002,-2.75126e-002
+ 7.180000000000e-002,-2.75126e-002
+ 7.180625000000e-002,-2.75126e-002
+ 7.181250000000e-002,-2.75126e-002
+ 7.181875000000e-002,-2.75126e-002
+ 7.182500000000e-002,-2.75126e-002
+ 7.183125000000e-002,-2.75126e-002
+ 7.183750000000e-002,-2.75126e-002
+ 7.184375000000e-002,-2.75126e-002
+ 7.185000000000e-002,-2.75126e-002
+ 7.185625000000e-002,-2.75126e-002
+ 7.186250000000e-002,-2.75126e-002
+ 7.186875000000e-002,-2.75126e-002
+ 7.187500000000e-002,-2.75126e-002
+ 7.188125000000e-002,-2.75126e-002
+ 7.188750000000e-002,-2.75126e-002
+ 7.189375000000e-002,-2.75126e-002
+ 7.190000000000e-002,-2.75126e-002
+ 7.190625000000e-002,-2.75126e-002
+ 7.191250000000e-002,-2.75126e-002
+ 7.191875000000e-002,-2.75126e-002
+ 7.192500000000e-002,-2.75126e-002
+ 7.193125000000e-002,-2.75126e-002
+ 7.193750000000e-002,-2.75126e-002
+ 7.194375000000e-002,-2.75126e-002
+ 7.195000000000e-002,-2.75126e-002
+ 7.195625000000e-002,-2.75126e-002
+ 7.196250000000e-002,-2.75126e-002
+ 7.196875000000e-002,-2.75126e-002
+ 7.197500000000e-002,-2.75126e-002
+ 7.198125000000e-002,-2.75126e-002
+ 7.198750000000e-002,-2.75126e-002
+ 7.199375000000e-002,-2.75126e-002
+ 7.200000000000e-002,-2.75126e-002
+ 7.200625000000e-002,-2.75126e-002
+ 7.201250000000e-002,-2.75126e-002
+ 7.201875000000e-002,-2.75126e-002
+ 7.202500000000e-002,-2.75126e-002
+ 7.203125000000e-002,-2.75126e-002
+ 7.203750000000e-002,-2.75126e-002
+ 7.204375000000e-002,-2.75126e-002
+ 7.205000000000e-002,-2.75126e-002
+ 7.205625000000e-002,-2.75126e-002
+ 7.206250000000e-002,-2.75126e-002
+ 7.206875000000e-002,-2.75126e-002
+ 7.207500000000e-002,-2.75126e-002
+ 7.208125000000e-002,-2.75126e-002
+ 7.208750000000e-002,-2.75126e-002
+ 7.209375000000e-002,-2.75126e-002
+ 7.210000000000e-002,-2.75126e-002
+ 7.210625000000e-002,-2.75126e-002
+ 7.211250000000e-002,-2.75126e-002
+ 7.211875000000e-002,-2.75126e-002
+ 7.212500000000e-002,-2.75126e-002
+ 7.213125000000e-002,-2.75126e-002
+ 7.213750000000e-002,-2.75126e-002
+ 7.214375000000e-002,-2.75126e-002
+ 7.215000000000e-002,-2.75126e-002
+ 7.215625000000e-002,-2.75126e-002
+ 7.216250000000e-002,-2.75126e-002
+ 7.216875000000e-002,-2.75126e-002
+ 7.217500000000e-002,-2.75126e-002
+ 7.218125000000e-002,-2.75126e-002
+ 7.218750000000e-002,-2.75126e-002
+ 7.219375000000e-002,-2.24876e-002
+ 7.220000000000e-002,-2.75126e-002
+ 7.220625000000e-002,-2.75126e-002
+ 7.221250000000e-002,-2.75126e-002
+ 7.221875000000e-002,-2.75126e-002
+ 7.222500000000e-002,-2.75126e-002
+ 7.223125000000e-002,-2.75126e-002
+ 7.223750000000e-002,-2.75126e-002
+ 7.224375000000e-002,-2.75126e-002
+ 7.225000000000e-002,-2.75126e-002
+ 7.225625000000e-002,-2.75126e-002
+ 7.226250000000e-002,-2.75126e-002
+ 7.226875000000e-002,-2.75126e-002
+ 7.227500000000e-002,-2.75126e-002
+ 7.228125000000e-002,-2.75126e-002
+ 7.228750000000e-002,-2.75126e-002
+ 7.229375000000e-002,-2.75126e-002
+ 7.230000000000e-002,-2.75126e-002
+ 7.230625000000e-002,-2.75126e-002
+ 7.231250000000e-002,-2.75126e-002
+ 7.231875000000e-002,-2.75126e-002
+ 7.232500000000e-002,-2.75126e-002
+ 7.233125000000e-002,-2.75126e-002
+ 7.233750000000e-002,-2.75126e-002
+ 7.234375000000e-002,-2.75126e-002
+ 7.235000000000e-002,-2.75126e-002
+ 7.235625000000e-002,-2.75126e-002
+ 7.236250000000e-002,-2.75126e-002
+ 7.236875000000e-002,-2.75126e-002
+ 7.237500000000e-002,-2.75126e-002
+ 7.238125000000e-002,-2.75126e-002
+ 7.238750000000e-002,-2.75126e-002
+ 7.239375000000e-002,-2.75126e-002
+ 7.240000000000e-002,-2.75126e-002
+ 7.240625000000e-002,-2.75126e-002
+ 7.241250000000e-002,-2.75126e-002
+ 7.241875000000e-002,-2.75126e-002
+ 7.242500000000e-002,-2.75126e-002
+ 7.243125000000e-002,-2.75126e-002
+ 7.243750000000e-002,-2.75126e-002
+ 7.244375000000e-002,-2.75126e-002
+ 7.245000000000e-002,-2.75126e-002
+ 7.245625000000e-002,-2.75126e-002
+ 7.246250000000e-002,-2.75126e-002
+ 7.246875000000e-002,-2.75126e-002
+ 7.247500000000e-002,-2.75126e-002
+ 7.248125000000e-002,-2.75126e-002
+ 7.248750000000e-002,-2.75126e-002
+ 7.249375000000e-002,-2.75126e-002
+ 7.250000000000e-002,-2.75126e-002
+ 7.250625000000e-002,-2.75126e-002
+ 7.251250000000e-002,-2.75126e-002
+ 7.251875000000e-002,-2.75126e-002
+ 7.252500000000e-002,-2.75126e-002
+ 7.253125000000e-002,-2.75126e-002
+ 7.253750000000e-002,-2.75126e-002
+ 7.254375000000e-002,-2.75126e-002
+ 7.255000000000e-002,-2.75126e-002
+ 7.255625000000e-002,-2.75126e-002
+ 7.256250000000e-002,-2.75126e-002
+ 7.256875000000e-002,-2.75126e-002
+ 7.257500000000e-002,-2.75126e-002
+ 7.258125000000e-002,-2.75126e-002
+ 7.258750000000e-002,-2.75126e-002
+ 7.259375000000e-002,-2.75126e-002
+ 7.260000000000e-002,-2.75126e-002
+ 7.260625000000e-002,-2.75126e-002
+ 7.261250000000e-002,-2.75126e-002
+ 7.261875000000e-002,-2.75126e-002
+ 7.262500000000e-002,-2.75126e-002
+ 7.263125000000e-002,-2.75126e-002
+ 7.263750000000e-002,-2.75126e-002
+ 7.264375000000e-002,-2.75126e-002
+ 7.265000000000e-002,-2.75126e-002
+ 7.265625000000e-002,-2.24876e-002
+ 7.266250000000e-002,-2.75126e-002
+ 7.266875000000e-002,-2.75126e-002
+ 7.267500000000e-002,-2.75126e-002
+ 7.268125000000e-002,-2.75126e-002
+ 7.268750000000e-002,-2.75126e-002
+ 7.269375000000e-002,-2.75126e-002
+ 7.270000000000e-002,-2.75126e-002
+ 7.270625000000e-002,-2.75126e-002
+ 7.271250000000e-002,-2.75126e-002
+ 7.271875000000e-002,-2.75126e-002
+ 7.272500000000e-002,-2.75126e-002
+ 7.273125000000e-002,-2.75126e-002
+ 7.273750000000e-002,-2.75126e-002
+ 7.274375000000e-002,-2.75126e-002
+ 7.275000000000e-002,-2.75126e-002
+ 7.275625000000e-002,-2.75126e-002
+ 7.276250000000e-002,-2.75126e-002
+ 7.276875000000e-002,-2.75126e-002
+ 7.277500000000e-002,-2.75126e-002
+ 7.278125000000e-002,-2.75126e-002
+ 7.278750000000e-002,-2.75126e-002
+ 7.279375000000e-002,-2.75126e-002
+ 7.280000000000e-002,-2.75126e-002
+ 7.280625000000e-002,-2.75126e-002
+ 7.281250000000e-002,-2.75126e-002
+ 7.281875000000e-002,-2.75126e-002
+ 7.282500000000e-002,-2.75126e-002
+ 7.283125000000e-002,-2.75126e-002
+ 7.283750000000e-002,-2.75126e-002
+ 7.284375000000e-002,-2.75126e-002
+ 7.285000000000e-002,-2.75126e-002
+ 7.285625000000e-002,-2.75126e-002
+ 7.286250000000e-002,-2.75126e-002
+ 7.286875000000e-002,-2.75126e-002
+ 7.287500000000e-002,-2.75126e-002
+ 7.288125000000e-002,-2.75126e-002
+ 7.288750000000e-002,-2.75126e-002
+ 7.289375000000e-002,-2.75126e-002
+ 7.290000000000e-002,-2.75126e-002
+ 7.290625000000e-002,-2.75126e-002
+ 7.291250000000e-002,-2.75126e-002
+ 7.291875000000e-002,-2.75126e-002
+ 7.292500000000e-002,-2.75126e-002
+ 7.293125000000e-002,-2.75126e-002
+ 7.293750000000e-002,-2.75126e-002
+ 7.294375000000e-002,-2.75126e-002
+ 7.295000000000e-002,-2.75126e-002
+ 7.295625000000e-002,-2.75126e-002
+ 7.296250000000e-002,-2.75126e-002
+ 7.296875000000e-002,-2.75126e-002
+ 7.297500000000e-002,-2.75126e-002
+ 7.298125000000e-002,-2.75126e-002
+ 7.298750000000e-002,-2.75126e-002
+ 7.299375000000e-002,-2.75126e-002
+ 7.300000000000e-002,-2.75126e-002
+ 7.300625000000e-002,-2.75126e-002
+ 7.301250000000e-002,-2.75126e-002
+ 7.301875000000e-002,-2.24876e-002
+ 7.302500000000e-002,-2.75126e-002
+ 7.303125000000e-002,-2.75126e-002
+ 7.303750000000e-002,-2.75126e-002
+ 7.304375000000e-002,-2.75126e-002
+ 7.305000000000e-002,-2.75126e-002
+ 7.305625000000e-002,-2.75126e-002
+ 7.306250000000e-002,-2.75126e-002
+ 7.306875000000e-002,-2.75126e-002
+ 7.307500000000e-002,-2.75126e-002
+ 7.308125000000e-002,-2.75126e-002
+ 7.308750000000e-002,-2.75126e-002
+ 7.309375000000e-002,-2.75126e-002
+ 7.310000000000e-002,-2.75126e-002
+ 7.310625000000e-002,-2.75126e-002
+ 7.311250000000e-002,-2.75126e-002
+ 7.311875000000e-002,-2.75126e-002
+ 7.312500000000e-002,-2.75126e-002
+ 7.313125000000e-002,-2.75126e-002
+ 7.313750000000e-002,-2.75126e-002
+ 7.314375000000e-002,-2.75126e-002
+ 7.315000000000e-002,-2.75126e-002
+ 7.315625000000e-002,-2.75126e-002
+ 7.316250000000e-002,-2.75126e-002
+ 7.316875000000e-002,-2.75126e-002
+ 7.317500000000e-002,-2.75126e-002
+ 7.318125000000e-002,-2.24876e-002
+ 7.318750000000e-002,-2.24876e-002
+ 7.319375000000e-002,-2.75126e-002
+ 7.320000000000e-002,-2.75126e-002
+ 7.320625000000e-002,-2.75126e-002
+ 7.321250000000e-002,-2.75126e-002
+ 7.321875000000e-002,-2.75126e-002
+ 7.322500000000e-002,-2.75126e-002
+ 7.323125000000e-002,-2.75126e-002
+ 7.323750000000e-002,-2.75126e-002
+ 7.324375000000e-002,-2.75126e-002
+ 7.325000000000e-002,-2.75126e-002
+ 7.325625000000e-002,-2.75126e-002
+ 7.326250000000e-002,-2.75126e-002
+ 7.326875000000e-002,-2.75126e-002
+ 7.327500000000e-002,-2.75126e-002
+ 7.328125000000e-002,-2.75126e-002
+ 7.328750000000e-002,-2.75126e-002
+ 7.329375000000e-002,-2.75126e-002
+ 7.330000000000e-002,-2.75126e-002
+ 7.330625000000e-002,-2.75126e-002
+ 7.331250000000e-002,-2.75126e-002
+ 7.331875000000e-002,-2.75126e-002
+ 7.332500000000e-002,-2.75126e-002
+ 7.333125000000e-002,-2.75126e-002
+ 7.333750000000e-002,-2.75126e-002
+ 7.334375000000e-002,-2.75126e-002
+ 7.335000000000e-002,-2.24876e-002
+ 7.335625000000e-002,-2.24876e-002
+ 7.336250000000e-002,-2.75126e-002
+ 7.336875000000e-002,-2.75126e-002
+ 7.337500000000e-002,-2.75126e-002
+ 7.338125000000e-002,-2.75126e-002
+ 7.338750000000e-002,-2.75126e-002
+ 7.339375000000e-002,-2.75126e-002
+ 7.340000000000e-002,-2.75126e-002
+ 7.340625000000e-002,-2.75126e-002
+ 7.341250000000e-002,-2.75126e-002
+ 7.341875000000e-002,-2.24876e-002
+ 7.342500000000e-002,-2.75126e-002
+ 7.343125000000e-002,-2.75126e-002
+ 7.343750000000e-002,-2.75126e-002
+ 7.344375000000e-002,-2.75126e-002
+ 7.345000000000e-002,-2.75126e-002
+ 7.345625000000e-002,-2.75126e-002
+ 7.346250000000e-002,-2.75126e-002
+ 7.346875000000e-002,-2.75126e-002
+ 7.347500000000e-002,-2.75126e-002
+ 7.348125000000e-002,-2.24876e-002
+ 7.348750000000e-002,-2.75126e-002
+ 7.349375000000e-002,-2.75126e-002
+ 7.350000000000e-002,-2.75126e-002
+ 7.350625000000e-002,-2.75126e-002
+ 7.351250000000e-002,-2.75126e-002
+ 7.351875000000e-002,-2.75126e-002
+ 7.352500000000e-002,-2.75126e-002
+ 7.353125000000e-002,-2.75126e-002
+ 7.353750000000e-002,-2.75126e-002
+ 7.354375000000e-002,-2.75126e-002
+ 7.355000000000e-002,-2.75126e-002
+ 7.355625000000e-002,-2.75126e-002
+ 7.356250000000e-002,-2.75126e-002
+ 7.356875000000e-002,-2.75126e-002
+ 7.357500000000e-002,-2.75126e-002
+ 7.358125000000e-002,-2.75126e-002
+ 7.358750000000e-002,-2.75126e-002
+ 7.359375000000e-002,-2.75126e-002
+ 7.360000000000e-002,-2.75126e-002
+ 7.360625000000e-002,-2.75126e-002
+ 7.361250000000e-002,-2.75126e-002
+ 7.361875000000e-002,-2.75126e-002
+ 7.362500000000e-002,-2.75126e-002
+ 7.363125000000e-002,-2.75126e-002
+ 7.363750000000e-002,-2.75126e-002
+ 7.364375000000e-002,-2.75126e-002
+ 7.365000000000e-002,-2.75126e-002
+ 7.365625000000e-002,-2.75126e-002
+ 7.366250000000e-002,-2.75126e-002
+ 7.366875000000e-002,-2.75126e-002
+ 7.367500000000e-002,-2.75126e-002
+ 7.368125000000e-002,-2.75126e-002
+ 7.368750000000e-002,-2.24876e-002
+ 7.369375000000e-002,-2.75126e-002
+ 7.370000000000e-002,-2.75126e-002
+ 7.370625000000e-002,-2.75126e-002
+ 7.371250000000e-002,-2.75126e-002
+ 7.371875000000e-002,-2.75126e-002
+ 7.372500000000e-002,-2.75126e-002
+ 7.373125000000e-002,-2.75126e-002
+ 7.373750000000e-002,-2.75126e-002
+ 7.374375000000e-002,-2.75126e-002
+ 7.375000000000e-002,-2.75126e-002
+ 7.375625000000e-002,-2.75126e-002
+ 7.376250000000e-002,-2.75126e-002
+ 7.376875000000e-002,-2.75126e-002
+ 7.377500000000e-002,-2.75126e-002
+ 7.378125000000e-002,-2.75126e-002
+ 7.378750000000e-002,-2.75126e-002
+ 7.379375000000e-002,-2.75126e-002
+ 7.380000000000e-002,-2.75126e-002
+ 7.380625000000e-002,-2.75126e-002
+ 7.381250000000e-002,-2.75126e-002
+ 7.381875000000e-002,-2.75126e-002
+ 7.382500000000e-002,-2.75126e-002
+ 7.383125000000e-002,-2.75126e-002
+ 7.383750000000e-002,-2.75126e-002
+ 7.384375000000e-002,-2.75126e-002
+ 7.385000000000e-002,-2.75126e-002
+ 7.385625000000e-002,-2.75126e-002
+ 7.386250000000e-002,-2.75126e-002
+ 7.386875000000e-002,-2.75126e-002
+ 7.387500000000e-002,-2.75126e-002
+ 7.388125000000e-002,-2.75126e-002
+ 7.388750000000e-002,-2.75126e-002
+ 7.389375000000e-002,-2.75126e-002
+ 7.390000000000e-002,-2.75126e-002
+ 7.390625000000e-002,-2.75126e-002
+ 7.391250000000e-002,-2.75126e-002
+ 7.391875000000e-002,-2.75126e-002
+ 7.392500000000e-002,-2.75126e-002
+ 7.393125000000e-002,-2.75126e-002
+ 7.393750000000e-002,-2.75126e-002
+ 7.394375000000e-002,-2.75126e-002
+ 7.395000000000e-002,-2.75126e-002
+ 7.395625000000e-002,-2.75126e-002
+ 7.396250000000e-002,-2.75126e-002
+ 7.396875000000e-002,-2.75126e-002
+ 7.397500000000e-002,-2.75126e-002
+ 7.398125000000e-002,-2.75126e-002
+ 7.398750000000e-002,-2.75126e-002
+ 7.399375000000e-002,-2.75126e-002
+ 7.400000000000e-002,-2.75126e-002
+ 7.400625000000e-002,-2.75126e-002
+ 7.401250000000e-002,-2.75126e-002
+ 7.401875000000e-002,-2.75126e-002
+ 7.402500000000e-002,-2.75126e-002
+ 7.403125000000e-002,-2.75126e-002
+ 7.403750000000e-002,-2.75126e-002
+ 7.404375000000e-002,-2.75126e-002
+ 7.405000000000e-002,-2.75126e-002
+ 7.405625000000e-002,-2.75126e-002
+ 7.406250000000e-002,-2.75126e-002
+ 7.406875000000e-002,-2.75126e-002
+ 7.407500000000e-002,-2.75126e-002
+ 7.408125000000e-002,-2.75126e-002
+ 7.408750000000e-002,-2.75126e-002
+ 7.409375000000e-002,-2.75126e-002
+ 7.410000000000e-002,-2.75126e-002
+ 7.410625000000e-002,-2.24876e-002
+ 7.411250000000e-002,-2.75126e-002
+ 7.411875000000e-002,-2.75126e-002
+ 7.412500000000e-002,-2.75126e-002
+ 7.413125000000e-002,-2.75126e-002
+ 7.413750000000e-002,-2.75126e-002
+ 7.414375000000e-002,-2.75126e-002
+ 7.415000000000e-002,-2.75126e-002
+ 7.415625000000e-002,-2.75126e-002
+ 7.416250000000e-002,-2.75126e-002
+ 7.416875000000e-002,-2.75126e-002
+ 7.417500000000e-002,-2.75126e-002
+ 7.418125000000e-002,-2.75126e-002
+ 7.418750000000e-002,-2.75126e-002
+ 7.419375000000e-002,-2.75126e-002
+ 7.420000000000e-002,-2.75126e-002
+ 7.420625000000e-002,-2.75126e-002
+ 7.421250000000e-002,-2.75126e-002
+ 7.421875000000e-002,-2.75126e-002
+ 7.422500000000e-002,-2.75126e-002
+ 7.423125000000e-002,-2.75126e-002
+ 7.423750000000e-002,-2.75126e-002
+ 7.424375000000e-002,-2.75126e-002
+ 7.425000000000e-002,-2.75126e-002
+ 7.425625000000e-002,-2.75126e-002
+ 7.426250000000e-002,-2.75126e-002
+ 7.426875000000e-002,-2.75126e-002
+ 7.427500000000e-002,-2.75126e-002
+ 7.428125000000e-002,-2.75126e-002
+ 7.428750000000e-002,-2.75126e-002
+ 7.429375000000e-002,-2.75126e-002
+ 7.430000000000e-002,-2.75126e-002
+ 7.430625000000e-002,-2.75126e-002
+ 7.431250000000e-002,-2.75126e-002
+ 7.431875000000e-002,-2.75126e-002
+ 7.432500000000e-002,-2.75126e-002
+ 7.433125000000e-002,-2.75126e-002
+ 7.433750000000e-002,-2.75126e-002
+ 7.434375000000e-002,-2.75126e-002
+ 7.435000000000e-002,-2.24876e-002
+ 7.435625000000e-002,-2.24876e-002
+ 7.436250000000e-002,-2.75126e-002
+ 7.436875000000e-002,-2.75126e-002
+ 7.437500000000e-002,-2.75126e-002
+ 7.438125000000e-002,-2.75126e-002
+ 7.438750000000e-002,-2.75126e-002
+ 7.439375000000e-002,-2.75126e-002
+ 7.440000000000e-002,-2.75126e-002
+ 7.440625000000e-002,-2.75126e-002
+ 7.441250000000e-002,-2.75126e-002
+ 7.441875000000e-002,-2.75126e-002
+ 7.442500000000e-002,-2.24876e-002
+ 7.443125000000e-002,-2.75126e-002
+ 7.443750000000e-002,-2.75126e-002
+ 7.444375000000e-002,-2.24876e-002
+ 7.445000000000e-002,-2.75126e-002
+ 7.445625000000e-002,-2.75126e-002
+ 7.446250000000e-002,-2.75126e-002
+ 7.446875000000e-002,-2.75126e-002
+ 7.447500000000e-002,-2.75126e-002
+ 7.448125000000e-002,-2.75126e-002
+ 7.448750000000e-002,-2.75126e-002
+ 7.449375000000e-002,-2.75126e-002
+ 7.450000000000e-002,-2.75126e-002
+ 7.450625000000e-002,-2.75126e-002
+ 7.451250000000e-002,-2.75126e-002
+ 7.451875000000e-002,-2.75126e-002
+ 7.452500000000e-002,-2.75126e-002
+ 7.453125000000e-002,-2.75126e-002
+ 7.453750000000e-002,-2.75126e-002
+ 7.454375000000e-002,-2.75126e-002
+ 7.455000000000e-002,-2.75126e-002
+ 7.455625000000e-002,-2.75126e-002
+ 7.456250000000e-002,-2.75126e-002
+ 7.456875000000e-002,-2.75126e-002
+ 7.457500000000e-002,-2.75126e-002
+ 7.458125000000e-002,-2.75126e-002
+ 7.458750000000e-002,-2.75126e-002
+ 7.459375000000e-002,-2.75126e-002
+ 7.460000000000e-002,-2.75126e-002
+ 7.460625000000e-002,-2.75126e-002
+ 7.461250000000e-002,-2.75126e-002
+ 7.461875000000e-002,-2.75126e-002
+ 7.462500000000e-002,-2.75126e-002
+ 7.463125000000e-002,-2.75126e-002
+ 7.463750000000e-002,-2.75126e-002
+ 7.464375000000e-002,-2.75126e-002
+ 7.465000000000e-002,-2.75126e-002
+ 7.465625000000e-002,-2.75126e-002
+ 7.466250000000e-002,-2.75126e-002
+ 7.466875000000e-002,-2.75126e-002
+ 7.467500000000e-002,-2.75126e-002
+ 7.468125000000e-002,-2.75126e-002
+ 7.468750000000e-002,-2.75126e-002
+ 7.469375000000e-002,-2.75126e-002
+ 7.470000000000e-002,-2.75126e-002
+ 7.470625000000e-002,-2.75126e-002
+ 7.471250000000e-002,-2.75126e-002
+ 7.471875000000e-002,-2.75126e-002
+ 7.472500000000e-002,-2.75126e-002
+ 7.473125000000e-002,-2.24876e-002
+ 7.473750000000e-002,-2.75126e-002
+ 7.474375000000e-002,-2.75126e-002
+ 7.475000000000e-002,-2.75126e-002
+ 7.475625000000e-002,-2.75126e-002
+ 7.476250000000e-002,-2.75126e-002
+ 7.476875000000e-002,-2.75126e-002
+ 7.477500000000e-002,-2.75126e-002
+ 7.478125000000e-002,-2.75126e-002
+ 7.478750000000e-002,-2.75126e-002
+ 7.479375000000e-002,-2.75126e-002
+ 7.480000000000e-002,-2.75126e-002
+ 7.480625000000e-002,-2.75126e-002
+ 7.481250000000e-002,-2.75126e-002
+ 7.481875000000e-002,-2.75126e-002
+ 7.482500000000e-002,-2.75126e-002
+ 7.483125000000e-002,-2.75126e-002
+ 7.483750000000e-002,-2.75126e-002
+ 7.484375000000e-002,-2.75126e-002
+ 7.485000000000e-002,-2.75126e-002
+ 7.485625000000e-002,-2.75126e-002
+ 7.486250000000e-002,-2.75126e-002
+ 7.486875000000e-002,-2.75126e-002
+ 7.487500000000e-002,-2.75126e-002
+ 7.488125000000e-002,-2.75126e-002
+ 7.488750000000e-002,-2.75126e-002
+ 7.489375000000e-002,-2.75126e-002
+ 7.490000000000e-002,-2.75126e-002
+ 7.490625000000e-002,-2.75126e-002
+ 7.491250000000e-002,-2.75126e-002
+ 7.491875000000e-002,-2.75126e-002
+ 7.492500000000e-002,-2.75126e-002
+ 7.493125000000e-002,-2.75126e-002
+ 7.493750000000e-002,-2.75126e-002
+ 7.494375000000e-002,-2.75126e-002
+ 7.495000000000e-002,-2.75126e-002
+ 7.495625000000e-002,-2.75126e-002
+ 7.496250000000e-002,-2.75126e-002
+ 7.496875000000e-002,-2.75126e-002
+ 7.497500000000e-002,-2.75126e-002
+ 7.498125000000e-002,-2.75126e-002
+ 7.498750000000e-002,-2.75126e-002
+ 7.499375000000e-002,-2.75126e-002
+ 7.500000000000e-002,-2.75126e-002
+ 7.500625000000e-002,-2.75126e-002
+ 7.501250000000e-002,-2.75126e-002
+ 7.501875000000e-002,-2.75126e-002
+ 7.502500000000e-002,-2.75126e-002
+ 7.503125000000e-002,-2.75126e-002
+ 7.503750000000e-002,-2.75126e-002
+ 7.504375000000e-002,-2.75126e-002
+ 7.505000000000e-002,-2.75126e-002
+ 7.505625000000e-002,-2.75126e-002
+ 7.506250000000e-002,-2.75126e-002
+ 7.506875000000e-002,-2.75126e-002
+ 7.507500000000e-002,-2.75126e-002
+ 7.508125000000e-002,-2.75126e-002
+ 7.508750000000e-002,-2.75126e-002
+ 7.509375000000e-002,-2.75126e-002
+ 7.510000000000e-002,-2.75126e-002
+ 7.510625000000e-002,-2.75126e-002
+ 7.511250000000e-002,-2.75126e-002
+ 7.511875000000e-002,-2.75126e-002
+ 7.512500000000e-002,-2.75126e-002
+ 7.513125000000e-002,-2.75126e-002
+ 7.513750000000e-002,-2.75126e-002
+ 7.514375000000e-002,-2.24876e-002
+ 7.515000000000e-002,-2.75126e-002
+ 7.515625000000e-002,-2.75126e-002
+ 7.516250000000e-002,-2.75126e-002
+ 7.516875000000e-002,-2.75126e-002
+ 7.517500000000e-002,-2.75126e-002
+ 7.518125000000e-002,-2.75126e-002
+ 7.518750000000e-002,-2.75126e-002
+ 7.519375000000e-002,-2.75126e-002
+ 7.520000000000e-002,-2.75126e-002
+ 7.520625000000e-002,-2.75126e-002
+ 7.521250000000e-002,-2.75126e-002
+ 7.521875000000e-002,-2.75126e-002
+ 7.522500000000e-002,-2.75126e-002
+ 7.523125000000e-002,-2.75126e-002
+ 7.523750000000e-002,-2.75126e-002
+ 7.524375000000e-002,-2.75126e-002
+ 7.525000000000e-002,-2.75126e-002
+ 7.525625000000e-002,-2.75126e-002
+ 7.526250000000e-002,-2.75126e-002
+ 7.526875000000e-002,-2.75126e-002
+ 7.527500000000e-002,-2.75126e-002
+ 7.528125000000e-002,-2.75126e-002
+ 7.528750000000e-002,-2.75126e-002
+ 7.529375000000e-002,-2.75126e-002
+ 7.530000000000e-002,-2.75126e-002
+ 7.530625000000e-002,-2.75126e-002
+ 7.531250000000e-002,-2.75126e-002
+ 7.531875000000e-002,-2.24876e-002
+ 7.532500000000e-002,-2.75126e-002
+ 7.533125000000e-002,-2.75126e-002
+ 7.533750000000e-002,-2.75126e-002
+ 7.534375000000e-002,-2.75126e-002
+ 7.535000000000e-002,-2.75126e-002
+ 7.535625000000e-002,-2.75126e-002
+ 7.536250000000e-002,-2.75126e-002
+ 7.536875000000e-002,-2.24876e-002
+ 7.537500000000e-002,-2.75126e-002
+ 7.538125000000e-002,-2.75126e-002
+ 7.538750000000e-002,-2.75126e-002
+ 7.539375000000e-002,-2.75126e-002
+ 7.540000000000e-002,-2.75126e-002
+ 7.540625000000e-002,-2.75126e-002
+ 7.541250000000e-002,-2.75126e-002
+ 7.541875000000e-002,-2.75126e-002
+ 7.542500000000e-002,-2.75126e-002
+ 7.543125000000e-002,-2.75126e-002
+ 7.543750000000e-002,-2.75126e-002
+ 7.544375000000e-002,-2.75126e-002
+ 7.545000000000e-002,-2.75126e-002
+ 7.545625000000e-002,-2.75126e-002
+ 7.546250000000e-002,-2.75126e-002
+ 7.546875000000e-002,-2.75126e-002
+ 7.547500000000e-002,-2.75126e-002
+ 7.548125000000e-002,-2.75126e-002
+ 7.548750000000e-002,-2.75126e-002
+ 7.549375000000e-002,-2.75126e-002
+ 7.550000000000e-002,-2.75126e-002
+ 7.550625000000e-002,-2.75126e-002
+ 7.551250000000e-002,-2.75126e-002
+ 7.551875000000e-002,-2.75126e-002
+ 7.552500000000e-002,-2.75126e-002
+ 7.553125000000e-002,-2.75126e-002
+ 7.553750000000e-002,-2.75126e-002
+ 7.554375000000e-002,-2.75126e-002
+ 7.555000000000e-002,-2.75126e-002
+ 7.555625000000e-002,-2.75126e-002
+ 7.556250000000e-002,-2.75126e-002
+ 7.556875000000e-002,-2.75126e-002
+ 7.557500000000e-002,-2.75126e-002
+ 7.558125000000e-002,-2.75126e-002
+ 7.558750000000e-002,-2.75126e-002
+ 7.559375000000e-002,-2.75126e-002
+ 7.560000000000e-002,-2.24876e-002
+ 7.560625000000e-002,-2.75126e-002
+ 7.561250000000e-002,-2.75126e-002
+ 7.561875000000e-002,-2.75126e-002
+ 7.562500000000e-002,-2.75126e-002
+ 7.563125000000e-002,-2.75126e-002
+ 7.563750000000e-002,-2.75126e-002
+ 7.564375000000e-002,-2.75126e-002
+ 7.565000000000e-002,-2.75126e-002
+ 7.565625000000e-002,-2.75126e-002
+ 7.566250000000e-002,-2.75126e-002
+ 7.566875000000e-002,-2.75126e-002
+ 7.567500000000e-002,-2.75126e-002
+ 7.568125000000e-002,-2.75126e-002
+ 7.568750000000e-002,-2.75126e-002
+ 7.569375000000e-002,-2.75126e-002
+ 7.570000000000e-002,-2.75126e-002
+ 7.570625000000e-002,-2.75126e-002
+ 7.571250000000e-002,-2.75126e-002
+ 7.571875000000e-002,-2.75126e-002
+ 7.572500000000e-002,-2.75126e-002
+ 7.573125000000e-002,-2.75126e-002
+ 7.573750000000e-002,-2.75126e-002
+ 7.574375000000e-002,-2.75126e-002
+ 7.575000000000e-002,-2.75126e-002
+ 7.575625000000e-002,-2.75126e-002
+ 7.576250000000e-002,-2.75126e-002
+ 7.576875000000e-002,-2.75126e-002
+ 7.577500000000e-002,-2.75126e-002
+ 7.578125000000e-002,-2.75126e-002
+ 7.578750000000e-002,-2.75126e-002
+ 7.579375000000e-002,-2.75126e-002
+ 7.580000000000e-002,-2.75126e-002
+ 7.580625000000e-002,-2.75126e-002
+ 7.581250000000e-002,-2.75126e-002
+ 7.581875000000e-002,-2.75126e-002
+ 7.582500000000e-002,-2.75126e-002
+ 7.583125000000e-002,-2.75126e-002
+ 7.583750000000e-002,-2.75126e-002
+ 7.584375000000e-002,-2.75126e-002
+ 7.585000000000e-002,-2.75126e-002
+ 7.585625000000e-002,-2.75126e-002
+ 7.586250000000e-002,-2.75126e-002
+ 7.586875000000e-002,-2.75126e-002
+ 7.587500000000e-002,-2.75126e-002
+ 7.588125000000e-002,-2.75126e-002
+ 7.588750000000e-002,-2.75126e-002
+ 7.589375000000e-002,-2.75126e-002
+ 7.590000000000e-002,-2.75126e-002
+ 7.590625000000e-002,-2.75126e-002
+ 7.591250000000e-002,-2.75126e-002
+ 7.591875000000e-002,-2.75126e-002
+ 7.592500000000e-002,-2.75126e-002
+ 7.593125000000e-002,-2.75126e-002
+ 7.593750000000e-002,-2.75126e-002
+ 7.594375000000e-002,-2.75126e-002
+ 7.595000000000e-002,-2.75126e-002
+ 7.595625000000e-002,-2.75126e-002
+ 7.596250000000e-002,-2.75126e-002
+ 7.596875000000e-002,-2.75126e-002
+ 7.597500000000e-002,-2.75126e-002
+ 7.598125000000e-002,-2.75126e-002
+ 7.598750000000e-002,-2.75126e-002
+ 7.599375000000e-002,-2.75126e-002
+ 7.600000000000e-002,-2.75126e-002
+ 7.600625000000e-002,-2.75126e-002
+ 7.601250000000e-002,-2.75126e-002
+ 7.601875000000e-002,-2.75126e-002
+ 7.602500000000e-002,-2.75126e-002
+ 7.603125000000e-002,-2.75126e-002
+ 7.603750000000e-002,-2.75126e-002
+ 7.604375000000e-002,-2.75126e-002
+ 7.605000000000e-002,-2.75126e-002
+ 7.605625000000e-002,-2.75126e-002
+ 7.606250000000e-002,-2.75126e-002
+ 7.606875000000e-002,-2.75126e-002
+ 7.607500000000e-002,-2.75126e-002
+ 7.608125000000e-002,-2.75126e-002
+ 7.608750000000e-002,-2.75126e-002
+ 7.609375000000e-002,-2.75126e-002
+ 7.610000000000e-002,-2.75126e-002
+ 7.610625000000e-002,-2.75126e-002
+ 7.611250000000e-002,-2.75126e-002
+ 7.611875000000e-002,-2.75126e-002
+ 7.612500000000e-002,-2.75126e-002
+ 7.613125000000e-002,-2.75126e-002
+ 7.613750000000e-002,-2.75126e-002
+ 7.614375000000e-002,-2.75126e-002
+ 7.615000000000e-002,-2.75126e-002
+ 7.615625000000e-002,-2.75126e-002
+ 7.616250000000e-002,-2.75126e-002
+ 7.616875000000e-002,-2.75126e-002
+ 7.617500000000e-002,-2.75126e-002
+ 7.618125000000e-002,-2.75126e-002
+ 7.618750000000e-002,-2.75126e-002
+ 7.619375000000e-002,-2.75126e-002
+ 7.620000000000e-002,-2.75126e-002
+ 7.620625000000e-002,-2.75126e-002
+ 7.621250000000e-002,-2.75126e-002
+ 7.621875000000e-002,-2.75126e-002
+ 7.622500000000e-002,-2.75126e-002
+ 7.623125000000e-002,-2.75126e-002
+ 7.623750000000e-002,-2.75126e-002
+ 7.624375000000e-002,-2.75126e-002
+ 7.625000000000e-002,-2.75126e-002
+ 7.625625000000e-002,-2.75126e-002
+ 7.626250000000e-002,-2.75126e-002
+ 7.626875000000e-002,-2.75126e-002
+ 7.627500000000e-002,-2.24876e-002
+ 7.628125000000e-002,-2.75126e-002
+ 7.628750000000e-002,-2.75126e-002
+ 7.629375000000e-002,-2.75126e-002
+ 7.630000000000e-002,-2.75126e-002
+ 7.630625000000e-002,-2.75126e-002
+ 7.631250000000e-002,-2.75126e-002
+ 7.631875000000e-002,-2.75126e-002
+ 7.632500000000e-002,-2.75126e-002
+ 7.633125000000e-002,-2.75126e-002
+ 7.633750000000e-002,-2.75126e-002
+ 7.634375000000e-002,-2.75126e-002
+ 7.635000000000e-002,-2.75126e-002
+ 7.635625000000e-002,-2.75126e-002
+ 7.636250000000e-002,-2.75126e-002
+ 7.636875000000e-002,-2.75126e-002
+ 7.637500000000e-002,-2.75126e-002
+ 7.638125000000e-002,-2.75126e-002
+ 7.638750000000e-002,-2.75126e-002
+ 7.639375000000e-002,-2.75126e-002
+ 7.640000000000e-002,-2.75126e-002
+ 7.640625000000e-002,-2.75126e-002
+ 7.641250000000e-002,-2.24876e-002
+ 7.641875000000e-002,-2.75126e-002
+ 7.642500000000e-002,-2.75126e-002
+ 7.643125000000e-002,-2.24876e-002
+ 7.643750000000e-002,-2.75126e-002
+ 7.644375000000e-002,-2.75126e-002
+ 7.645000000000e-002,-2.75126e-002
+ 7.645625000000e-002,-2.75126e-002
+ 7.646250000000e-002,-2.75126e-002
+ 7.646875000000e-002,-2.75126e-002
+ 7.647500000000e-002,-2.75126e-002
+ 7.648125000000e-002,-2.75126e-002
+ 7.648750000000e-002,-2.75126e-002
+ 7.649375000000e-002,-2.75126e-002
+ 7.650000000000e-002,-2.75126e-002
+ 7.650625000000e-002,-2.75126e-002
+ 7.651250000000e-002,-2.75126e-002
+ 7.651875000000e-002,-2.75126e-002
+ 7.652500000000e-002,-2.75126e-002
+ 7.653125000000e-002,-2.75126e-002
+ 7.653750000000e-002,-2.75126e-002
+ 7.654375000000e-002,-2.75126e-002
+ 7.655000000000e-002,-2.75126e-002
+ 7.655625000000e-002,-2.75126e-002
+ 7.656250000000e-002,-2.75126e-002
+ 7.656875000000e-002,-2.75126e-002
+ 7.657500000000e-002,-2.75126e-002
+ 7.658125000000e-002,-2.75126e-002
+ 7.658750000000e-002,-2.75126e-002
+ 7.659375000000e-002,-2.75126e-002
+ 7.660000000000e-002,-2.75126e-002
+ 7.660625000000e-002,-2.75126e-002
+ 7.661250000000e-002,-2.75126e-002
+ 7.661875000000e-002,-2.75126e-002
+ 7.662500000000e-002,-2.75126e-002
+ 7.663125000000e-002,-2.75126e-002
+ 7.663750000000e-002,-2.75126e-002
+ 7.664375000000e-002,-2.75126e-002
+ 7.665000000000e-002,-2.75126e-002
+ 7.665625000000e-002,-2.75126e-002
+ 7.666250000000e-002,-2.75126e-002
+ 7.666875000000e-002,-2.75126e-002
+ 7.667500000000e-002,-2.75126e-002
+ 7.668125000000e-002,-2.75126e-002
+ 7.668750000000e-002,-2.75126e-002
+ 7.669375000000e-002,-2.75126e-002
+ 7.670000000000e-002,-2.75126e-002
+ 7.670625000000e-002,-2.75126e-002
+ 7.671250000000e-002,-2.75126e-002
+ 7.671875000000e-002,-2.75126e-002
+ 7.672500000000e-002,-2.75126e-002
+ 7.673125000000e-002,-2.75126e-002
+ 7.673750000000e-002,-2.75126e-002
+ 7.674375000000e-002,-2.75126e-002
+ 7.675000000000e-002,-2.75126e-002
+ 7.675625000000e-002,-2.75126e-002
+ 7.676250000000e-002,-2.75126e-002
+ 7.676875000000e-002,-2.75126e-002
+ 7.677500000000e-002,-2.75126e-002
+ 7.678125000000e-002,-2.75126e-002
+ 7.678750000000e-002,-2.75126e-002
+ 7.679375000000e-002,-2.75126e-002
+ 7.680000000000e-002,-2.75126e-002
+ 7.680625000000e-002,-2.75126e-002
+ 7.681250000000e-002,-2.75126e-002
+ 7.681875000000e-002,-2.75126e-002
+ 7.682500000000e-002,-2.75126e-002
+ 7.683125000000e-002,-2.75126e-002
+ 7.683750000000e-002,-2.75126e-002
+ 7.684375000000e-002,-2.75126e-002
+ 7.685000000000e-002,-2.75126e-002
+ 7.685625000000e-002,-2.24876e-002
+ 7.686250000000e-002,-2.75126e-002
+ 7.686875000000e-002,-2.75126e-002
+ 7.687500000000e-002,-2.75126e-002
+ 7.688125000000e-002,-2.75126e-002
+ 7.688750000000e-002,-2.75126e-002
+ 7.689375000000e-002,-2.75126e-002
+ 7.690000000000e-002,-2.75126e-002
+ 7.690625000000e-002,-2.75126e-002
+ 7.691250000000e-002,-2.75126e-002
+ 7.691875000000e-002,-2.75126e-002
+ 7.692500000000e-002,-2.75126e-002
+ 7.693125000000e-002,-2.75126e-002
+ 7.693750000000e-002,-2.75126e-002
+ 7.694375000000e-002,-2.75126e-002
+ 7.695000000000e-002,-2.75126e-002
+ 7.695625000000e-002,-2.75126e-002
+ 7.696250000000e-002,-2.75126e-002
+ 7.696875000000e-002,-2.75126e-002
+ 7.697500000000e-002,-2.75126e-002
+ 7.698125000000e-002,-2.75126e-002
+ 7.698750000000e-002,-2.75126e-002
+ 7.699375000000e-002,-2.75126e-002
+ 7.700000000000e-002,-2.75126e-002
+ 7.700625000000e-002,-2.75126e-002
+ 7.701250000000e-002,-2.75126e-002
+ 7.701875000000e-002,-2.75126e-002
+ 7.702500000000e-002,-2.75126e-002
+ 7.703125000000e-002,-2.24876e-002
+ 7.703750000000e-002,-2.75126e-002
+ 7.704375000000e-002,-2.75126e-002
+ 7.705000000000e-002,-2.75126e-002
+ 7.705625000000e-002,-2.75126e-002
+ 7.706250000000e-002,-2.75126e-002
+ 7.706875000000e-002,-2.75126e-002
+ 7.707500000000e-002,-2.75126e-002
+ 7.708125000000e-002,-2.75126e-002
+ 7.708750000000e-002,-2.75126e-002
+ 7.709375000000e-002,-2.75126e-002
+ 7.710000000000e-002,-2.75126e-002
+ 7.710625000000e-002,-2.24876e-002
+ 7.711250000000e-002,-2.75126e-002
+ 7.711875000000e-002,-2.75126e-002
+ 7.712500000000e-002,-2.75126e-002
+ 7.713125000000e-002,-2.75126e-002
+ 7.713750000000e-002,-2.75126e-002
+ 7.714375000000e-002,-2.75126e-002
+ 7.715000000000e-002,-2.75126e-002
+ 7.715625000000e-002,-2.75126e-002
+ 7.716250000000e-002,-2.75126e-002
+ 7.716875000000e-002,-2.75126e-002
+ 7.717500000000e-002,-2.75126e-002
+ 7.718125000000e-002,-2.75126e-002
+ 7.718750000000e-002,-2.75126e-002
+ 7.719375000000e-002,-2.75126e-002
+ 7.720000000000e-002,-2.75126e-002
+ 7.720625000000e-002,-2.75126e-002
+ 7.721250000000e-002,-2.75126e-002
+ 7.721875000000e-002,-2.75126e-002
+ 7.722500000000e-002,-2.75126e-002
+ 7.723125000000e-002,-2.75126e-002
+ 7.723750000000e-002,-2.75126e-002
+ 7.724375000000e-002,-2.75126e-002
+ 7.725000000000e-002,-2.75126e-002
+ 7.725625000000e-002,-2.75126e-002
+ 7.726250000000e-002,-2.75126e-002
+ 7.726875000000e-002,-2.75126e-002
+ 7.727500000000e-002,-2.75126e-002
+ 7.728125000000e-002,-2.75126e-002
+ 7.728750000000e-002,-2.75126e-002
+ 7.729375000000e-002,-2.75126e-002
+ 7.730000000000e-002,-2.75126e-002
+ 7.730625000000e-002,-2.75126e-002
+ 7.731250000000e-002,-2.75126e-002
+ 7.731875000000e-002,-2.75126e-002
+ 7.732500000000e-002,-2.75126e-002
+ 7.733125000000e-002,-2.75126e-002
+ 7.733750000000e-002,-2.75126e-002
+ 7.734375000000e-002,-2.75126e-002
+ 7.735000000000e-002,-2.75126e-002
+ 7.735625000000e-002,-2.75126e-002
+ 7.736250000000e-002,-2.75126e-002
+ 7.736875000000e-002,-2.24876e-002
+ 7.737500000000e-002,-2.75126e-002
+ 7.738125000000e-002,-2.75126e-002
+ 7.738750000000e-002,-2.75126e-002
+ 7.739375000000e-002,-2.75126e-002
+ 7.740000000000e-002,-2.75126e-002
+ 7.740625000000e-002,-2.75126e-002
+ 7.741250000000e-002,-2.75126e-002
+ 7.741875000000e-002,-2.75126e-002
+ 7.742500000000e-002,-2.75126e-002
+ 7.743125000000e-002,-2.75126e-002
+ 7.743750000000e-002,-2.75126e-002
+ 7.744375000000e-002,-2.75126e-002
+ 7.745000000000e-002,-2.75126e-002
+ 7.745625000000e-002,-2.75126e-002
+ 7.746250000000e-002,-2.75126e-002
+ 7.746875000000e-002,-2.75126e-002
+ 7.747500000000e-002,-2.75126e-002
+ 7.748125000000e-002,-2.75126e-002
+ 7.748750000000e-002,-2.75126e-002
+ 7.749375000000e-002,-2.75126e-002
+ 7.750000000000e-002,-2.75126e-002
+ 7.750625000000e-002,-2.75126e-002
+ 7.751250000000e-002,-2.75126e-002
+ 7.751875000000e-002,-2.75126e-002
+ 7.752500000000e-002,-2.75126e-002
+ 7.753125000000e-002,-2.75126e-002
+ 7.753750000000e-002,-2.75126e-002
+ 7.754375000000e-002,-2.75126e-002
+ 7.755000000000e-002,-2.24876e-002
+ 7.755625000000e-002,-2.75126e-002
+ 7.756250000000e-002,-2.75126e-002
+ 7.756875000000e-002,-2.75126e-002
+ 7.757500000000e-002,-2.75126e-002
+ 7.758125000000e-002,-2.75126e-002
+ 7.758750000000e-002,-2.75126e-002
+ 7.759375000000e-002,-2.75126e-002
+ 7.760000000000e-002,-2.75126e-002
+ 7.760625000000e-002,-2.24876e-002
+ 7.761250000000e-002,-2.75126e-002
+ 7.761875000000e-002,-2.75126e-002
+ 7.762500000000e-002,-2.75126e-002
+ 7.763125000000e-002,-2.75126e-002
+ 7.763750000000e-002,-2.75126e-002
+ 7.764375000000e-002,-2.75126e-002
+ 7.765000000000e-002,-2.75126e-002
+ 7.765625000000e-002,-2.75126e-002
+ 7.766250000000e-002,-2.75126e-002
+ 7.766875000000e-002,-2.75126e-002
+ 7.767500000000e-002,-2.75126e-002
+ 7.768125000000e-002,-2.75126e-002
+ 7.768750000000e-002,-2.75126e-002
+ 7.769375000000e-002,-2.75126e-002
+ 7.770000000000e-002,-2.75126e-002
+ 7.770625000000e-002,-2.75126e-002
+ 7.771250000000e-002,-2.75126e-002
+ 7.771875000000e-002,-2.75126e-002
+ 7.772500000000e-002,-2.75126e-002
+ 7.773125000000e-002,-2.75126e-002
+ 7.773750000000e-002,-2.75126e-002
+ 7.774375000000e-002,-2.75126e-002
+ 7.775000000000e-002,-2.75126e-002
+ 7.775625000000e-002,-2.75126e-002
+ 7.776250000000e-002,-2.75126e-002
+ 7.776875000000e-002,-2.75126e-002
+ 7.777500000000e-002,-2.75126e-002
+ 7.778125000000e-002,-2.75126e-002
+ 7.778750000000e-002,-2.75126e-002
+ 7.779375000000e-002,-2.75126e-002
+ 7.780000000000e-002,-2.75126e-002
+ 7.780625000000e-002,-2.75126e-002
+ 7.781250000000e-002,-2.75126e-002
+ 7.781875000000e-002,-2.75126e-002
+ 7.782500000000e-002,-2.75126e-002
+ 7.783125000000e-002,-2.75126e-002
+ 7.783750000000e-002,-2.75126e-002
+ 7.784375000000e-002,-2.75126e-002
+ 7.785000000000e-002,-2.75126e-002
+ 7.785625000000e-002,-2.75126e-002
+ 7.786250000000e-002,-2.75126e-002
+ 7.786875000000e-002,-2.75126e-002
+ 7.787500000000e-002,-2.75126e-002
+ 7.788125000000e-002,-2.75126e-002
+ 7.788750000000e-002,-2.75126e-002
+ 7.789375000000e-002,-2.75126e-002
+ 7.790000000000e-002,-2.75126e-002
+ 7.790625000000e-002,-2.75126e-002
+ 7.791250000000e-002,-2.75126e-002
+ 7.791875000000e-002,-2.75126e-002
+ 7.792500000000e-002,-2.75126e-002
+ 7.793125000000e-002,-2.75126e-002
+ 7.793750000000e-002,-2.75126e-002
+ 7.794375000000e-002,-2.75126e-002
+ 7.795000000000e-002,-2.75126e-002
+ 7.795625000000e-002,-2.75126e-002
+ 7.796250000000e-002,-2.75126e-002
+ 7.796875000000e-002,-2.75126e-002
+ 7.797500000000e-002,-2.75126e-002
+ 7.798125000000e-002,-2.75126e-002
+ 7.798750000000e-002,-2.75126e-002
+ 7.799375000000e-002,-2.75126e-002
+ 7.800000000000e-002,-2.75126e-002
+ 7.800625000000e-002,-2.75126e-002
+ 7.801250000000e-002,-2.75126e-002
+ 7.801875000000e-002,-2.75126e-002
+ 7.802500000000e-002,-2.75126e-002
+ 7.803125000000e-002,-2.75126e-002
+ 7.803750000000e-002,-2.75126e-002
+ 7.804375000000e-002,-2.75126e-002
+ 7.805000000000e-002,-2.75126e-002
+ 7.805625000000e-002,-2.75126e-002
+ 7.806250000000e-002,-2.75126e-002
+ 7.806875000000e-002,-2.75126e-002
+ 7.807500000000e-002,-2.75126e-002
+ 7.808125000000e-002,-2.75126e-002
+ 7.808750000000e-002,-2.75126e-002
+ 7.809375000000e-002,-2.75126e-002
+ 7.810000000000e-002,-2.75126e-002
+ 7.810625000000e-002,-2.75126e-002
+ 7.811250000000e-002,-2.75126e-002
+ 7.811875000000e-002,-2.75126e-002
+ 7.812500000000e-002,-2.75126e-002
+ 7.813125000000e-002,-2.75126e-002
+ 7.813750000000e-002,-2.75126e-002
+ 7.814375000000e-002,-2.75126e-002
+ 7.815000000000e-002,-2.75126e-002
+ 7.815625000000e-002,-2.75126e-002
+ 7.816250000000e-002,-2.75126e-002
+ 7.816875000000e-002,-2.75126e-002
+ 7.817500000000e-002,-2.75126e-002
+ 7.818125000000e-002,-2.75126e-002
+ 7.818750000000e-002,-2.75126e-002
+ 7.819375000000e-002,-2.75126e-002
+ 7.820000000000e-002,-2.75126e-002
+ 7.820625000000e-002,-2.75126e-002
+ 7.821250000000e-002,-2.75126e-002
+ 7.821875000000e-002,-2.75126e-002
+ 7.822500000000e-002,-2.75126e-002
+ 7.823125000000e-002,-2.75126e-002
+ 7.823750000000e-002,-2.75126e-002
+ 7.824375000000e-002,-2.75126e-002
+ 7.825000000000e-002,-2.75126e-002
+ 7.825625000000e-002,-2.75126e-002
+ 7.826250000000e-002,-2.75126e-002
+ 7.826875000000e-002,-2.75126e-002
+ 7.827500000000e-002,-2.75126e-002
+ 7.828125000000e-002,-2.75126e-002
+ 7.828750000000e-002,-2.75126e-002
+ 7.829375000000e-002,-2.75126e-002
+ 7.830000000000e-002,-2.75126e-002
+ 7.830625000000e-002,-2.75126e-002
+ 7.831250000000e-002,-2.75126e-002
+ 7.831875000000e-002,-2.75126e-002
+ 7.832500000000e-002,-2.75126e-002
+ 7.833125000000e-002,-2.75126e-002
+ 7.833750000000e-002,-2.75126e-002
+ 7.834375000000e-002,-2.24876e-002
+ 7.835000000000e-002,-2.75126e-002
+ 7.835625000000e-002,-2.75126e-002
+ 7.836250000000e-002,-2.75126e-002
+ 7.836875000000e-002,-2.75126e-002
+ 7.837500000000e-002,-2.75126e-002
+ 7.838125000000e-002,-2.75126e-002
+ 7.838750000000e-002,-2.75126e-002
+ 7.839375000000e-002,-2.75126e-002
+ 7.840000000000e-002,-2.75126e-002
+ 7.840625000000e-002,-2.75126e-002
+ 7.841250000000e-002,-2.75126e-002
+ 7.841875000000e-002,-2.75126e-002
+ 7.842500000000e-002,-2.75126e-002
+ 7.843125000000e-002,-2.75126e-002
+ 7.843750000000e-002,-2.75126e-002
+ 7.844375000000e-002,-2.75126e-002
+ 7.845000000000e-002,-2.75126e-002
+ 7.845625000000e-002,-2.75126e-002
+ 7.846250000000e-002,-2.75126e-002
+ 7.846875000000e-002,-2.75126e-002
+ 7.847500000000e-002,-2.75126e-002
+ 7.848125000000e-002,-2.75126e-002
+ 7.848750000000e-002,-2.75126e-002
+ 7.849375000000e-002,-2.75126e-002
+ 7.850000000000e-002,-2.75126e-002
+ 7.850625000000e-002,-2.75126e-002
+ 7.851250000000e-002,-2.75126e-002
+ 7.851875000000e-002,-2.75126e-002
+ 7.852500000000e-002,-2.75126e-002
+ 7.853125000000e-002,-2.75126e-002
+ 7.853750000000e-002,-2.75126e-002
+ 7.854375000000e-002,-2.75126e-002
+ 7.855000000000e-002,-2.24876e-002
+ 7.855625000000e-002,-2.75126e-002
+ 7.856250000000e-002,-2.75126e-002
+ 7.856875000000e-002,-2.75126e-002
+ 7.857500000000e-002,-2.75126e-002
+ 7.858125000000e-002,-2.75126e-002
+ 7.858750000000e-002,-2.75126e-002
+ 7.859375000000e-002,-2.75126e-002
+ 7.860000000000e-002,-2.75126e-002
+ 7.860625000000e-002,-2.75126e-002
+ 7.861250000000e-002,-2.75126e-002
+ 7.861875000000e-002,-2.75126e-002
+ 7.862500000000e-002,-2.75126e-002
+ 7.863125000000e-002,-2.75126e-002
+ 7.863750000000e-002,-2.75126e-002
+ 7.864375000000e-002,-2.75126e-002
+ 7.865000000000e-002,-2.75126e-002
+ 7.865625000000e-002,-2.75126e-002
+ 7.866250000000e-002,-2.75126e-002
+ 7.866875000000e-002,-2.75126e-002
+ 7.867500000000e-002,-2.75126e-002
+ 7.868125000000e-002,-2.75126e-002
+ 7.868750000000e-002,-2.75126e-002
+ 7.869375000000e-002,-2.75126e-002
+ 7.870000000000e-002,-2.75126e-002
+ 7.870625000000e-002,-2.75126e-002
+ 7.871250000000e-002,-2.75126e-002
+ 7.871875000000e-002,-2.75126e-002
+ 7.872500000000e-002,-2.75126e-002
+ 7.873125000000e-002,-2.75126e-002
+ 7.873750000000e-002,-2.75126e-002
+ 7.874375000000e-002,-2.75126e-002
+ 7.875000000000e-002,-2.75126e-002
+ 7.875625000000e-002,-2.75126e-002
+ 7.876250000000e-002,-2.75126e-002
+ 7.876875000000e-002,-2.75126e-002
+ 7.877500000000e-002,-2.75126e-002
+ 7.878125000000e-002,-2.75126e-002
+ 7.878750000000e-002,-2.75126e-002
+ 7.879375000000e-002,-2.75126e-002
+ 7.880000000000e-002,-2.75126e-002
+ 7.880625000000e-002,-2.75126e-002
+ 7.881250000000e-002,-2.24876e-002
+ 7.881875000000e-002,-2.75126e-002
+ 7.882500000000e-002,-2.75126e-002
+ 7.883125000000e-002,-2.75126e-002
+ 7.883750000000e-002,-2.75126e-002
+ 7.884375000000e-002,-2.75126e-002
+ 7.885000000000e-002,-2.75126e-002
+ 7.885625000000e-002,-2.75126e-002
+ 7.886250000000e-002,-2.75126e-002
+ 7.886875000000e-002,-2.75126e-002
+ 7.887500000000e-002,-2.75126e-002
+ 7.888125000000e-002,-2.75126e-002
+ 7.888750000000e-002,-2.75126e-002
+ 7.889375000000e-002,-2.75126e-002
+ 7.890000000000e-002,-2.75126e-002
+ 7.890625000000e-002,-2.75126e-002
+ 7.891250000000e-002,-2.75126e-002
+ 7.891875000000e-002,-2.24876e-002
+ 7.892500000000e-002,-2.75126e-002
+ 7.893125000000e-002,-2.75126e-002
+ 7.893750000000e-002,-2.75126e-002
+ 7.894375000000e-002,-2.75126e-002
+ 7.895000000000e-002,-2.75126e-002
+ 7.895625000000e-002,-2.75126e-002
+ 7.896250000000e-002,-2.75126e-002
+ 7.896875000000e-002,-2.75126e-002
+ 7.897500000000e-002,-2.75126e-002
+ 7.898125000000e-002,-2.75126e-002
+ 7.898750000000e-002,-2.75126e-002
+ 7.899375000000e-002,-2.75126e-002
+ 7.900000000000e-002,-2.75126e-002
+ 7.900625000000e-002,-2.75126e-002
+ 7.901250000000e-002,-2.75126e-002
+ 7.901875000000e-002,-2.75126e-002
+ 7.902500000000e-002,-2.75126e-002
+ 7.903125000000e-002,-2.75126e-002
+ 7.903750000000e-002,-2.75126e-002
+ 7.904375000000e-002,-2.75126e-002
+ 7.905000000000e-002,-2.75126e-002
+ 7.905625000000e-002,-2.75126e-002
+ 7.906250000000e-002,-2.75126e-002
+ 7.906875000000e-002,-2.75126e-002
+ 7.907500000000e-002,-2.75126e-002
+ 7.908125000000e-002,-2.75126e-002
+ 7.908750000000e-002,-2.75126e-002
+ 7.909375000000e-002,-2.75126e-002
+ 7.910000000000e-002,-2.75126e-002
+ 7.910625000000e-002,-2.75126e-002
+ 7.911250000000e-002,-2.75126e-002
+ 7.911875000000e-002,-2.75126e-002
+ 7.912500000000e-002,-2.75126e-002
+ 7.913125000000e-002,-2.75126e-002
+ 7.913750000000e-002,-2.75126e-002
+ 7.914375000000e-002,-2.75126e-002
+ 7.915000000000e-002,-2.75126e-002
+ 7.915625000000e-002,-2.75126e-002
+ 7.916250000000e-002,-2.75126e-002
+ 7.916875000000e-002,-2.75126e-002
+ 7.917500000000e-002,-2.75126e-002
+ 7.918125000000e-002,-2.75126e-002
+ 7.918750000000e-002,-2.75126e-002
+ 7.919375000000e-002,-2.75126e-002
+ 7.920000000000e-002,-2.75126e-002
+ 7.920625000000e-002,-2.75126e-002
+ 7.921250000000e-002,-2.24876e-002
+ 7.921875000000e-002,-2.24876e-002
+ 7.922500000000e-002,-2.24876e-002
+ 7.923125000000e-002,-2.75126e-002
+ 7.923750000000e-002,-2.75126e-002
+ 7.924375000000e-002,-2.24876e-002
+ 7.925000000000e-002,-2.75126e-002
+ 7.925625000000e-002,-2.75126e-002
+ 7.926250000000e-002,-2.75126e-002
+ 7.926875000000e-002,-2.75126e-002
+ 7.927500000000e-002,-2.75126e-002
+ 7.928125000000e-002,-2.75126e-002
+ 7.928750000000e-002,-2.75126e-002
+ 7.929375000000e-002,-2.75126e-002
+ 7.930000000000e-002,-2.75126e-002
+ 7.930625000000e-002,-2.75126e-002
+ 7.931250000000e-002,-2.75126e-002
+ 7.931875000000e-002,-2.75126e-002
+ 7.932500000000e-002,-2.75126e-002
+ 7.933125000000e-002,-2.75126e-002
+ 7.933750000000e-002,-2.75126e-002
+ 7.934375000000e-002,-2.75126e-002
+ 7.935000000000e-002,-2.24876e-002
+ 7.935625000000e-002,-2.75126e-002
+ 7.936250000000e-002,-2.75126e-002
+ 7.936875000000e-002,-2.75126e-002
+ 7.937500000000e-002,-2.75126e-002
+ 7.938125000000e-002,-2.75126e-002
+ 7.938750000000e-002,-2.75126e-002
+ 7.939375000000e-002,-2.75126e-002
+ 7.940000000000e-002,-2.75126e-002
+ 7.940625000000e-002,-2.75126e-002
+ 7.941250000000e-002,-2.75126e-002
+ 7.941875000000e-002,-2.75126e-002
+ 7.942500000000e-002,-2.24876e-002
+ 7.943125000000e-002,-2.75126e-002
+ 7.943750000000e-002,-2.24876e-002
+ 7.944375000000e-002,-2.75126e-002
+ 7.945000000000e-002,-2.75126e-002
+ 7.945625000000e-002,-2.75126e-002
+ 7.946250000000e-002,-2.75126e-002
+ 7.946875000000e-002,-2.75126e-002
+ 7.947500000000e-002,-2.75126e-002
+ 7.948125000000e-002,-2.24876e-002
+ 7.948750000000e-002,-2.75126e-002
+ 7.949375000000e-002,-2.24876e-002
+ 7.950000000000e-002,-2.75126e-002
+ 7.950625000000e-002,-2.75126e-002
+ 7.951250000000e-002,-2.75126e-002
+ 7.951875000000e-002,-2.75126e-002
+ 7.952500000000e-002,-2.75126e-002
+ 7.953125000000e-002,-2.75126e-002
+ 7.953750000000e-002,-2.75126e-002
+ 7.954375000000e-002,-2.75126e-002
+ 7.955000000000e-002,-2.75126e-002
+ 7.955625000000e-002,-2.75126e-002
+ 7.956250000000e-002,-2.75126e-002
+ 7.956875000000e-002,-2.24876e-002
+ 7.957500000000e-002,-2.75126e-002
+ 7.958125000000e-002,-2.75126e-002
+ 7.958750000000e-002,-2.75126e-002
+ 7.959375000000e-002,-2.75126e-002
+ 7.960000000000e-002,-2.24876e-002
+ 7.960625000000e-002,-2.75126e-002
+ 7.961250000000e-002,-2.75126e-002
+ 7.961875000000e-002,-2.75126e-002
+ 7.962500000000e-002,-2.24876e-002
+ 7.963125000000e-002,-2.75126e-002
+ 7.963750000000e-002,-2.75126e-002
+ 7.964375000000e-002,-2.75126e-002
+ 7.965000000000e-002,-2.75126e-002
+ 7.965625000000e-002,-2.75126e-002
+ 7.966250000000e-002,-2.75126e-002
+ 7.966875000000e-002,-2.75126e-002
+ 7.967500000000e-002,-2.75126e-002
+ 7.968125000000e-002,-2.75126e-002
+ 7.968750000000e-002,-2.75126e-002
+ 7.969375000000e-002,-2.75126e-002
+ 7.970000000000e-002,-2.75126e-002
+ 7.970625000000e-002,-2.75126e-002
+ 7.971250000000e-002,-2.75126e-002
+ 7.971875000000e-002,-2.75126e-002
+ 7.972500000000e-002,-2.75126e-002
+ 7.973125000000e-002,-2.75126e-002
+ 7.973750000000e-002,-2.75126e-002
+ 7.974375000000e-002,-2.75126e-002
+ 7.975000000000e-002,-2.75126e-002
+ 7.975625000000e-002,-2.75126e-002
+ 7.976250000000e-002,-2.75126e-002
+ 7.976875000000e-002,-2.75126e-002
+ 7.977500000000e-002,-2.75126e-002
+ 7.978125000000e-002,-2.75126e-002
+ 7.978750000000e-002,-2.75126e-002
+ 7.979375000000e-002,-2.75126e-002
+ 7.980000000000e-002,-2.75126e-002
+ 7.980625000000e-002,-2.75126e-002
+ 7.981250000000e-002,-2.75126e-002
+ 7.981875000000e-002,-2.75126e-002
+ 7.982500000000e-002,-2.75126e-002
+ 7.983125000000e-002,-2.75126e-002
+ 7.983750000000e-002,-2.75126e-002
+ 7.984375000000e-002,-2.75126e-002
+ 7.985000000000e-002,-2.75126e-002
+ 7.985625000000e-002,-2.75126e-002
+ 7.986250000000e-002,-2.75126e-002
+ 7.986875000000e-002,-2.75126e-002
+ 7.987500000000e-002,-2.75126e-002
+ 7.988125000000e-002,-2.75126e-002
+ 7.988750000000e-002,-2.75126e-002
+ 7.989375000000e-002,-2.75126e-002
+ 7.990000000000e-002,-2.75126e-002
+ 7.990625000000e-002,-2.75126e-002
+ 7.991250000000e-002,-2.75126e-002
+ 7.991875000000e-002,-2.75126e-002
+ 7.992500000000e-002,-2.75126e-002
+ 7.993125000000e-002,-2.75126e-002
+ 7.993750000000e-002,-2.75126e-002
+ 7.994375000000e-002,-2.75126e-002
+ 7.995000000000e-002,-2.75126e-002
+ 7.995625000000e-002,-2.75126e-002
+ 7.996250000000e-002,-2.75126e-002
+ 7.996875000000e-002,-2.75126e-002
+ 7.997500000000e-002,-2.75126e-002
+ 7.998125000000e-002,-2.75126e-002
+ 7.998750000000e-002,-2.75126e-002
+ 7.999375000000e-002,-2.75126e-002
+ 8.000000000000e-002,-2.75126e-002
+ 8.000625000000e-002,-2.75126e-002
+ 8.001250000000e-002,-2.75126e-002
+ 8.001875000000e-002,-2.75126e-002
+ 8.002500000000e-002,-2.75126e-002
+ 8.003125000000e-002,-2.24876e-002
+ 8.003750000000e-002,-2.75126e-002
+ 8.004375000000e-002,-2.75126e-002
+ 8.005000000000e-002,-2.75126e-002
+ 8.005625000000e-002,-2.75126e-002
+ 8.006250000000e-002,-2.75126e-002
+ 8.006875000000e-002,-2.75126e-002
+ 8.007500000000e-002,-2.75126e-002
+ 8.008125000000e-002,-2.75126e-002
+ 8.008750000000e-002,-2.75126e-002
+ 8.009375000000e-002,-2.75126e-002
+ 8.010000000000e-002,-2.75126e-002
+ 8.010625000000e-002,-2.75126e-002
+ 8.011250000000e-002,-2.75126e-002
+ 8.011875000000e-002,-2.75126e-002
+ 8.012500000000e-002,-2.75126e-002
+ 8.013125000000e-002,-2.75126e-002
+ 8.013750000000e-002,-2.75126e-002
+ 8.014375000000e-002,-2.75126e-002
+ 8.015000000000e-002,-2.75126e-002
+ 8.015625000000e-002,-2.75126e-002
+ 8.016250000000e-002,-2.75126e-002
+ 8.016875000000e-002,-2.75126e-002
+ 8.017500000000e-002,-2.75126e-002
+ 8.018125000000e-002,-2.75126e-002
+ 8.018750000000e-002,-2.75126e-002
+ 8.019375000000e-002,-2.75126e-002
+ 8.020000000000e-002,-2.75126e-002
+ 8.020625000000e-002,-2.75126e-002
+ 8.021250000000e-002,-2.75126e-002
+ 8.021875000000e-002,-2.75126e-002
+ 8.022500000000e-002,-2.75126e-002
+ 8.023125000000e-002,-2.75126e-002
+ 8.023750000000e-002,-2.75126e-002
+ 8.024375000000e-002,-2.75126e-002
+ 8.025000000000e-002,-2.75126e-002
+ 8.025625000000e-002,-2.75126e-002
+ 8.026250000000e-002,-2.75126e-002
+ 8.026875000000e-002,-2.75126e-002
+ 8.027500000000e-002,-2.75126e-002
+ 8.028125000000e-002,-2.75126e-002
+ 8.028750000000e-002,-2.75126e-002
+ 8.029375000000e-002,-2.75126e-002
+ 8.030000000000e-002,-2.75126e-002
+ 8.030625000000e-002,-2.75126e-002
+ 8.031250000000e-002,-2.75126e-002
+ 8.031875000000e-002,-2.75126e-002
+ 8.032500000000e-002,-2.75126e-002
+ 8.033125000000e-002,-2.75126e-002
+ 8.033750000000e-002,-2.75126e-002
+ 8.034375000000e-002,-2.75126e-002
+ 8.035000000000e-002,-2.75126e-002
+ 8.035625000000e-002,-2.75126e-002
+ 8.036250000000e-002,-2.75126e-002
+ 8.036875000000e-002,-2.75126e-002
+ 8.037500000000e-002,-2.75126e-002
+ 8.038125000000e-002,-2.75126e-002
+ 8.038750000000e-002,-2.75126e-002
+ 8.039375000000e-002,-2.75126e-002
+ 8.040000000000e-002,-2.75126e-002
+ 8.040625000000e-002,-2.75126e-002
+ 8.041250000000e-002,-2.75126e-002
+ 8.041875000000e-002,-2.75126e-002
+ 8.042500000000e-002,-2.75126e-002
+ 8.043125000000e-002,-2.75126e-002
+ 8.043750000000e-002,-2.75126e-002
+ 8.044375000000e-002,-2.75126e-002
+ 8.045000000000e-002,-2.75126e-002
+ 8.045625000000e-002,-2.75126e-002
+ 8.046250000000e-002,-2.75126e-002
+ 8.046875000000e-002,-2.75126e-002
+ 8.047500000000e-002,-2.75126e-002
+ 8.048125000000e-002,-2.75126e-002
+ 8.048750000000e-002,-2.75126e-002
+ 8.049375000000e-002,-2.75126e-002
+ 8.050000000000e-002,-2.75126e-002
+ 8.050625000000e-002,-2.75126e-002
+ 8.051250000000e-002,-2.75126e-002
+ 8.051875000000e-002,-2.75126e-002
+ 8.052500000000e-002,-2.75126e-002
+ 8.053125000000e-002,-2.75126e-002
+ 8.053750000000e-002,-2.75126e-002
+ 8.054375000000e-002,-2.75126e-002
+ 8.055000000000e-002,-2.75126e-002
+ 8.055625000000e-002,-2.75126e-002
+ 8.056250000000e-002,-2.75126e-002
+ 8.056875000000e-002,-2.75126e-002
+ 8.057500000000e-002,-2.75126e-002
+ 8.058125000000e-002,-2.75126e-002
+ 8.058750000000e-002,-2.75126e-002
+ 8.059375000000e-002,-2.24876e-002
+ 8.060000000000e-002,-2.75126e-002
+ 8.060625000000e-002,-2.75126e-002
+ 8.061250000000e-002,-2.75126e-002
+ 8.061875000000e-002,-2.75126e-002
+ 8.062500000000e-002,-2.75126e-002
+ 8.063125000000e-002,-2.75126e-002
+ 8.063750000000e-002,-2.75126e-002
+ 8.064375000000e-002,-2.75126e-002
+ 8.065000000000e-002,-2.75126e-002
+ 8.065625000000e-002,-2.24876e-002
+ 8.066250000000e-002,-2.75126e-002
+ 8.066875000000e-002,-2.75126e-002
+ 8.067500000000e-002,-2.75126e-002
+ 8.068125000000e-002,-2.75126e-002
+ 8.068750000000e-002,-2.75126e-002
+ 8.069375000000e-002,-2.75126e-002
+ 8.070000000000e-002,-2.75126e-002
+ 8.070625000000e-002,-2.75126e-002
+ 8.071250000000e-002,-2.75126e-002
+ 8.071875000000e-002,-2.75126e-002
+ 8.072500000000e-002,-2.75126e-002
+ 8.073125000000e-002,-2.75126e-002
+ 8.073750000000e-002,-2.75126e-002
+ 8.074375000000e-002,-2.75126e-002
+ 8.075000000000e-002,-2.75126e-002
+ 8.075625000000e-002,-2.75126e-002
+ 8.076250000000e-002,-2.75126e-002
+ 8.076875000000e-002,-2.75126e-002
+ 8.077500000000e-002,-2.75126e-002
+ 8.078125000000e-002,-2.75126e-002
+ 8.078750000000e-002,-2.75126e-002
+ 8.079375000000e-002,-2.75126e-002
+ 8.080000000000e-002,-2.75126e-002
+ 8.080625000000e-002,-2.75126e-002
+ 8.081250000000e-002,-2.75126e-002
+ 8.081875000000e-002,-2.75126e-002
+ 8.082500000000e-002,-2.75126e-002
+ 8.083125000000e-002,-2.75126e-002
+ 8.083750000000e-002,-2.75126e-002
+ 8.084375000000e-002,-2.75126e-002
+ 8.085000000000e-002,-2.75126e-002
+ 8.085625000000e-002,-2.75126e-002
+ 8.086250000000e-002,-2.75126e-002
+ 8.086875000000e-002,-2.75126e-002
+ 8.087500000000e-002,-2.75126e-002
+ 8.088125000000e-002,-2.75126e-002
+ 8.088750000000e-002,-2.75126e-002
+ 8.089375000000e-002,-2.75126e-002
+ 8.090000000000e-002,-2.75126e-002
+ 8.090625000000e-002,-2.75126e-002
+ 8.091250000000e-002,-2.75126e-002
+ 8.091875000000e-002,-2.75126e-002
+ 8.092500000000e-002,-2.75126e-002
+ 8.093125000000e-002,-2.75126e-002
+ 8.093750000000e-002,-2.75126e-002
+ 8.094375000000e-002,-2.75126e-002
+ 8.095000000000e-002,-2.75126e-002
+ 8.095625000000e-002,-2.75126e-002
+ 8.096250000000e-002,-2.75126e-002
+ 8.096875000000e-002,-2.75126e-002
+ 8.097500000000e-002,-2.75126e-002
+ 8.098125000000e-002,-2.75126e-002
+ 8.098750000000e-002,-2.75126e-002
+ 8.099375000000e-002,-2.75126e-002
+ 8.100000000000e-002,-2.75126e-002
+ 8.100625000000e-002,-2.75126e-002
+ 8.101250000000e-002,-2.75126e-002
+ 8.101875000000e-002,-2.75126e-002
+ 8.102500000000e-002,-2.75126e-002
+ 8.103125000000e-002,-2.75126e-002
+ 8.103750000000e-002,-2.75126e-002
+ 8.104375000000e-002,-2.75126e-002
+ 8.105000000000e-002,-2.75126e-002
+ 8.105625000000e-002,-2.75126e-002
+ 8.106250000000e-002,-2.75126e-002
+ 8.106875000000e-002,-2.75126e-002
+ 8.107500000000e-002,-2.75126e-002
+ 8.108125000000e-002,-2.75126e-002
+ 8.108750000000e-002,-2.75126e-002
+ 8.109375000000e-002,-2.75126e-002
+ 8.110000000000e-002,-2.75126e-002
+ 8.110625000000e-002,-2.75126e-002
+ 8.111250000000e-002,-2.75126e-002
+ 8.111875000000e-002,-2.75126e-002
+ 8.112500000000e-002,-2.75126e-002
+ 8.113125000000e-002,-2.75126e-002
+ 8.113750000000e-002,-2.75126e-002
+ 8.114375000000e-002,-2.75126e-002
+ 8.115000000000e-002,-2.75126e-002
+ 8.115625000000e-002,-2.75126e-002
+ 8.116250000000e-002,-2.75126e-002
+ 8.116875000000e-002,-2.75126e-002
+ 8.117500000000e-002,-2.75126e-002
+ 8.118125000000e-002,-2.75126e-002
+ 8.118750000000e-002,-2.75126e-002
+ 8.119375000000e-002,-2.75126e-002
+ 8.120000000000e-002,-2.75126e-002
+ 8.120625000000e-002,-2.75126e-002
+ 8.121250000000e-002,-2.75126e-002
+ 8.121875000000e-002,-2.75126e-002
+ 8.122500000000e-002,-2.75126e-002
+ 8.123125000000e-002,-2.75126e-002
+ 8.123750000000e-002,-2.75126e-002
+ 8.124375000000e-002,-2.75126e-002
+ 8.125000000000e-002,-2.75126e-002
+ 8.125625000000e-002,-2.75126e-002
+ 8.126250000000e-002,-2.75126e-002
+ 8.126875000000e-002,-2.75126e-002
+ 8.127500000000e-002,-2.75126e-002
+ 8.128125000000e-002,-2.75126e-002
+ 8.128750000000e-002,-2.75126e-002
+ 8.129375000000e-002,-2.75126e-002
+ 8.130000000000e-002,-2.75126e-002
+ 8.130625000000e-002,-2.75126e-002
+ 8.131250000000e-002,-2.75126e-002
+ 8.131875000000e-002,-2.75126e-002
+ 8.132500000000e-002,-2.75126e-002
+ 8.133125000000e-002,-2.75126e-002
+ 8.133750000000e-002,-2.75126e-002
+ 8.134375000000e-002,-2.75126e-002
+ 8.135000000000e-002,-2.75126e-002
+ 8.135625000000e-002,-2.75126e-002
+ 8.136250000000e-002,-2.75126e-002
+ 8.136875000000e-002,-2.75126e-002
+ 8.137500000000e-002,-2.75126e-002
+ 8.138125000000e-002,-2.75126e-002
+ 8.138750000000e-002,-2.75126e-002
+ 8.139375000000e-002,-2.75126e-002
+ 8.140000000000e-002,-2.75126e-002
+ 8.140625000000e-002,-2.75126e-002
+ 8.141250000000e-002,-2.75126e-002
+ 8.141875000000e-002,-2.75126e-002
+ 8.142500000000e-002,-2.75126e-002
+ 8.143125000000e-002,-2.75126e-002
+ 8.143750000000e-002,-2.75126e-002
+ 8.144375000000e-002,-2.75126e-002
+ 8.145000000000e-002,-2.75126e-002
+ 8.145625000000e-002,-2.75126e-002
+ 8.146250000000e-002,-2.75126e-002
+ 8.146875000000e-002,-2.75126e-002
+ 8.147500000000e-002,-2.75126e-002
+ 8.148125000000e-002,-2.75126e-002
+ 8.148750000000e-002,-2.75126e-002
+ 8.149375000000e-002,-2.75126e-002
+ 8.150000000000e-002,-2.75126e-002
+ 8.150625000000e-002,-2.24876e-002
+ 8.151250000000e-002,-2.75126e-002
+ 8.151875000000e-002,-2.75126e-002
+ 8.152500000000e-002,-2.75126e-002
+ 8.153125000000e-002,-2.75126e-002
+ 8.153750000000e-002,-2.75126e-002
+ 8.154375000000e-002,-2.75126e-002
+ 8.155000000000e-002,-2.75126e-002
+ 8.155625000000e-002,-2.75126e-002
+ 8.156250000000e-002,-2.75126e-002
+ 8.156875000000e-002,-2.75126e-002
+ 8.157500000000e-002,-2.75126e-002
+ 8.158125000000e-002,-2.75126e-002
+ 8.158750000000e-002,-2.75126e-002
+ 8.159375000000e-002,-2.75126e-002
+ 8.160000000000e-002,-2.75126e-002
+ 8.160625000000e-002,-2.24876e-002
+ 8.161250000000e-002,-2.75126e-002
+ 8.161875000000e-002,-2.75126e-002
+ 8.162500000000e-002,-2.75126e-002
+ 8.163125000000e-002,-2.75126e-002
+ 8.163750000000e-002,-2.75126e-002
+ 8.164375000000e-002,-2.75126e-002
+ 8.165000000000e-002,-2.75126e-002
+ 8.165625000000e-002,-2.75126e-002
+ 8.166250000000e-002,-2.75126e-002
+ 8.166875000000e-002,-2.75126e-002
+ 8.167500000000e-002,-2.75126e-002
+ 8.168125000000e-002,-2.75126e-002
+ 8.168750000000e-002,-2.75126e-002
+ 8.169375000000e-002,-2.75126e-002
+ 8.170000000000e-002,-2.75126e-002
+ 8.170625000000e-002,-2.75126e-002
+ 8.171250000000e-002,-2.75126e-002
+ 8.171875000000e-002,-2.75126e-002
+ 8.172500000000e-002,-2.75126e-002
+ 8.173125000000e-002,-2.75126e-002
+ 8.173750000000e-002,-2.75126e-002
+ 8.174375000000e-002,-2.75126e-002
+ 8.175000000000e-002,-2.75126e-002
+ 8.175625000000e-002,-2.75126e-002
+ 8.176250000000e-002,-2.75126e-002
+ 8.176875000000e-002,-2.75126e-002
+ 8.177500000000e-002,-2.75126e-002
+ 8.178125000000e-002,-2.75126e-002
+ 8.178750000000e-002,-2.75126e-002
+ 8.179375000000e-002,-2.75126e-002
+ 8.180000000000e-002,-2.75126e-002
+ 8.180625000000e-002,-2.75126e-002
+ 8.181250000000e-002,-2.75126e-002
+ 8.181875000000e-002,-2.75126e-002
+ 8.182500000000e-002,-2.24876e-002
+ 8.183125000000e-002,-2.75126e-002
+ 8.183750000000e-002,-2.75126e-002
+ 8.184375000000e-002,-2.75126e-002
+ 8.185000000000e-002,-2.75126e-002
+ 8.185625000000e-002,-2.75126e-002
+ 8.186250000000e-002,-2.75126e-002
+ 8.186875000000e-002,-2.75126e-002
+ 8.187500000000e-002,-2.75126e-002
+ 8.188125000000e-002,-2.75126e-002
+ 8.188750000000e-002,-2.75126e-002
+ 8.189375000000e-002,-2.75126e-002
+ 8.190000000000e-002,-2.75126e-002
+ 8.190625000000e-002,-2.75126e-002
+ 8.191250000000e-002,-2.75126e-002
+ 8.191875000000e-002,-2.75126e-002
+ 8.192500000000e-002,-2.75126e-002
+ 8.193125000000e-002,-2.75126e-002
+ 8.193750000000e-002,-2.75126e-002
+ 8.194375000000e-002,-2.75126e-002
+ 8.195000000000e-002,-2.75126e-002
+ 8.195625000000e-002,-2.75126e-002
+ 8.196250000000e-002,-2.75126e-002
+ 8.196875000000e-002,-2.75126e-002
+ 8.197500000000e-002,-2.75126e-002
+ 8.198125000000e-002,-2.75126e-002
+ 8.198750000000e-002,-2.75126e-002
+ 8.199375000000e-002,-2.75126e-002
+ 8.200000000000e-002,-2.75126e-002
+ 8.200625000000e-002,-2.75126e-002
+ 8.201250000000e-002,-2.75126e-002
+ 8.201875000000e-002,-2.75126e-002
+ 8.202500000000e-002,-2.75126e-002
+ 8.203125000000e-002,-2.75126e-002
+ 8.203750000000e-002,-2.75126e-002
+ 8.204375000000e-002,-2.75126e-002
+ 8.205000000000e-002,-2.75126e-002
+ 8.205625000000e-002,-2.75126e-002
+ 8.206250000000e-002,-2.75126e-002
+ 8.206875000000e-002,-2.75126e-002
+ 8.207500000000e-002,-2.75126e-002
+ 8.208125000000e-002,-2.75126e-002
+ 8.208750000000e-002,-2.75126e-002
+ 8.209375000000e-002,-2.75126e-002
+ 8.210000000000e-002,-2.75126e-002
+ 8.210625000000e-002,-2.75126e-002
+ 8.211250000000e-002,-2.75126e-002
+ 8.211875000000e-002,-2.75126e-002
+ 8.212500000000e-002,-2.75126e-002
+ 8.213125000000e-002,-2.75126e-002
+ 8.213750000000e-002,-2.75126e-002
+ 8.214375000000e-002,-2.75126e-002
+ 8.215000000000e-002,-2.75126e-002
+ 8.215625000000e-002,-2.75126e-002
+ 8.216250000000e-002,-2.75126e-002
+ 8.216875000000e-002,-2.75126e-002
+ 8.217500000000e-002,-2.75126e-002
+ 8.218125000000e-002,-2.75126e-002
+ 8.218750000000e-002,-2.75126e-002
+ 8.219375000000e-002,-2.75126e-002
+ 8.220000000000e-002,-2.75126e-002
+ 8.220625000000e-002,-2.75126e-002
+ 8.221250000000e-002,-2.75126e-002
+ 8.221875000000e-002,-2.75126e-002
+ 8.222500000000e-002,-2.24876e-002
+ 8.223125000000e-002,-2.75126e-002
+ 8.223750000000e-002,-2.75126e-002
+ 8.224375000000e-002,-2.75126e-002
+ 8.225000000000e-002,-2.75126e-002
+ 8.225625000000e-002,-2.75126e-002
+ 8.226250000000e-002,-2.75126e-002
+ 8.226875000000e-002,-2.75126e-002
+ 8.227500000000e-002,-2.75126e-002
+ 8.228125000000e-002,-2.75126e-002
+ 8.228750000000e-002,-2.75126e-002
+ 8.229375000000e-002,-2.75126e-002
+ 8.230000000000e-002,-2.75126e-002
+ 8.230625000000e-002,-2.75126e-002
+ 8.231250000000e-002,-2.75126e-002
+ 8.231875000000e-002,-2.75126e-002
+ 8.232500000000e-002,-2.75126e-002
+ 8.233125000000e-002,-2.75126e-002
+ 8.233750000000e-002,-2.75126e-002
+ 8.234375000000e-002,-2.75126e-002
+ 8.235000000000e-002,-2.75126e-002
+ 8.235625000000e-002,-2.75126e-002
+ 8.236250000000e-002,-2.75126e-002
+ 8.236875000000e-002,-2.75126e-002
+ 8.237500000000e-002,-2.75126e-002
+ 8.238125000000e-002,-2.75126e-002
+ 8.238750000000e-002,-2.75126e-002
+ 8.239375000000e-002,-2.24876e-002
+ 8.240000000000e-002,-2.75126e-002
+ 8.240625000000e-002,-2.75126e-002
+ 8.241250000000e-002,-2.75126e-002
+ 8.241875000000e-002,-2.75126e-002
+ 8.242500000000e-002,-2.75126e-002
+ 8.243125000000e-002,-2.75126e-002
+ 8.243750000000e-002,-2.75126e-002
+ 8.244375000000e-002,-2.75126e-002
+ 8.245000000000e-002,-2.75126e-002
+ 8.245625000000e-002,-2.75126e-002
+ 8.246250000000e-002,-2.75126e-002
+ 8.246875000000e-002,-2.75126e-002
+ 8.247500000000e-002,-2.75126e-002
+ 8.248125000000e-002,-2.75126e-002
+ 8.248750000000e-002,-2.75126e-002
+ 8.249375000000e-002,-2.75126e-002
+ 8.250000000000e-002,-2.75126e-002
+ 8.250625000000e-002,-2.75126e-002
+ 8.251250000000e-002,-2.75126e-002
+ 8.251875000000e-002,-2.75126e-002
+ 8.252500000000e-002,-2.75126e-002
+ 8.253125000000e-002,-2.75126e-002
+ 8.253750000000e-002,-2.75126e-002
+ 8.254375000000e-002,-2.75126e-002
+ 8.255000000000e-002,-2.75126e-002
+ 8.255625000000e-002,-2.24876e-002
+ 8.256250000000e-002,-2.75126e-002
+ 8.256875000000e-002,-2.75126e-002
+ 8.257500000000e-002,-2.75126e-002
+ 8.258125000000e-002,-2.75126e-002
+ 8.258750000000e-002,-2.75126e-002
+ 8.259375000000e-002,-2.75126e-002
+ 8.260000000000e-002,-2.75126e-002
+ 8.260625000000e-002,-2.75126e-002
+ 8.261250000000e-002,-2.75126e-002
+ 8.261875000000e-002,-2.75126e-002
+ 8.262500000000e-002,-2.75126e-002
+ 8.263125000000e-002,-2.75126e-002
+ 8.263750000000e-002,-2.75126e-002
+ 8.264375000000e-002,-2.75126e-002
+ 8.265000000000e-002,-2.75126e-002
+ 8.265625000000e-002,-2.75126e-002
+ 8.266250000000e-002,-2.75126e-002
+ 8.266875000000e-002,-2.75126e-002
+ 8.267500000000e-002,-2.75126e-002
+ 8.268125000000e-002,-2.75126e-002
+ 8.268750000000e-002,-2.75126e-002
+ 8.269375000000e-002,-2.75126e-002
+ 8.270000000000e-002,-2.24876e-002
+ 8.270625000000e-002,-2.75126e-002
+ 8.271250000000e-002,-2.75126e-002
+ 8.271875000000e-002,-2.75126e-002
+ 8.272500000000e-002,-2.75126e-002
+ 8.273125000000e-002,-2.75126e-002
+ 8.273750000000e-002,-2.75126e-002
+ 8.274375000000e-002,-2.75126e-002
+ 8.275000000000e-002,-2.75126e-002
+ 8.275625000000e-002,-2.75126e-002
+ 8.276250000000e-002,-2.75126e-002
+ 8.276875000000e-002,-2.75126e-002
+ 8.277500000000e-002,-2.75126e-002
+ 8.278125000000e-002,-2.75126e-002
+ 8.278750000000e-002,-2.75126e-002
+ 8.279375000000e-002,-2.75126e-002
+ 8.280000000000e-002,-2.75126e-002
+ 8.280625000000e-002,-2.75126e-002
+ 8.281250000000e-002,-2.75126e-002
+ 8.281875000000e-002,-2.75126e-002
+ 8.282500000000e-002,-2.24876e-002
+ 8.283125000000e-002,-2.24876e-002
+ 8.283750000000e-002,-2.75126e-002
+ 8.284375000000e-002,-2.75126e-002
+ 8.285000000000e-002,-2.75126e-002
+ 8.285625000000e-002,-2.24876e-002
+ 8.286250000000e-002,-2.75126e-002
+ 8.286875000000e-002,-2.75126e-002
+ 8.287500000000e-002,-2.75126e-002
+ 8.288125000000e-002,-2.75126e-002
+ 8.288750000000e-002,-2.75126e-002
+ 8.289375000000e-002,-2.75126e-002
+ 8.290000000000e-002,-2.75126e-002
+ 8.290625000000e-002,-2.75126e-002
+ 8.291250000000e-002,-2.75126e-002
+ 8.291875000000e-002,-2.75126e-002
+ 8.292500000000e-002,-2.75126e-002
+ 8.293125000000e-002,-2.75126e-002
+ 8.293750000000e-002,-2.75126e-002
+ 8.294375000000e-002,-2.75126e-002
+ 8.295000000000e-002,-2.75126e-002
+ 8.295625000000e-002,-2.75126e-002
+ 8.296250000000e-002,-2.75126e-002
+ 8.296875000000e-002,-2.75126e-002
+ 8.297500000000e-002,-2.75126e-002
+ 8.298125000000e-002,-2.75126e-002
+ 8.298750000000e-002,-2.75126e-002
+ 8.299375000000e-002,-2.75126e-002
+ 8.300000000000e-002,-2.75126e-002
+ 8.300625000000e-002,-2.75126e-002
+ 8.301250000000e-002,-2.75126e-002
+ 8.301875000000e-002,-2.75126e-002
+ 8.302500000000e-002,-2.75126e-002
+ 8.303125000000e-002,-2.75126e-002
+ 8.303750000000e-002,-2.75126e-002
+ 8.304375000000e-002,-2.75126e-002
+ 8.305000000000e-002,-2.75126e-002
+ 8.305625000000e-002,-2.75126e-002
+ 8.306250000000e-002,-2.75126e-002
+ 8.306875000000e-002,-2.75126e-002
+ 8.307500000000e-002,-2.75126e-002
+ 8.308125000000e-002,-2.75126e-002
+ 8.308750000000e-002,-2.75126e-002
+ 8.309375000000e-002,-2.75126e-002
+ 8.310000000000e-002,-2.75126e-002
+ 8.310625000000e-002,-2.75126e-002
+ 8.311250000000e-002,-2.75126e-002
+ 8.311875000000e-002,-2.75126e-002
+ 8.312500000000e-002,-2.75126e-002
+ 8.313125000000e-002,-2.75126e-002
+ 8.313750000000e-002,-2.75126e-002
+ 8.314375000000e-002,-2.75126e-002
+ 8.315000000000e-002,-2.75126e-002
+ 8.315625000000e-002,-2.75126e-002
+ 8.316250000000e-002,-2.75126e-002
+ 8.316875000000e-002,-2.75126e-002
+ 8.317500000000e-002,-2.75126e-002
+ 8.318125000000e-002,-2.75126e-002
+ 8.318750000000e-002,-2.75126e-002
+ 8.319375000000e-002,-2.75126e-002
+ 8.320000000000e-002,-2.75126e-002
+ 8.320625000000e-002,-2.75126e-002
+ 8.321250000000e-002,-2.75126e-002
+ 8.321875000000e-002,-2.75126e-002
+ 8.322500000000e-002,-2.75126e-002
+ 8.323125000000e-002,-2.75126e-002
+ 8.323750000000e-002,-2.75126e-002
+ 8.324375000000e-002,-2.75126e-002
+ 8.325000000000e-002,-2.75126e-002
+ 8.325625000000e-002,-2.24876e-002
+ 8.326250000000e-002,-2.75126e-002
+ 8.326875000000e-002,-2.75126e-002
+ 8.327500000000e-002,-2.75126e-002
+ 8.328125000000e-002,-2.75126e-002
+ 8.328750000000e-002,-2.75126e-002
+ 8.329375000000e-002,-2.75126e-002
+ 8.330000000000e-002,-2.75126e-002
+ 8.330625000000e-002,-2.75126e-002
+ 8.331250000000e-002,-2.75126e-002
+ 8.331875000000e-002,-2.75126e-002
+ 8.332500000000e-002,-2.75126e-002
+ 8.333125000000e-002,-2.75126e-002
+ 8.333750000000e-002,-2.75126e-002
+ 8.334375000000e-002,-2.75126e-002
+ 8.335000000000e-002,-2.75126e-002
+ 8.335625000000e-002,-2.75126e-002
+ 8.336250000000e-002,-2.75126e-002
+ 8.336875000000e-002,-2.75126e-002
+ 8.337500000000e-002,-2.75126e-002
+ 8.338125000000e-002,-2.75126e-002
+ 8.338750000000e-002,-2.75126e-002
+ 8.339375000000e-002,-2.75126e-002
+ 8.340000000000e-002,-2.75126e-002
+ 8.340625000000e-002,-2.75126e-002
+ 8.341250000000e-002,-2.75126e-002
+ 8.341875000000e-002,-2.75126e-002
+ 8.342500000000e-002,-2.75126e-002
+ 8.343125000000e-002,-2.75126e-002
+ 8.343750000000e-002,-2.75126e-002
+ 8.344375000000e-002,-2.75126e-002
+ 8.345000000000e-002,-2.75126e-002
+ 8.345625000000e-002,-2.75126e-002
+ 8.346250000000e-002,-2.75126e-002
+ 8.346875000000e-002,-2.75126e-002
+ 8.347500000000e-002,-2.75126e-002
+ 8.348125000000e-002,-2.75126e-002
+ 8.348750000000e-002,-2.75126e-002
+ 8.349375000000e-002,-2.75126e-002
+ 8.350000000000e-002,-2.75126e-002
+ 8.350625000000e-002,-2.75126e-002
+ 8.351250000000e-002,-2.75126e-002
+ 8.351875000000e-002,-2.75126e-002
+ 8.352500000000e-002,-2.75126e-002
+ 8.353125000000e-002,-2.75126e-002
+ 8.353750000000e-002,-2.75126e-002
+ 8.354375000000e-002,-2.75126e-002
+ 8.355000000000e-002,-2.75126e-002
+ 8.355625000000e-002,-2.75126e-002
+ 8.356250000000e-002,-2.75126e-002
+ 8.356875000000e-002,-2.75126e-002
+ 8.357500000000e-002,-2.75126e-002
+ 8.358125000000e-002,-2.75126e-002
+ 8.358750000000e-002,-2.75126e-002
+ 8.359375000000e-002,-2.75126e-002
+ 8.360000000000e-002,-2.75126e-002
+ 8.360625000000e-002,-2.75126e-002
+ 8.361250000000e-002,-2.75126e-002
+ 8.361875000000e-002,-2.75126e-002
+ 8.362500000000e-002,-2.75126e-002
+ 8.363125000000e-002,-2.75126e-002
+ 8.363750000000e-002,-2.75126e-002
+ 8.364375000000e-002,-2.75126e-002
+ 8.365000000000e-002,-2.75126e-002
+ 8.365625000000e-002,-2.75126e-002
+ 8.366250000000e-002,-2.75126e-002
+ 8.366875000000e-002,-2.75126e-002
+ 8.367500000000e-002,-2.75126e-002
+ 8.368125000000e-002,-2.75126e-002
+ 8.368750000000e-002,-2.75126e-002
+ 8.369375000000e-002,-2.75126e-002
+ 8.370000000000e-002,-2.75126e-002
+ 8.370625000000e-002,-2.75126e-002
+ 8.371250000000e-002,-2.75126e-002
+ 8.371875000000e-002,-2.75126e-002
+ 8.372500000000e-002,-2.75126e-002
+ 8.373125000000e-002,-2.75126e-002
+ 8.373750000000e-002,-2.75126e-002
+ 8.374375000000e-002,-2.75126e-002
+ 8.375000000000e-002,-2.75126e-002
+ 8.375625000000e-002,-2.75126e-002
+ 8.376250000000e-002,-2.75126e-002
+ 8.376875000000e-002,-2.75126e-002
+ 8.377500000000e-002,-2.75126e-002
+ 8.378125000000e-002,-2.75126e-002
+ 8.378750000000e-002,-2.75126e-002
+ 8.379375000000e-002,-2.75126e-002
+ 8.380000000000e-002,-2.75126e-002
+ 8.380625000000e-002,-2.75126e-002
+ 8.381250000000e-002,-2.75126e-002
+ 8.381875000000e-002,-2.75126e-002
+ 8.382500000000e-002,-2.75126e-002
+ 8.383125000000e-002,-2.75126e-002
+ 8.383750000000e-002,-2.75126e-002
+ 8.384375000000e-002,-2.75126e-002
+ 8.385000000000e-002,-2.75126e-002
+ 8.385625000000e-002,-2.24876e-002
+ 8.386250000000e-002,-2.75126e-002
+ 8.386875000000e-002,-2.75126e-002
+ 8.387500000000e-002,-2.75126e-002
+ 8.388125000000e-002,-2.75126e-002
+ 8.388750000000e-002,-2.75126e-002
+ 8.389375000000e-002,-2.75126e-002
+ 8.390000000000e-002,-2.75126e-002
+ 8.390625000000e-002,-2.75126e-002
+ 8.391250000000e-002,-2.75126e-002
+ 8.391875000000e-002,-2.75126e-002
+ 8.392500000000e-002,-2.75126e-002
+ 8.393125000000e-002,-2.75126e-002
+ 8.393750000000e-002,-2.75126e-002
+ 8.394375000000e-002,-2.75126e-002
+ 8.395000000000e-002,-2.75126e-002
+ 8.395625000000e-002,-2.75126e-002
+ 8.396250000000e-002,-2.75126e-002
+ 8.396875000000e-002,-2.75126e-002
+ 8.397500000000e-002,-2.75126e-002
+ 8.398125000000e-002,-2.75126e-002
+ 8.398750000000e-002,-2.75126e-002
+ 8.399375000000e-002,-2.75126e-002
+ 8.400000000000e-002,-2.75126e-002
+ 8.400625000000e-002,-2.75126e-002
+ 8.401250000000e-002,-2.75126e-002
+ 8.401875000000e-002,-2.75126e-002
+ 8.402500000000e-002,-2.75126e-002
+ 8.403125000000e-002,-2.75126e-002
+ 8.403750000000e-002,-2.75126e-002
+ 8.404375000000e-002,-2.75126e-002
+ 8.405000000000e-002,-2.75126e-002
+ 8.405625000000e-002,-2.75126e-002
+ 8.406250000000e-002,-2.75126e-002
+ 8.406875000000e-002,-2.75126e-002
+ 8.407500000000e-002,-2.75126e-002
+ 8.408125000000e-002,-2.75126e-002
+ 8.408750000000e-002,-2.75126e-002
+ 8.409375000000e-002,-2.75126e-002
+ 8.410000000000e-002,-2.75126e-002
+ 8.410625000000e-002,-2.75126e-002
+ 8.411250000000e-002,-2.75126e-002
+ 8.411875000000e-002,-2.75126e-002
+ 8.412500000000e-002,-2.75126e-002
+ 8.413125000000e-002,-2.75126e-002
+ 8.413750000000e-002,-2.75126e-002
+ 8.414375000000e-002,-2.75126e-002
+ 8.415000000000e-002,-2.24876e-002
+ 8.415625000000e-002,-2.24876e-002
+ 8.416250000000e-002,-2.75126e-002
+ 8.416875000000e-002,-2.75126e-002
+ 8.417500000000e-002,-2.75126e-002
+ 8.418125000000e-002,-2.75126e-002
+ 8.418750000000e-002,-2.75126e-002
+ 8.419375000000e-002,-2.75126e-002
+ 8.420000000000e-002,-2.75126e-002
+ 8.420625000000e-002,-2.75126e-002
+ 8.421250000000e-002,-2.75126e-002
+ 8.421875000000e-002,-2.75126e-002
+ 8.422500000000e-002,-2.75126e-002
+ 8.423125000000e-002,-2.75126e-002
+ 8.423750000000e-002,-2.75126e-002
+ 8.424375000000e-002,-2.75126e-002
+ 8.425000000000e-002,-2.75126e-002
+ 8.425625000000e-002,-2.75126e-002
+ 8.426250000000e-002,-2.75126e-002
+ 8.426875000000e-002,-2.75126e-002
+ 8.427500000000e-002,-2.75126e-002
+ 8.428125000000e-002,-2.75126e-002
+ 8.428750000000e-002,-2.75126e-002
+ 8.429375000000e-002,-2.75126e-002
+ 8.430000000000e-002,-2.75126e-002
+ 8.430625000000e-002,-2.75126e-002
+ 8.431250000000e-002,-2.75126e-002
+ 8.431875000000e-002,-2.75126e-002
+ 8.432500000000e-002,-2.75126e-002
+ 8.433125000000e-002,-2.75126e-002
+ 8.433750000000e-002,-2.75126e-002
+ 8.434375000000e-002,-2.75126e-002
+ 8.435000000000e-002,-2.75126e-002
+ 8.435625000000e-002,-2.75126e-002
+ 8.436250000000e-002,-2.75126e-002
+ 8.436875000000e-002,-2.75126e-002
+ 8.437500000000e-002,-2.75126e-002
+ 8.438125000000e-002,-2.75126e-002
+ 8.438750000000e-002,-2.75126e-002
+ 8.439375000000e-002,-2.75126e-002
+ 8.440000000000e-002,-2.75126e-002
+ 8.440625000000e-002,-2.75126e-002
+ 8.441250000000e-002,-2.75126e-002
+ 8.441875000000e-002,-2.75126e-002
+ 8.442500000000e-002,-2.75126e-002
+ 8.443125000000e-002,-2.75126e-002
+ 8.443750000000e-002,-2.75126e-002
+ 8.444375000000e-002,-2.75126e-002
+ 8.445000000000e-002,-2.75126e-002
+ 8.445625000000e-002,-2.75126e-002
+ 8.446250000000e-002,-2.75126e-002
+ 8.446875000000e-002,-2.75126e-002
+ 8.447500000000e-002,-2.75126e-002
+ 8.448125000000e-002,-2.75126e-002
+ 8.448750000000e-002,-2.75126e-002
+ 8.449375000000e-002,-2.75126e-002
+ 8.450000000000e-002,-2.75126e-002
+ 8.450625000000e-002,-2.75126e-002
+ 8.451250000000e-002,-2.75126e-002
+ 8.451875000000e-002,-2.75126e-002
+ 8.452500000000e-002,-2.75126e-002
+ 8.453125000000e-002,-2.75126e-002
+ 8.453750000000e-002,-2.75126e-002
+ 8.454375000000e-002,-2.75126e-002
+ 8.455000000000e-002,-2.75126e-002
+ 8.455625000000e-002,-2.75126e-002
+ 8.456250000000e-002,-2.75126e-002
+ 8.456875000000e-002,-2.75126e-002
+ 8.457500000000e-002,-2.75126e-002
+ 8.458125000000e-002,-2.75126e-002
+ 8.458750000000e-002,-2.75126e-002
+ 8.459375000000e-002,-2.75126e-002
+ 8.460000000000e-002,-2.75126e-002
+ 8.460625000000e-002,-2.75126e-002
+ 8.461250000000e-002,-2.75126e-002
+ 8.461875000000e-002,-2.75126e-002
+ 8.462500000000e-002,-2.75126e-002
+ 8.463125000000e-002,-2.75126e-002
+ 8.463750000000e-002,-2.75126e-002
+ 8.464375000000e-002,-2.75126e-002
+ 8.465000000000e-002,-2.75126e-002
+ 8.465625000000e-002,-2.75126e-002
+ 8.466250000000e-002,-2.75126e-002
+ 8.466875000000e-002,-2.75126e-002
+ 8.467500000000e-002,-2.75126e-002
+ 8.468125000000e-002,-2.75126e-002
+ 8.468750000000e-002,-2.75126e-002
+ 8.469375000000e-002,-2.75126e-002
+ 8.470000000000e-002,-2.75126e-002
+ 8.470625000000e-002,-2.75126e-002
+ 8.471250000000e-002,-2.75126e-002
+ 8.471875000000e-002,-2.75126e-002
+ 8.472500000000e-002,-2.75126e-002
+ 8.473125000000e-002,-2.75126e-002
+ 8.473750000000e-002,-2.75126e-002
+ 8.474375000000e-002,-2.75126e-002
+ 8.475000000000e-002,-2.75126e-002
+ 8.475625000000e-002,-2.75126e-002
+ 8.476250000000e-002,-2.75126e-002
+ 8.476875000000e-002,-2.75126e-002
+ 8.477500000000e-002,-2.75126e-002
+ 8.478125000000e-002,-2.75126e-002
+ 8.478750000000e-002,-2.75126e-002
+ 8.479375000000e-002,-2.75126e-002
+ 8.480000000000e-002,-2.75126e-002
+ 8.480625000000e-002,-2.75126e-002
+ 8.481250000000e-002,-2.75126e-002
+ 8.481875000000e-002,-2.75126e-002
+ 8.482500000000e-002,-2.75126e-002
+ 8.483125000000e-002,-2.75126e-002
+ 8.483750000000e-002,-2.75126e-002
+ 8.484375000000e-002,-2.75126e-002
+ 8.485000000000e-002,-2.75126e-002
+ 8.485625000000e-002,-2.75126e-002
+ 8.486250000000e-002,-2.75126e-002
+ 8.486875000000e-002,-2.75126e-002
+ 8.487500000000e-002,-2.75126e-002
+ 8.488125000000e-002,-2.75126e-002
+ 8.488750000000e-002,-2.75126e-002
+ 8.489375000000e-002,-2.75126e-002
+ 8.490000000000e-002,-2.75126e-002
+ 8.490625000000e-002,-2.75126e-002
+ 8.491250000000e-002,-2.75126e-002
+ 8.491875000000e-002,-2.75126e-002
+ 8.492500000000e-002,-2.75126e-002
+ 8.493125000000e-002,-2.75126e-002
+ 8.493750000000e-002,-2.75126e-002
+ 8.494375000000e-002,-2.75126e-002
+ 8.495000000000e-002,-2.75126e-002
+ 8.495625000000e-002,-2.75126e-002
+ 8.496250000000e-002,-2.75126e-002
+ 8.496875000000e-002,-2.75126e-002
+ 8.497500000000e-002,-2.24876e-002
+ 8.498125000000e-002,-2.24876e-002
+ 8.498750000000e-002,-2.75126e-002
+ 8.499375000000e-002,-2.75126e-002
+ 8.500000000000e-002,-2.75126e-002
+ 8.500625000000e-002,-2.75126e-002
+ 8.501250000000e-002,-2.75126e-002
+ 8.501875000000e-002,-2.75126e-002
+ 8.502500000000e-002,-2.24876e-002
+ 8.503125000000e-002,-2.75126e-002
+ 8.503750000000e-002,-2.75126e-002
+ 8.504375000000e-002,-2.75126e-002
+ 8.505000000000e-002,-2.75126e-002
+ 8.505625000000e-002,-2.75126e-002
+ 8.506250000000e-002,-2.75126e-002
+ 8.506875000000e-002,-2.75126e-002
+ 8.507500000000e-002,-2.75126e-002
+ 8.508125000000e-002,-2.75126e-002
+ 8.508750000000e-002,-2.75126e-002
+ 8.509375000000e-002,-2.75126e-002
+ 8.510000000000e-002,-2.75126e-002
+ 8.510625000000e-002,-2.75126e-002
+ 8.511250000000e-002,-2.75126e-002
+ 8.511875000000e-002,-2.24876e-002
+ 8.512500000000e-002,-2.75126e-002
+ 8.513125000000e-002,-2.75126e-002
+ 8.513750000000e-002,-2.75126e-002
+ 8.514375000000e-002,-2.75126e-002
+ 8.515000000000e-002,-2.75126e-002
+ 8.515625000000e-002,-2.75126e-002
+ 8.516250000000e-002,-2.75126e-002
+ 8.516875000000e-002,-2.75126e-002
+ 8.517500000000e-002,-2.24876e-002
+ 8.518125000000e-002,-2.75126e-002
+ 8.518750000000e-002,-2.75126e-002
+ 8.519375000000e-002,-2.75126e-002
+ 8.520000000000e-002,-2.75126e-002
+ 8.520625000000e-002,-2.75126e-002
+ 8.521250000000e-002,-2.75126e-002
+ 8.521875000000e-002,-2.75126e-002
+ 8.522500000000e-002,-2.75126e-002
+ 8.523125000000e-002,-2.75126e-002
+ 8.523750000000e-002,-2.75126e-002
+ 8.524375000000e-002,-2.75126e-002
+ 8.525000000000e-002,-2.75126e-002
+ 8.525625000000e-002,-2.75126e-002
+ 8.526250000000e-002,-2.75126e-002
+ 8.526875000000e-002,-2.75126e-002
+ 8.527500000000e-002,-2.75126e-002
+ 8.528125000000e-002,-2.75126e-002
+ 8.528750000000e-002,-2.75126e-002
+ 8.529375000000e-002,-2.75126e-002
+ 8.530000000000e-002,-2.75126e-002
+ 8.530625000000e-002,-2.75126e-002
+ 8.531250000000e-002,-2.75126e-002
+ 8.531875000000e-002,-2.75126e-002
+ 8.532500000000e-002,-2.75126e-002
+ 8.533125000000e-002,-2.75126e-002
+ 8.533750000000e-002,-2.75126e-002
+ 8.534375000000e-002,-2.75126e-002
+ 8.535000000000e-002,-2.75126e-002
+ 8.535625000000e-002,-2.75126e-002
+ 8.536250000000e-002,-2.24876e-002
+ 8.536875000000e-002,-2.75126e-002
+ 8.537500000000e-002,-2.75126e-002
+ 8.538125000000e-002,-2.75126e-002
+ 8.538750000000e-002,-2.75126e-002
+ 8.539375000000e-002,-2.75126e-002
+ 8.540000000000e-002,-2.75126e-002
+ 8.540625000000e-002,-2.75126e-002
+ 8.541250000000e-002,-2.75126e-002
+ 8.541875000000e-002,-2.75126e-002
+ 8.542500000000e-002,-2.75126e-002
+ 8.543125000000e-002,-2.75126e-002
+ 8.543750000000e-002,-2.75126e-002
+ 8.544375000000e-002,-2.75126e-002
+ 8.545000000000e-002,-2.75126e-002
+ 8.545625000000e-002,-2.75126e-002
+ 8.546250000000e-002,-2.75126e-002
+ 8.546875000000e-002,-2.75126e-002
+ 8.547500000000e-002,-2.75126e-002
+ 8.548125000000e-002,-2.75126e-002
+ 8.548750000000e-002,-2.75126e-002
+ 8.549375000000e-002,-2.75126e-002
+ 8.550000000000e-002,-2.75126e-002
+ 8.550625000000e-002,-2.75126e-002
+ 8.551250000000e-002,-2.75126e-002
+ 8.551875000000e-002,-2.75126e-002
+ 8.552500000000e-002,-2.75126e-002
+ 8.553125000000e-002,-2.75126e-002
+ 8.553750000000e-002,-2.75126e-002
+ 8.554375000000e-002,-2.75126e-002
+ 8.555000000000e-002,-2.75126e-002
+ 8.555625000000e-002,-2.75126e-002
+ 8.556250000000e-002,-2.75126e-002
+ 8.556875000000e-002,-2.75126e-002
+ 8.557500000000e-002,-2.75126e-002
+ 8.558125000000e-002,-2.75126e-002
+ 8.558750000000e-002,-2.75126e-002
+ 8.559375000000e-002,-2.75126e-002
+ 8.560000000000e-002,-2.24876e-002
+ 8.560625000000e-002,-2.75126e-002
+ 8.561250000000e-002,-2.24876e-002
+ 8.561875000000e-002,-2.75126e-002
+ 8.562500000000e-002,-2.75126e-002
+ 8.563125000000e-002,-2.75126e-002
+ 8.563750000000e-002,-2.75126e-002
+ 8.564375000000e-002,-2.75126e-002
+ 8.565000000000e-002,-2.75126e-002
+ 8.565625000000e-002,-2.75126e-002
+ 8.566250000000e-002,-2.75126e-002
+ 8.566875000000e-002,-2.24876e-002
+ 8.567500000000e-002,-2.75126e-002
+ 8.568125000000e-002,-2.75126e-002
+ 8.568750000000e-002,-2.75126e-002
+ 8.569375000000e-002,-2.75126e-002
+ 8.570000000000e-002,-2.75126e-002
+ 8.570625000000e-002,-2.75126e-002
+ 8.571250000000e-002,-2.75126e-002
+ 8.571875000000e-002,-2.75126e-002
+ 8.572500000000e-002,-2.75126e-002
+ 8.573125000000e-002,-2.75126e-002
+ 8.573750000000e-002,-2.75126e-002
+ 8.574375000000e-002,-2.75126e-002
+ 8.575000000000e-002,-2.75126e-002
+ 8.575625000000e-002,-2.75126e-002
+ 8.576250000000e-002,-2.75126e-002
+ 8.576875000000e-002,-2.75126e-002
+ 8.577500000000e-002,-2.75126e-002
+ 8.578125000000e-002,-2.75126e-002
+ 8.578750000000e-002,-2.75126e-002
+ 8.579375000000e-002,-2.24876e-002
+ 8.580000000000e-002,-2.75126e-002
+ 8.580625000000e-002,-2.75126e-002
+ 8.581250000000e-002,-2.75126e-002
+ 8.581875000000e-002,-2.75126e-002
+ 8.582500000000e-002,-2.75126e-002
+ 8.583125000000e-002,-2.75126e-002
+ 8.583750000000e-002,-2.75126e-002
+ 8.584375000000e-002,-2.75126e-002
+ 8.585000000000e-002,-2.24876e-002
+ 8.585625000000e-002,-2.75126e-002
+ 8.586250000000e-002,-2.75126e-002
+ 8.586875000000e-002,-2.75126e-002
+ 8.587500000000e-002,-2.75126e-002
+ 8.588125000000e-002,-2.75126e-002
+ 8.588750000000e-002,-2.75126e-002
+ 8.589375000000e-002,-2.75126e-002
+ 8.590000000000e-002,-2.75126e-002
+ 8.590625000000e-002,-2.75126e-002
+ 8.591250000000e-002,-2.24876e-002
+ 8.591875000000e-002,-2.75126e-002
+ 8.592500000000e-002,-2.24876e-002
+ 8.593125000000e-002,-2.75126e-002
+ 8.593750000000e-002,-2.75126e-002
+ 8.594375000000e-002,-2.24876e-002
+ 8.595000000000e-002,-2.75126e-002
+ 8.595625000000e-002,-2.75126e-002
+ 8.596250000000e-002,-2.75126e-002
+ 8.596875000000e-002,-2.75126e-002
+ 8.597500000000e-002,-2.75126e-002
+ 8.598125000000e-002,-2.75126e-002
+ 8.598750000000e-002,-2.75126e-002
+ 8.599375000000e-002,-2.75126e-002
+ 8.600000000000e-002,-2.24876e-002
+ 8.600625000000e-002,-2.75126e-002
+ 8.601250000000e-002,-2.75126e-002
+ 8.601875000000e-002,-2.75126e-002
+ 8.602500000000e-002,-2.75126e-002
+ 8.603125000000e-002,-2.75126e-002
+ 8.603750000000e-002,-2.75126e-002
+ 8.604375000000e-002,-2.75126e-002
+ 8.605000000000e-002,-2.75126e-002
+ 8.605625000000e-002,-2.75126e-002
+ 8.606250000000e-002,-2.75126e-002
+ 8.606875000000e-002,-2.75126e-002
+ 8.607500000000e-002,-2.75126e-002
+ 8.608125000000e-002,-2.75126e-002
+ 8.608750000000e-002,-2.75126e-002
+ 8.609375000000e-002,-2.75126e-002
+ 8.610000000000e-002,-2.75126e-002
+ 8.610625000000e-002,-2.75126e-002
+ 8.611250000000e-002,-2.75126e-002
+ 8.611875000000e-002,-2.75126e-002
+ 8.612500000000e-002,-2.75126e-002
+ 8.613125000000e-002,-2.75126e-002
+ 8.613750000000e-002,-2.75126e-002
+ 8.614375000000e-002,-2.75126e-002
+ 8.615000000000e-002,-2.75126e-002
+ 8.615625000000e-002,-2.75126e-002
+ 8.616250000000e-002,-2.75126e-002
+ 8.616875000000e-002,-2.75126e-002
+ 8.617500000000e-002,-2.75126e-002
+ 8.618125000000e-002,-2.75126e-002
+ 8.618750000000e-002,-2.75126e-002
+ 8.619375000000e-002,-2.75126e-002
+ 8.620000000000e-002,-2.75126e-002
+ 8.620625000000e-002,-2.75126e-002
+ 8.621250000000e-002,-2.75126e-002
+ 8.621875000000e-002,-2.75126e-002
+ 8.622500000000e-002,-2.75126e-002
+ 8.623125000000e-002,-2.75126e-002
+ 8.623750000000e-002,-2.75126e-002
+ 8.624375000000e-002,-2.75126e-002
+ 8.625000000000e-002,-2.75126e-002
+ 8.625625000000e-002,-2.75126e-002
+ 8.626250000000e-002,-2.75126e-002
+ 8.626875000000e-002,-2.75126e-002
+ 8.627500000000e-002,-2.75126e-002
+ 8.628125000000e-002,-2.75126e-002
+ 8.628750000000e-002,-2.75126e-002
+ 8.629375000000e-002,-2.75126e-002
+ 8.630000000000e-002,-2.75126e-002
+ 8.630625000000e-002,-2.75126e-002
+ 8.631250000000e-002,-2.75126e-002
+ 8.631875000000e-002,-2.75126e-002
+ 8.632500000000e-002,-2.75126e-002
+ 8.633125000000e-002,-2.75126e-002
+ 8.633750000000e-002,-2.75126e-002
+ 8.634375000000e-002,-2.75126e-002
+ 8.635000000000e-002,-2.75126e-002
+ 8.635625000000e-002,-2.75126e-002
+ 8.636250000000e-002,-2.75126e-002
+ 8.636875000000e-002,-2.75126e-002
+ 8.637500000000e-002,-2.75126e-002
+ 8.638125000000e-002,-2.75126e-002
+ 8.638750000000e-002,-2.75126e-002
+ 8.639375000000e-002,-2.75126e-002
+ 8.640000000000e-002,-2.75126e-002
+ 8.640625000000e-002,-2.75126e-002
+ 8.641250000000e-002,-2.75126e-002
+ 8.641875000000e-002,-2.75126e-002
+ 8.642500000000e-002,-2.75126e-002
+ 8.643125000000e-002,-2.75126e-002
+ 8.643750000000e-002,-2.75126e-002
+ 8.644375000000e-002,-2.75126e-002
+ 8.645000000000e-002,-2.75126e-002
+ 8.645625000000e-002,-2.75126e-002
+ 8.646250000000e-002,-2.75126e-002
+ 8.646875000000e-002,-2.75126e-002
+ 8.647500000000e-002,-2.75126e-002
+ 8.648125000000e-002,-2.75126e-002
+ 8.648750000000e-002,-2.75126e-002
+ 8.649375000000e-002,-2.75126e-002
+ 8.650000000000e-002,-2.75126e-002
+ 8.650625000000e-002,-2.75126e-002
+ 8.651250000000e-002,-2.75126e-002
+ 8.651875000000e-002,-2.75126e-002
+ 8.652500000000e-002,-2.75126e-002
+ 8.653125000000e-002,-2.75126e-002
+ 8.653750000000e-002,-2.75126e-002
+ 8.654375000000e-002,-2.75126e-002
+ 8.655000000000e-002,-2.75126e-002
+ 8.655625000000e-002,-2.75126e-002
+ 8.656250000000e-002,-2.75126e-002
+ 8.656875000000e-002,-2.75126e-002
+ 8.657500000000e-002,-2.75126e-002
+ 8.658125000000e-002,-2.75126e-002
+ 8.658750000000e-002,-2.75126e-002
+ 8.659375000000e-002,-2.75126e-002
+ 8.660000000000e-002,-2.75126e-002
+ 8.660625000000e-002,-2.75126e-002
+ 8.661250000000e-002,-2.75126e-002
+ 8.661875000000e-002,-2.75126e-002
+ 8.662500000000e-002,-2.75126e-002
+ 8.663125000000e-002,-2.75126e-002
+ 8.663750000000e-002,-2.75126e-002
+ 8.664375000000e-002,-2.75126e-002
+ 8.665000000000e-002,-2.75126e-002
+ 8.665625000000e-002,-2.75126e-002
+ 8.666250000000e-002,-2.75126e-002
+ 8.666875000000e-002,-2.75126e-002
+ 8.667500000000e-002,-2.75126e-002
+ 8.668125000000e-002,-2.75126e-002
+ 8.668750000000e-002,-2.75126e-002
+ 8.669375000000e-002,-2.75126e-002
+ 8.670000000000e-002,-2.75126e-002
+ 8.670625000000e-002,-2.75126e-002
+ 8.671250000000e-002,-2.75126e-002
+ 8.671875000000e-002,-2.75126e-002
+ 8.672500000000e-002,-2.75126e-002
+ 8.673125000000e-002,-2.75126e-002
+ 8.673750000000e-002,-2.75126e-002
+ 8.674375000000e-002,-2.75126e-002
+ 8.675000000000e-002,-2.75126e-002
+ 8.675625000000e-002,-2.75126e-002
+ 8.676250000000e-002,-2.75126e-002
+ 8.676875000000e-002,-2.75126e-002
+ 8.677500000000e-002,-2.75126e-002
+ 8.678125000000e-002,-2.75126e-002
+ 8.678750000000e-002,-2.75126e-002
+ 8.679375000000e-002,-2.75126e-002
+ 8.680000000000e-002,-2.75126e-002
+ 8.680625000000e-002,-2.75126e-002
+ 8.681250000000e-002,-2.75126e-002
+ 8.681875000000e-002,-2.75126e-002
+ 8.682500000000e-002,-2.75126e-002
+ 8.683125000000e-002,-2.75126e-002
+ 8.683750000000e-002,-2.75126e-002
+ 8.684375000000e-002,-2.75126e-002
+ 8.685000000000e-002,-2.75126e-002
+ 8.685625000000e-002,-2.75126e-002
+ 8.686250000000e-002,-2.75126e-002
+ 8.686875000000e-002,-2.75126e-002
+ 8.687500000000e-002,-2.75126e-002
+ 8.688125000000e-002,-2.75126e-002
+ 8.688750000000e-002,-2.75126e-002
+ 8.689375000000e-002,-2.75126e-002
+ 8.690000000000e-002,-2.75126e-002
+ 8.690625000000e-002,-2.75126e-002
+ 8.691250000000e-002,-2.75126e-002
+ 8.691875000000e-002,-2.75126e-002
+ 8.692500000000e-002,-2.75126e-002
+ 8.693125000000e-002,-2.75126e-002
+ 8.693750000000e-002,-2.75126e-002
+ 8.694375000000e-002,-2.75126e-002
+ 8.695000000000e-002,-2.75126e-002
+ 8.695625000000e-002,-2.75126e-002
+ 8.696250000000e-002,-2.75126e-002
+ 8.696875000000e-002,-2.75126e-002
+ 8.697500000000e-002,-2.75126e-002
+ 8.698125000000e-002,-2.75126e-002
+ 8.698750000000e-002,-2.75126e-002
+ 8.699375000000e-002,-2.75126e-002
+ 8.700000000000e-002,-2.75126e-002
+ 8.700625000000e-002,-2.75126e-002
+ 8.701250000000e-002,-2.75126e-002
+ 8.701875000000e-002,-2.75126e-002
+ 8.702500000000e-002,-2.75126e-002
+ 8.703125000000e-002,-2.75126e-002
+ 8.703750000000e-002,-2.24876e-002
+ 8.704375000000e-002,-2.75126e-002
+ 8.705000000000e-002,-2.75126e-002
+ 8.705625000000e-002,-2.75126e-002
+ 8.706250000000e-002,-2.75126e-002
+ 8.706875000000e-002,-2.75126e-002
+ 8.707500000000e-002,-2.75126e-002
+ 8.708125000000e-002,-2.75126e-002
+ 8.708750000000e-002,-2.75126e-002
+ 8.709375000000e-002,-2.75126e-002
+ 8.710000000000e-002,-2.75126e-002
+ 8.710625000000e-002,-2.75126e-002
+ 8.711250000000e-002,-2.75126e-002
+ 8.711875000000e-002,-2.75126e-002
+ 8.712500000000e-002,-2.75126e-002
+ 8.713125000000e-002,-2.75126e-002
+ 8.713750000000e-002,-2.75126e-002
+ 8.714375000000e-002,-2.24876e-002
+ 8.715000000000e-002,-2.75126e-002
+ 8.715625000000e-002,-2.75126e-002
+ 8.716250000000e-002,-2.24876e-002
+ 8.716875000000e-002,-2.75126e-002
+ 8.717500000000e-002,-2.75126e-002
+ 8.718125000000e-002,-2.75126e-002
+ 8.718750000000e-002,-2.75126e-002
+ 8.719375000000e-002,-2.75126e-002
+ 8.720000000000e-002,-2.75126e-002
+ 8.720625000000e-002,-2.75126e-002
+ 8.721250000000e-002,-2.75126e-002
+ 8.721875000000e-002,-2.75126e-002
+ 8.722500000000e-002,-2.75126e-002
+ 8.723125000000e-002,-2.75126e-002
+ 8.723750000000e-002,-2.75126e-002
+ 8.724375000000e-002,-2.75126e-002
+ 8.725000000000e-002,-2.75126e-002
+ 8.725625000000e-002,-2.75126e-002
+ 8.726250000000e-002,-2.24876e-002
+ 8.726875000000e-002,-2.75126e-002
+ 8.727500000000e-002,-2.75126e-002
+ 8.728125000000e-002,-2.75126e-002
+ 8.728750000000e-002,-2.75126e-002
+ 8.729375000000e-002,-2.75126e-002
+ 8.730000000000e-002,-2.24876e-002
+ 8.730625000000e-002,-2.75126e-002
+ 8.731250000000e-002,-2.75126e-002
+ 8.731875000000e-002,-2.75126e-002
+ 8.732500000000e-002,-2.75126e-002
+ 8.733125000000e-002,-2.75126e-002
+ 8.733750000000e-002,-2.24876e-002
+ 8.734375000000e-002,-2.75126e-002
+ 8.735000000000e-002,-2.75126e-002
+ 8.735625000000e-002,-2.75126e-002
+ 8.736250000000e-002,-2.75126e-002
+ 8.736875000000e-002,-2.75126e-002
+ 8.737500000000e-002,-2.75126e-002
+ 8.738125000000e-002,-2.75126e-002
+ 8.738750000000e-002,-2.75126e-002
+ 8.739375000000e-002,-2.75126e-002
+ 8.740000000000e-002,-2.75126e-002
+ 8.740625000000e-002,-2.75126e-002
+ 8.741250000000e-002,-2.75126e-002
+ 8.741875000000e-002,-2.75126e-002
+ 8.742500000000e-002,-2.75126e-002
+ 8.743125000000e-002,-2.75126e-002
+ 8.743750000000e-002,-2.75126e-002
+ 8.744375000000e-002,-2.75126e-002
+ 8.745000000000e-002,-2.75126e-002
+ 8.745625000000e-002,-2.75126e-002
+ 8.746250000000e-002,-2.75126e-002
+ 8.746875000000e-002,-2.75126e-002
+ 8.747500000000e-002,-2.75126e-002
+ 8.748125000000e-002,-2.75126e-002
+ 8.748750000000e-002,-2.75126e-002
+ 8.749375000000e-002,-2.75126e-002
+ 8.750000000000e-002,-2.75126e-002
+ 8.750625000000e-002,-2.75126e-002
+ 8.751250000000e-002,-2.75126e-002
+ 8.751875000000e-002,-2.75126e-002
+ 8.752500000000e-002,-2.75126e-002
+ 8.753125000000e-002,-2.75126e-002
+ 8.753750000000e-002,-2.75126e-002
+ 8.754375000000e-002,-2.75126e-002
+ 8.755000000000e-002,-2.75126e-002
+ 8.755625000000e-002,-2.75126e-002
+ 8.756250000000e-002,-2.75126e-002
+ 8.756875000000e-002,-2.75126e-002
+ 8.757500000000e-002,-2.75126e-002
+ 8.758125000000e-002,-2.75126e-002
+ 8.758750000000e-002,-2.75126e-002
+ 8.759375000000e-002,-2.75126e-002
+ 8.760000000000e-002,-2.75126e-002
+ 8.760625000000e-002,-2.75126e-002
+ 8.761250000000e-002,-2.75126e-002
+ 8.761875000000e-002,-2.75126e-002
+ 8.762500000000e-002,-2.75126e-002
+ 8.763125000000e-002,-2.75126e-002
+ 8.763750000000e-002,-2.75126e-002
+ 8.764375000000e-002,-2.75126e-002
+ 8.765000000000e-002,-2.75126e-002
+ 8.765625000000e-002,-2.75126e-002
+ 8.766250000000e-002,-2.75126e-002
+ 8.766875000000e-002,-2.75126e-002
+ 8.767500000000e-002,-2.75126e-002
+ 8.768125000000e-002,-2.75126e-002
+ 8.768750000000e-002,-2.75126e-002
+ 8.769375000000e-002,-2.75126e-002
+ 8.770000000000e-002,-2.75126e-002
+ 8.770625000000e-002,-2.75126e-002
+ 8.771250000000e-002,-2.24876e-002
+ 8.771875000000e-002,-2.75126e-002
+ 8.772500000000e-002,-2.75126e-002
+ 8.773125000000e-002,-2.75126e-002
+ 8.773750000000e-002,-2.75126e-002
+ 8.774375000000e-002,-2.75126e-002
+ 8.775000000000e-002,-2.75126e-002
+ 8.775625000000e-002,-2.75126e-002
+ 8.776250000000e-002,-2.75126e-002
+ 8.776875000000e-002,-2.24876e-002
+ 8.777500000000e-002,-2.75126e-002
+ 8.778125000000e-002,-2.75126e-002
+ 8.778750000000e-002,-2.75126e-002
+ 8.779375000000e-002,-2.75126e-002
+ 8.780000000000e-002,-2.75126e-002
+ 8.780625000000e-002,-2.75126e-002
+ 8.781250000000e-002,-2.75126e-002
+ 8.781875000000e-002,-2.75126e-002
+ 8.782500000000e-002,-2.75126e-002
+ 8.783125000000e-002,-2.75126e-002
+ 8.783750000000e-002,-2.75126e-002
+ 8.784375000000e-002,-2.75126e-002
+ 8.785000000000e-002,-2.75126e-002
+ 8.785625000000e-002,-2.75126e-002
+ 8.786250000000e-002,-2.75126e-002
+ 8.786875000000e-002,-2.75126e-002
+ 8.787500000000e-002,-2.24876e-002
+ 8.788125000000e-002,-2.75126e-002
+ 8.788750000000e-002,-2.75126e-002
+ 8.789375000000e-002,-2.75126e-002
+ 8.790000000000e-002,-2.75126e-002
+ 8.790625000000e-002,-2.75126e-002
+ 8.791250000000e-002,-2.75126e-002
+ 8.791875000000e-002,-2.75126e-002
+ 8.792500000000e-002,-2.75126e-002
+ 8.793125000000e-002,-2.75126e-002
+ 8.793750000000e-002,-2.75126e-002
+ 8.794375000000e-002,-2.75126e-002
+ 8.795000000000e-002,-2.75126e-002
+ 8.795625000000e-002,-2.75126e-002
+ 8.796250000000e-002,-2.75126e-002
+ 8.796875000000e-002,-2.75126e-002
+ 8.797500000000e-002,-2.75126e-002
+ 8.798125000000e-002,-2.75126e-002
+ 8.798750000000e-002,-2.75126e-002
+ 8.799375000000e-002,-2.75126e-002
+ 8.800000000000e-002,-2.75126e-002
+ 8.800625000000e-002,-2.75126e-002
+ 8.801250000000e-002,-2.75126e-002
+ 8.801875000000e-002,-2.75126e-002
+ 8.802500000000e-002,-2.75126e-002
+ 8.803125000000e-002,-2.75126e-002
+ 8.803750000000e-002,-2.24876e-002
+ 8.804375000000e-002,-2.75126e-002
+ 8.805000000000e-002,-2.75126e-002
+ 8.805625000000e-002,-2.75126e-002
+ 8.806250000000e-002,-2.24876e-002
+ 8.806875000000e-002,-2.24876e-002
+ 8.807500000000e-002,-2.75126e-002
+ 8.808125000000e-002,-2.75126e-002
+ 8.808750000000e-002,-2.75126e-002
+ 8.809375000000e-002,-2.75126e-002
+ 8.810000000000e-002,-2.75126e-002
+ 8.810625000000e-002,-2.75126e-002
+ 8.811250000000e-002,-2.75126e-002
+ 8.811875000000e-002,-2.75126e-002
+ 8.812500000000e-002,-2.75126e-002
+ 8.813125000000e-002,-2.75126e-002
+ 8.813750000000e-002,-2.75126e-002
+ 8.814375000000e-002,-2.75126e-002
+ 8.815000000000e-002,-2.75126e-002
+ 8.815625000000e-002,-2.75126e-002
+ 8.816250000000e-002,-2.75126e-002
+ 8.816875000000e-002,-2.75126e-002
+ 8.817500000000e-002,-2.75126e-002
+ 8.818125000000e-002,-2.75126e-002
+ 8.818750000000e-002,-2.75126e-002
+ 8.819375000000e-002,-2.75126e-002
+ 8.820000000000e-002,-2.75126e-002
+ 8.820625000000e-002,-2.75126e-002
+ 8.821250000000e-002,-2.75126e-002
+ 8.821875000000e-002,-2.75126e-002
+ 8.822500000000e-002,-2.75126e-002
+ 8.823125000000e-002,-2.75126e-002
+ 8.823750000000e-002,-2.75126e-002
+ 8.824375000000e-002,-2.75126e-002
+ 8.825000000000e-002,-2.75126e-002
+ 8.825625000000e-002,-2.75126e-002
+ 8.826250000000e-002,-2.75126e-002
+ 8.826875000000e-002,-2.75126e-002
+ 8.827500000000e-002,-2.75126e-002
+ 8.828125000000e-002,-2.75126e-002
+ 8.828750000000e-002,-2.75126e-002
+ 8.829375000000e-002,-2.75126e-002
+ 8.830000000000e-002,-2.75126e-002
+ 8.830625000000e-002,-2.75126e-002
+ 8.831250000000e-002,-2.75126e-002
+ 8.831875000000e-002,-2.75126e-002
+ 8.832500000000e-002,-2.75126e-002
+ 8.833125000000e-002,-2.75126e-002
+ 8.833750000000e-002,-2.75126e-002
+ 8.834375000000e-002,-2.75126e-002
+ 8.835000000000e-002,-2.75126e-002
+ 8.835625000000e-002,-2.75126e-002
+ 8.836250000000e-002,-2.75126e-002
+ 8.836875000000e-002,-2.75126e-002
+ 8.837500000000e-002,-2.75126e-002
+ 8.838125000000e-002,-2.75126e-002
+ 8.838750000000e-002,-2.75126e-002
+ 8.839375000000e-002,-2.75126e-002
+ 8.840000000000e-002,-2.75126e-002
+ 8.840625000000e-002,-2.75126e-002
+ 8.841250000000e-002,-2.75126e-002
+ 8.841875000000e-002,-2.75126e-002
+ 8.842500000000e-002,-2.75126e-002
+ 8.843125000000e-002,-2.75126e-002
+ 8.843750000000e-002,-2.75126e-002
+ 8.844375000000e-002,-2.75126e-002
+ 8.845000000000e-002,-2.75126e-002
+ 8.845625000000e-002,-2.75126e-002
+ 8.846250000000e-002,-2.75126e-002
+ 8.846875000000e-002,-2.24876e-002
+ 8.847500000000e-002,-2.75126e-002
+ 8.848125000000e-002,-2.75126e-002
+ 8.848750000000e-002,-2.24876e-002
+ 8.849375000000e-002,-2.75126e-002
+ 8.850000000000e-002,-2.75126e-002
+ 8.850625000000e-002,-2.75126e-002
+ 8.851250000000e-002,-2.75126e-002
+ 8.851875000000e-002,-2.75126e-002
+ 8.852500000000e-002,-2.75126e-002
+ 8.853125000000e-002,-2.75126e-002
+ 8.853750000000e-002,-2.75126e-002
+ 8.854375000000e-002,-2.75126e-002
+ 8.855000000000e-002,-2.75126e-002
+ 8.855625000000e-002,-2.75126e-002
+ 8.856250000000e-002,-2.75126e-002
+ 8.856875000000e-002,-2.75126e-002
+ 8.857500000000e-002,-2.75126e-002
+ 8.858125000000e-002,-2.75126e-002
+ 8.858750000000e-002,-2.75126e-002
+ 8.859375000000e-002,-2.75126e-002
+ 8.860000000000e-002,-2.75126e-002
+ 8.860625000000e-002,-2.75126e-002
+ 8.861250000000e-002,-2.75126e-002
+ 8.861875000000e-002,-2.75126e-002
+ 8.862500000000e-002,-2.75126e-002
+ 8.863125000000e-002,-2.75126e-002
+ 8.863750000000e-002,-2.75126e-002
+ 8.864375000000e-002,-2.75126e-002
+ 8.865000000000e-002,-2.75126e-002
+ 8.865625000000e-002,-2.75126e-002
+ 8.866250000000e-002,-2.75126e-002
+ 8.866875000000e-002,-2.75126e-002
+ 8.867500000000e-002,-2.75126e-002
+ 8.868125000000e-002,-2.75126e-002
+ 8.868750000000e-002,-2.75126e-002
+ 8.869375000000e-002,-2.75126e-002
+ 8.870000000000e-002,-2.75126e-002
+ 8.870625000000e-002,-2.75126e-002
+ 8.871250000000e-002,-2.75126e-002
+ 8.871875000000e-002,-2.24876e-002
+ 8.872500000000e-002,-2.75126e-002
+ 8.873125000000e-002,-2.75126e-002
+ 8.873750000000e-002,-2.75126e-002
+ 8.874375000000e-002,-2.75126e-002
+ 8.875000000000e-002,-2.75126e-002
+ 8.875625000000e-002,-2.75126e-002
+ 8.876250000000e-002,-2.75126e-002
+ 8.876875000000e-002,-2.75126e-002
+ 8.877500000000e-002,-2.75126e-002
+ 8.878125000000e-002,-2.75126e-002
+ 8.878750000000e-002,-2.75126e-002
+ 8.879375000000e-002,-2.75126e-002
+ 8.880000000000e-002,-2.75126e-002
+ 8.880625000000e-002,-2.75126e-002
+ 8.881250000000e-002,-2.75126e-002
+ 8.881875000000e-002,-2.75126e-002
+ 8.882500000000e-002,-2.75126e-002
+ 8.883125000000e-002,-2.75126e-002
+ 8.883750000000e-002,-2.75126e-002
+ 8.884375000000e-002,-2.75126e-002
+ 8.885000000000e-002,-2.75126e-002
+ 8.885625000000e-002,-2.75126e-002
+ 8.886250000000e-002,-2.75126e-002
+ 8.886875000000e-002,-2.75126e-002
+ 8.887500000000e-002,-2.75126e-002
+ 8.888125000000e-002,-2.75126e-002
+ 8.888750000000e-002,-2.75126e-002
+ 8.889375000000e-002,-2.75126e-002
+ 8.890000000000e-002,-2.75126e-002
+ 8.890625000000e-002,-2.75126e-002
+ 8.891250000000e-002,-2.75126e-002
+ 8.891875000000e-002,-2.75126e-002
+ 8.892500000000e-002,-2.75126e-002
+ 8.893125000000e-002,-2.75126e-002
+ 8.893750000000e-002,-2.75126e-002
+ 8.894375000000e-002,-2.75126e-002
+ 8.895000000000e-002,-2.75126e-002
+ 8.895625000000e-002,-2.75126e-002
+ 8.896250000000e-002,-2.75126e-002
+ 8.896875000000e-002,-2.75126e-002
+ 8.897500000000e-002,-2.75126e-002
+ 8.898125000000e-002,-2.75126e-002
+ 8.898750000000e-002,-2.75126e-002
+ 8.899375000000e-002,-2.75126e-002
+ 8.900000000000e-002,-2.75126e-002
+ 8.900625000000e-002,-2.75126e-002
+ 8.901250000000e-002,-2.75126e-002
+ 8.901875000000e-002,-2.75126e-002
+ 8.902500000000e-002,-2.75126e-002
+ 8.903125000000e-002,-2.75126e-002
+ 8.903750000000e-002,-2.75126e-002
+ 8.904375000000e-002,-2.75126e-002
+ 8.905000000000e-002,-2.75126e-002
+ 8.905625000000e-002,-2.75126e-002
+ 8.906250000000e-002,-2.75126e-002
+ 8.906875000000e-002,-2.75126e-002
+ 8.907500000000e-002,-2.75126e-002
+ 8.908125000000e-002,-2.75126e-002
+ 8.908750000000e-002,-2.75126e-002
+ 8.909375000000e-002,-2.24876e-002
+ 8.910000000000e-002,-2.75126e-002
+ 8.910625000000e-002,-2.24876e-002
+ 8.911250000000e-002,-2.75126e-002
+ 8.911875000000e-002,-2.24876e-002
+ 8.912500000000e-002,-2.75126e-002
+ 8.913125000000e-002,-2.75126e-002
+ 8.913750000000e-002,-2.75126e-002
+ 8.914375000000e-002,-2.75126e-002
+ 8.915000000000e-002,-2.75126e-002
+ 8.915625000000e-002,-2.75126e-002
+ 8.916250000000e-002,-2.75126e-002
+ 8.916875000000e-002,-2.75126e-002
+ 8.917500000000e-002,-2.75126e-002
+ 8.918125000000e-002,-2.75126e-002
+ 8.918750000000e-002,-2.75126e-002
+ 8.919375000000e-002,-2.75126e-002
+ 8.920000000000e-002,-2.75126e-002
+ 8.920625000000e-002,-2.75126e-002
+ 8.921250000000e-002,-2.75126e-002
+ 8.921875000000e-002,-2.75126e-002
+ 8.922500000000e-002,-2.75126e-002
+ 8.923125000000e-002,-2.75126e-002
+ 8.923750000000e-002,-2.75126e-002
+ 8.924375000000e-002,-2.75126e-002
+ 8.925000000000e-002,-2.75126e-002
+ 8.925625000000e-002,-2.75126e-002
+ 8.926250000000e-002,-2.75126e-002
+ 8.926875000000e-002,-2.75126e-002
+ 8.927500000000e-002,-2.75126e-002
+ 8.928125000000e-002,-2.75126e-002
+ 8.928750000000e-002,-2.75126e-002
+ 8.929375000000e-002,-2.75126e-002
+ 8.930000000000e-002,-2.75126e-002
+ 8.930625000000e-002,-2.75126e-002
+ 8.931250000000e-002,-2.75126e-002
+ 8.931875000000e-002,-2.75126e-002
+ 8.932500000000e-002,-2.75126e-002
+ 8.933125000000e-002,-2.24876e-002
+ 8.933750000000e-002,-2.24876e-002
+ 8.934375000000e-002,-2.75126e-002
+ 8.935000000000e-002,-2.75126e-002
+ 8.935625000000e-002,-2.75126e-002
+ 8.936250000000e-002,-2.75126e-002
+ 8.936875000000e-002,-2.75126e-002
+ 8.937500000000e-002,-2.75126e-002
+ 8.938125000000e-002,-2.75126e-002
+ 8.938750000000e-002,-2.75126e-002
+ 8.939375000000e-002,-2.75126e-002
+ 8.940000000000e-002,-2.75126e-002
+ 8.940625000000e-002,-2.75126e-002
+ 8.941250000000e-002,-2.75126e-002
+ 8.941875000000e-002,-2.75126e-002
+ 8.942500000000e-002,-2.75126e-002
+ 8.943125000000e-002,-2.75126e-002
+ 8.943750000000e-002,-2.75126e-002
+ 8.944375000000e-002,-2.75126e-002
+ 8.945000000000e-002,-2.75126e-002
+ 8.945625000000e-002,-2.75126e-002
+ 8.946250000000e-002,-2.75126e-002
+ 8.946875000000e-002,-2.75126e-002
+ 8.947500000000e-002,-2.75126e-002
+ 8.948125000000e-002,-2.75126e-002
+ 8.948750000000e-002,-2.75126e-002
+ 8.949375000000e-002,-2.75126e-002
+ 8.950000000000e-002,-2.75126e-002
+ 8.950625000000e-002,-2.75126e-002
+ 8.951250000000e-002,-2.75126e-002
+ 8.951875000000e-002,-2.75126e-002
+ 8.952500000000e-002,-2.75126e-002
+ 8.953125000000e-002,-2.75126e-002
+ 8.953750000000e-002,-2.75126e-002
+ 8.954375000000e-002,-2.75126e-002
+ 8.955000000000e-002,-2.75126e-002
+ 8.955625000000e-002,-2.75126e-002
+ 8.956250000000e-002,-2.75126e-002
+ 8.956875000000e-002,-2.75126e-002
+ 8.957500000000e-002,-2.75126e-002
+ 8.958125000000e-002,-2.75126e-002
+ 8.958750000000e-002,-2.75126e-002
+ 8.959375000000e-002,-2.75126e-002
+ 8.960000000000e-002,-2.75126e-002
+ 8.960625000000e-002,-2.75126e-002
+ 8.961250000000e-002,-2.75126e-002
+ 8.961875000000e-002,-2.75126e-002
+ 8.962500000000e-002,-2.75126e-002
+ 8.963125000000e-002,-2.75126e-002
+ 8.963750000000e-002,-2.75126e-002
+ 8.964375000000e-002,-2.75126e-002
+ 8.965000000000e-002,-2.75126e-002
+ 8.965625000000e-002,-2.75126e-002
+ 8.966250000000e-002,-2.75126e-002
+ 8.966875000000e-002,-2.75126e-002
+ 8.967500000000e-002,-2.75126e-002
+ 8.968125000000e-002,-2.75126e-002
+ 8.968750000000e-002,-2.75126e-002
+ 8.969375000000e-002,-2.75126e-002
+ 8.970000000000e-002,-2.75126e-002
+ 8.970625000000e-002,-2.75126e-002
+ 8.971250000000e-002,-2.75126e-002
+ 8.971875000000e-002,-2.75126e-002
+ 8.972500000000e-002,-2.75126e-002
+ 8.973125000000e-002,-2.75126e-002
+ 8.973750000000e-002,-2.75126e-002
+ 8.974375000000e-002,-2.75126e-002
+ 8.975000000000e-002,-2.75126e-002
+ 8.975625000000e-002,-2.75126e-002
+ 8.976250000000e-002,-2.75126e-002
+ 8.976875000000e-002,-2.75126e-002
+ 8.977500000000e-002,-2.75126e-002
+ 8.978125000000e-002,-2.75126e-002
+ 8.978750000000e-002,-2.75126e-002
+ 8.979375000000e-002,-2.75126e-002
+ 8.980000000000e-002,-2.75126e-002
+ 8.980625000000e-002,-2.75126e-002
+ 8.981250000000e-002,-2.75126e-002
+ 8.981875000000e-002,-2.75126e-002
+ 8.982500000000e-002,-2.75126e-002
+ 8.983125000000e-002,-2.24876e-002
+ 8.983750000000e-002,-2.75126e-002
+ 8.984375000000e-002,-2.75126e-002
+ 8.985000000000e-002,-2.75126e-002
+ 8.985625000000e-002,-2.75126e-002
+ 8.986250000000e-002,-2.75126e-002
+ 8.986875000000e-002,-2.75126e-002
+ 8.987500000000e-002,-2.75126e-002
+ 8.988125000000e-002,-2.75126e-002
+ 8.988750000000e-002,-2.75126e-002
+ 8.989375000000e-002,-2.75126e-002
+ 8.990000000000e-002,-2.75126e-002
+ 8.990625000000e-002,-2.75126e-002
+ 8.991250000000e-002,-2.75126e-002
+ 8.991875000000e-002,-2.75126e-002
+ 8.992500000000e-002,-2.75126e-002
+ 8.993125000000e-002,-2.75126e-002
+ 8.993750000000e-002,-2.75126e-002
+ 8.994375000000e-002,-2.75126e-002
+ 8.995000000000e-002,-2.75126e-002
+ 8.995625000000e-002,-2.24876e-002
+ 8.996250000000e-002,-2.75126e-002
+ 8.996875000000e-002,-2.75126e-002
+ 8.997500000000e-002,-2.75126e-002
+ 8.998125000000e-002,-2.75126e-002
+ 8.998750000000e-002,-2.75126e-002
+ 8.999375000000e-002,-2.75126e-002
+ 9.000000000000e-002,-2.75126e-002
+ 9.000625000000e-002,-2.75126e-002
+ 9.001250000000e-002,-2.75126e-002
+ 9.001875000000e-002,-2.75126e-002
+ 9.002500000000e-002,-2.75126e-002
+ 9.003125000000e-002,-2.75126e-002
+ 9.003750000000e-002,-2.75126e-002
+ 9.004375000000e-002,-2.75126e-002
+ 9.005000000000e-002,-2.75126e-002
+ 9.005625000000e-002,-2.75126e-002
+ 9.006250000000e-002,-2.75126e-002
+ 9.006875000000e-002,-2.24876e-002
+ 9.007500000000e-002,-2.75126e-002
+ 9.008125000000e-002,-2.75126e-002
+ 9.008750000000e-002,-2.75126e-002
+ 9.009375000000e-002,-2.75126e-002
+ 9.010000000000e-002,-2.75126e-002
+ 9.010625000000e-002,-2.75126e-002
+ 9.011250000000e-002,-2.75126e-002
+ 9.011875000000e-002,-2.24876e-002
+ 9.012500000000e-002,-2.75126e-002
+ 9.013125000000e-002,-2.75126e-002
+ 9.013750000000e-002,-2.75126e-002
+ 9.014375000000e-002,-2.75126e-002
+ 9.015000000000e-002,-2.75126e-002
+ 9.015625000000e-002,-2.75126e-002
+ 9.016250000000e-002,-2.75126e-002
+ 9.016875000000e-002,-2.75126e-002
+ 9.017500000000e-002,-2.75126e-002
+ 9.018125000000e-002,-2.75126e-002
+ 9.018750000000e-002,-2.75126e-002
+ 9.019375000000e-002,-2.75126e-002
+ 9.020000000000e-002,-2.75126e-002
+ 9.020625000000e-002,-2.75126e-002
+ 9.021250000000e-002,-2.75126e-002
+ 9.021875000000e-002,-2.75126e-002
+ 9.022500000000e-002,-2.75126e-002
+ 9.023125000000e-002,-2.75126e-002
+ 9.023750000000e-002,-2.75126e-002
+ 9.024375000000e-002,-2.24876e-002
+ 9.025000000000e-002,-2.75126e-002
+ 9.025625000000e-002,-2.24876e-002
+ 9.026250000000e-002,-2.75126e-002
+ 9.026875000000e-002,-2.75126e-002
+ 9.027500000000e-002,-2.75126e-002
+ 9.028125000000e-002,-2.75126e-002
+ 9.028750000000e-002,-2.75126e-002
+ 9.029375000000e-002,-2.75126e-002
+ 9.030000000000e-002,-2.75126e-002
+ 9.030625000000e-002,-2.75126e-002
+ 9.031250000000e-002,-2.24876e-002
+ 9.031875000000e-002,-2.75126e-002
+ 9.032500000000e-002,-2.75126e-002
+ 9.033125000000e-002,-2.75126e-002
+ 9.033750000000e-002,-2.75126e-002
+ 9.034375000000e-002,-2.75126e-002
+ 9.035000000000e-002,-2.75126e-002
+ 9.035625000000e-002,-2.75126e-002
+ 9.036250000000e-002,-2.75126e-002
+ 9.036875000000e-002,-2.24876e-002
+ 9.037500000000e-002,-2.75126e-002
+ 9.038125000000e-002,-2.75126e-002
+ 9.038750000000e-002,-2.75126e-002
+ 9.039375000000e-002,-2.75126e-002
+ 9.040000000000e-002,-2.75126e-002
+ 9.040625000000e-002,-2.75126e-002
+ 9.041250000000e-002,-2.75126e-002
+ 9.041875000000e-002,-2.75126e-002
+ 9.042500000000e-002,-2.75126e-002
+ 9.043125000000e-002,-2.75126e-002
+ 9.043750000000e-002,-2.75126e-002
+ 9.044375000000e-002,-2.75126e-002
+ 9.045000000000e-002,-2.75126e-002
+ 9.045625000000e-002,-2.75126e-002
+ 9.046250000000e-002,-2.75126e-002
+ 9.046875000000e-002,-2.75126e-002
+ 9.047500000000e-002,-2.75126e-002
+ 9.048125000000e-002,-2.75126e-002
+ 9.048750000000e-002,-2.75126e-002
+ 9.049375000000e-002,-2.75126e-002
+ 9.050000000000e-002,-2.75126e-002
+ 9.050625000000e-002,-2.75126e-002
+ 9.051250000000e-002,-2.75126e-002
+ 9.051875000000e-002,-2.75126e-002
+ 9.052500000000e-002,-2.75126e-002
+ 9.053125000000e-002,-2.75126e-002
+ 9.053750000000e-002,-2.75126e-002
+ 9.054375000000e-002,-2.75126e-002
+ 9.055000000000e-002,-2.75126e-002
+ 9.055625000000e-002,-2.75126e-002
+ 9.056250000000e-002,-2.75126e-002
+ 9.056875000000e-002,-2.75126e-002
+ 9.057500000000e-002,-2.75126e-002
+ 9.058125000000e-002,-2.75126e-002
+ 9.058750000000e-002,-2.75126e-002
+ 9.059375000000e-002,-2.75126e-002
+ 9.060000000000e-002,-2.75126e-002
+ 9.060625000000e-002,-2.75126e-002
+ 9.061250000000e-002,-2.75126e-002
+ 9.061875000000e-002,-2.75126e-002
+ 9.062500000000e-002,-2.75126e-002
+ 9.063125000000e-002,-2.75126e-002
+ 9.063750000000e-002,-2.75126e-002
+ 9.064375000000e-002,-2.75126e-002
+ 9.065000000000e-002,-2.75126e-002
+ 9.065625000000e-002,-2.75126e-002
+ 9.066250000000e-002,-2.75126e-002
+ 9.066875000000e-002,-2.75126e-002
+ 9.067500000000e-002,-2.75126e-002
+ 9.068125000000e-002,-2.75126e-002
+ 9.068750000000e-002,-2.75126e-002
+ 9.069375000000e-002,-2.75126e-002
+ 9.070000000000e-002,-2.75126e-002
+ 9.070625000000e-002,-2.75126e-002
+ 9.071250000000e-002,-2.75126e-002
+ 9.071875000000e-002,-2.75126e-002
+ 9.072500000000e-002,-2.75126e-002
+ 9.073125000000e-002,-2.75126e-002
+ 9.073750000000e-002,-2.75126e-002
+ 9.074375000000e-002,-2.75126e-002
+ 9.075000000000e-002,-2.75126e-002
+ 9.075625000000e-002,-2.75126e-002
+ 9.076250000000e-002,-2.75126e-002
+ 9.076875000000e-002,-2.75126e-002
+ 9.077500000000e-002,-2.75126e-002
+ 9.078125000000e-002,-2.75126e-002
+ 9.078750000000e-002,-2.75126e-002
+ 9.079375000000e-002,-2.75126e-002
+ 9.080000000000e-002,-2.75126e-002
+ 9.080625000000e-002,-2.75126e-002
+ 9.081250000000e-002,-2.75126e-002
+ 9.081875000000e-002,-2.75126e-002
+ 9.082500000000e-002,-2.75126e-002
+ 9.083125000000e-002,-2.75126e-002
+ 9.083750000000e-002,-2.75126e-002
+ 9.084375000000e-002,-2.75126e-002
+ 9.085000000000e-002,-2.75126e-002
+ 9.085625000000e-002,-2.75126e-002
+ 9.086250000000e-002,-2.75126e-002
+ 9.086875000000e-002,-2.75126e-002
+ 9.087500000000e-002,-2.75126e-002
+ 9.088125000000e-002,-2.75126e-002
+ 9.088750000000e-002,-2.75126e-002
+ 9.089375000000e-002,-2.75126e-002
+ 9.090000000000e-002,-2.75126e-002
+ 9.090625000000e-002,-2.75126e-002
+ 9.091250000000e-002,-2.75126e-002
+ 9.091875000000e-002,-2.75126e-002
+ 9.092500000000e-002,-2.75126e-002
+ 9.093125000000e-002,-2.75126e-002
+ 9.093750000000e-002,-2.75126e-002
+ 9.094375000000e-002,-2.75126e-002
+ 9.095000000000e-002,-2.75126e-002
+ 9.095625000000e-002,-2.24876e-002
+ 9.096250000000e-002,-2.75126e-002
+ 9.096875000000e-002,-2.75126e-002
+ 9.097500000000e-002,-2.24876e-002
+ 9.098125000000e-002,-2.75126e-002
+ 9.098750000000e-002,-2.75126e-002
+ 9.099375000000e-002,-2.75126e-002
+ 9.100000000000e-002,-2.75126e-002
+ 9.100625000000e-002,-2.75126e-002
+ 9.101250000000e-002,-2.75126e-002
+ 9.101875000000e-002,-2.75126e-002
+ 9.102500000000e-002,-2.75126e-002
+ 9.103125000000e-002,-2.75126e-002
+ 9.103750000000e-002,-2.75126e-002
+ 9.104375000000e-002,-2.75126e-002
+ 9.105000000000e-002,-2.75126e-002
+ 9.105625000000e-002,-2.75126e-002
+ 9.106250000000e-002,-2.75126e-002
+ 9.106875000000e-002,-2.75126e-002
+ 9.107500000000e-002,-2.75126e-002
+ 9.108125000000e-002,-2.24876e-002
+ 9.108750000000e-002,-2.75126e-002
+ 9.109375000000e-002,-2.75126e-002
+ 9.110000000000e-002,-2.75126e-002
+ 9.110625000000e-002,-2.75126e-002
+ 9.111250000000e-002,-2.75126e-002
+ 9.111875000000e-002,-2.75126e-002
+ 9.112500000000e-002,-2.75126e-002
+ 9.113125000000e-002,-2.75126e-002
+ 9.113750000000e-002,-2.75126e-002
+ 9.114375000000e-002,-2.75126e-002
+ 9.115000000000e-002,-2.75126e-002
+ 9.115625000000e-002,-2.75126e-002
+ 9.116250000000e-002,-2.75126e-002
+ 9.116875000000e-002,-2.75126e-002
+ 9.117500000000e-002,-2.75126e-002
+ 9.118125000000e-002,-2.75126e-002
+ 9.118750000000e-002,-2.75126e-002
+ 9.119375000000e-002,-2.75126e-002
+ 9.120000000000e-002,-2.75126e-002
+ 9.120625000000e-002,-2.75126e-002
+ 9.121250000000e-002,-2.75126e-002
+ 9.121875000000e-002,-2.75126e-002
+ 9.122500000000e-002,-2.75126e-002
+ 9.123125000000e-002,-2.75126e-002
+ 9.123750000000e-002,-2.75126e-002
+ 9.124375000000e-002,-2.75126e-002
+ 9.125000000000e-002,-2.75126e-002
+ 9.125625000000e-002,-2.75126e-002
+ 9.126250000000e-002,-2.75126e-002
+ 9.126875000000e-002,-2.75126e-002
+ 9.127500000000e-002,-2.75126e-002
+ 9.128125000000e-002,-2.75126e-002
+ 9.128750000000e-002,-2.75126e-002
+ 9.129375000000e-002,-2.75126e-002
+ 9.130000000000e-002,-2.75126e-002
+ 9.130625000000e-002,-2.75126e-002
+ 9.131250000000e-002,-2.75126e-002
+ 9.131875000000e-002,-2.75126e-002
+ 9.132500000000e-002,-2.75126e-002
+ 9.133125000000e-002,-2.75126e-002
+ 9.133750000000e-002,-2.75126e-002
+ 9.134375000000e-002,-2.75126e-002
+ 9.135000000000e-002,-2.75126e-002
+ 9.135625000000e-002,-2.75126e-002
+ 9.136250000000e-002,-2.75126e-002
+ 9.136875000000e-002,-2.75126e-002
+ 9.137500000000e-002,-2.75126e-002
+ 9.138125000000e-002,-2.75126e-002
+ 9.138750000000e-002,-2.75126e-002
+ 9.139375000000e-002,-2.75126e-002
+ 9.140000000000e-002,-2.75126e-002
+ 9.140625000000e-002,-2.75126e-002
+ 9.141250000000e-002,-2.75126e-002
+ 9.141875000000e-002,-2.75126e-002
+ 9.142500000000e-002,-2.75126e-002
+ 9.143125000000e-002,-2.75126e-002
+ 9.143750000000e-002,-2.75126e-002
+ 9.144375000000e-002,-2.75126e-002
+ 9.145000000000e-002,-2.75126e-002
+ 9.145625000000e-002,-2.75126e-002
+ 9.146250000000e-002,-2.75126e-002
+ 9.146875000000e-002,-2.75126e-002
+ 9.147500000000e-002,-2.75126e-002
+ 9.148125000000e-002,-2.75126e-002
+ 9.148750000000e-002,-2.24876e-002
+ 9.149375000000e-002,-2.75126e-002
+ 9.150000000000e-002,-2.75126e-002
+ 9.150625000000e-002,-2.75126e-002
+ 9.151250000000e-002,-2.75126e-002
+ 9.151875000000e-002,-2.75126e-002
+ 9.152500000000e-002,-2.75126e-002
+ 9.153125000000e-002,-2.75126e-002
+ 9.153750000000e-002,-2.75126e-002
+ 9.154375000000e-002,-2.75126e-002
+ 9.155000000000e-002,-2.75126e-002
+ 9.155625000000e-002,-2.75126e-002
+ 9.156250000000e-002,-2.75126e-002
+ 9.156875000000e-002,-2.75126e-002
+ 9.157500000000e-002,-2.75126e-002
+ 9.158125000000e-002,-2.75126e-002
+ 9.158750000000e-002,-2.75126e-002
+ 9.159375000000e-002,-2.75126e-002
+ 9.160000000000e-002,-2.75126e-002
+ 9.160625000000e-002,-2.75126e-002
+ 9.161250000000e-002,-2.75126e-002
+ 9.161875000000e-002,-2.75126e-002
+ 9.162500000000e-002,-2.75126e-002
+ 9.163125000000e-002,-2.75126e-002
+ 9.163750000000e-002,-2.75126e-002
+ 9.164375000000e-002,-2.75126e-002
+ 9.165000000000e-002,-2.75126e-002
+ 9.165625000000e-002,-2.75126e-002
+ 9.166250000000e-002,-2.75126e-002
+ 9.166875000000e-002,-2.75126e-002
+ 9.167500000000e-002,-2.24876e-002
+ 9.168125000000e-002,-2.75126e-002
+ 9.168750000000e-002,-2.75126e-002
+ 9.169375000000e-002,-2.75126e-002
+ 9.170000000000e-002,-2.75126e-002
+ 9.170625000000e-002,-2.75126e-002
+ 9.171250000000e-002,-2.75126e-002
+ 9.171875000000e-002,-2.75126e-002
+ 9.172500000000e-002,-2.75126e-002
+ 9.173125000000e-002,-2.75126e-002
+ 9.173750000000e-002,-2.75126e-002
+ 9.174375000000e-002,-2.75126e-002
+ 9.175000000000e-002,-2.75126e-002
+ 9.175625000000e-002,-2.75126e-002
+ 9.176250000000e-002,-2.75126e-002
+ 9.176875000000e-002,-2.75126e-002
+ 9.177500000000e-002,-2.75126e-002
+ 9.178125000000e-002,-2.75126e-002
+ 9.178750000000e-002,-2.75126e-002
+ 9.179375000000e-002,-2.75126e-002
+ 9.180000000000e-002,-2.75126e-002
+ 9.180625000000e-002,-2.75126e-002
+ 9.181250000000e-002,-2.75126e-002
+ 9.181875000000e-002,-2.75126e-002
+ 9.182500000000e-002,-2.75126e-002
+ 9.183125000000e-002,-2.75126e-002
+ 9.183750000000e-002,-2.75126e-002
+ 9.184375000000e-002,-2.75126e-002
+ 9.185000000000e-002,-2.75126e-002
+ 9.185625000000e-002,-2.75126e-002
+ 9.186250000000e-002,-2.75126e-002
+ 9.186875000000e-002,-2.75126e-002
+ 9.187500000000e-002,-2.75126e-002
+ 9.188125000000e-002,-2.75126e-002
+ 9.188750000000e-002,-2.75126e-002
+ 9.189375000000e-002,-2.75126e-002
+ 9.190000000000e-002,-2.75126e-002
+ 9.190625000000e-002,-2.75126e-002
+ 9.191250000000e-002,-2.24876e-002
+ 9.191875000000e-002,-2.75126e-002
+ 9.192500000000e-002,-2.75126e-002
+ 9.193125000000e-002,-2.75126e-002
+ 9.193750000000e-002,-2.75126e-002
+ 9.194375000000e-002,-2.75126e-002
+ 9.195000000000e-002,-2.75126e-002
+ 9.195625000000e-002,-2.75126e-002
+ 9.196250000000e-002,-2.75126e-002
+ 9.196875000000e-002,-2.75126e-002
+ 9.197500000000e-002,-2.75126e-002
+ 9.198125000000e-002,-2.75126e-002
+ 9.198750000000e-002,-2.75126e-002
+ 9.199375000000e-002,-2.75126e-002
+ 9.200000000000e-002,-2.75126e-002
+ 9.200625000000e-002,-2.75126e-002
+ 9.201250000000e-002,-2.75126e-002
+ 9.201875000000e-002,-2.75126e-002
+ 9.202500000000e-002,-2.75126e-002
+ 9.203125000000e-002,-2.75126e-002
+ 9.203750000000e-002,-2.75126e-002
+ 9.204375000000e-002,-2.75126e-002
+ 9.205000000000e-002,-2.75126e-002
+ 9.205625000000e-002,-2.75126e-002
+ 9.206250000000e-002,-2.75126e-002
+ 9.206875000000e-002,-2.75126e-002
+ 9.207500000000e-002,-2.75126e-002
+ 9.208125000000e-002,-2.75126e-002
+ 9.208750000000e-002,-2.75126e-002
+ 9.209375000000e-002,-2.75126e-002
+ 9.210000000000e-002,-2.75126e-002
+ 9.210625000000e-002,-2.75126e-002
+ 9.211250000000e-002,-2.75126e-002
+ 9.211875000000e-002,-2.75126e-002
+ 9.212500000000e-002,-2.75126e-002
+ 9.213125000000e-002,-2.75126e-002
+ 9.213750000000e-002,-2.75126e-002
+ 9.214375000000e-002,-2.75126e-002
+ 9.215000000000e-002,-2.75126e-002
+ 9.215625000000e-002,-2.75126e-002
+ 9.216250000000e-002,-2.75126e-002
+ 9.216875000000e-002,-2.75126e-002
+ 9.217500000000e-002,-2.75126e-002
+ 9.218125000000e-002,-2.75126e-002
+ 9.218750000000e-002,-2.75126e-002
+ 9.219375000000e-002,-2.24876e-002
+ 9.220000000000e-002,-2.75126e-002
+ 9.220625000000e-002,-2.75126e-002
+ 9.221250000000e-002,-2.75126e-002
+ 9.221875000000e-002,-2.24876e-002
+ 9.222500000000e-002,-2.24876e-002
+ 9.223125000000e-002,-2.24876e-002
+ 9.223750000000e-002,-2.75126e-002
+ 9.224375000000e-002,-2.75126e-002
+ 9.225000000000e-002,-2.24876e-002
+ 9.225625000000e-002,-2.75126e-002
+ 9.226250000000e-002,-2.75126e-002
+ 9.226875000000e-002,-2.75126e-002
+ 9.227500000000e-002,-2.75126e-002
+ 9.228125000000e-002,-2.75126e-002
+ 9.228750000000e-002,-2.75126e-002
+ 9.229375000000e-002,-2.75126e-002
+ 9.230000000000e-002,-2.75126e-002
+ 9.230625000000e-002,-2.75126e-002
+ 9.231250000000e-002,-2.75126e-002
+ 9.231875000000e-002,-2.75126e-002
+ 9.232500000000e-002,-2.24876e-002
+ 9.233125000000e-002,-2.75126e-002
+ 9.233750000000e-002,-2.75126e-002
+ 9.234375000000e-002,-2.75126e-002
+ 9.235000000000e-002,-2.75126e-002
+ 9.235625000000e-002,-2.75126e-002
+ 9.236250000000e-002,-2.75126e-002
+ 9.236875000000e-002,-2.75126e-002
+ 9.237500000000e-002,-2.75126e-002
+ 9.238125000000e-002,-2.75126e-002
+ 9.238750000000e-002,-2.75126e-002
+ 9.239375000000e-002,-2.75126e-002
+ 9.240000000000e-002,-2.75126e-002
+ 9.240625000000e-002,-2.75126e-002
+ 9.241250000000e-002,-2.75126e-002
+ 9.241875000000e-002,-2.75126e-002
+ 9.242500000000e-002,-2.75126e-002
+ 9.243125000000e-002,-2.75126e-002
+ 9.243750000000e-002,-2.75126e-002
+ 9.244375000000e-002,-2.75126e-002
+ 9.245000000000e-002,-2.75126e-002
+ 9.245625000000e-002,-2.75126e-002
+ 9.246250000000e-002,-2.75126e-002
+ 9.246875000000e-002,-2.75126e-002
+ 9.247500000000e-002,-2.75126e-002
+ 9.248125000000e-002,-2.75126e-002
+ 9.248750000000e-002,-2.75126e-002
+ 9.249375000000e-002,-2.75126e-002
+ 9.250000000000e-002,-2.75126e-002
+ 9.250625000000e-002,-2.75126e-002
+ 9.251250000000e-002,-2.75126e-002
+ 9.251875000000e-002,-2.75126e-002
+ 9.252500000000e-002,-2.75126e-002
+ 9.253125000000e-002,-2.75126e-002
+ 9.253750000000e-002,-2.75126e-002
+ 9.254375000000e-002,-2.75126e-002
+ 9.255000000000e-002,-2.75126e-002
+ 9.255625000000e-002,-2.75126e-002
+ 9.256250000000e-002,-2.75126e-002
+ 9.256875000000e-002,-2.75126e-002
+ 9.257500000000e-002,-2.75126e-002
+ 9.258125000000e-002,-2.75126e-002
+ 9.258750000000e-002,-2.75126e-002
+ 9.259375000000e-002,-2.75126e-002
+ 9.260000000000e-002,-2.75126e-002
+ 9.260625000000e-002,-2.75126e-002
+ 9.261250000000e-002,-2.75126e-002
+ 9.261875000000e-002,-2.24876e-002
+ 9.262500000000e-002,-2.75126e-002
+ 9.263125000000e-002,-2.75126e-002
+ 9.263750000000e-002,-2.75126e-002
+ 9.264375000000e-002,-2.75126e-002
+ 9.265000000000e-002,-2.75126e-002
+ 9.265625000000e-002,-2.75126e-002
+ 9.266250000000e-002,-2.75126e-002
+ 9.266875000000e-002,-2.75126e-002
+ 9.267500000000e-002,-2.75126e-002
+ 9.268125000000e-002,-2.75126e-002
+ 9.268750000000e-002,-2.75126e-002
+ 9.269375000000e-002,-2.75126e-002
+ 9.270000000000e-002,-2.75126e-002
+ 9.270625000000e-002,-2.75126e-002
+ 9.271250000000e-002,-2.75126e-002
+ 9.271875000000e-002,-2.75126e-002
+ 9.272500000000e-002,-2.75126e-002
+ 9.273125000000e-002,-2.75126e-002
+ 9.273750000000e-002,-2.75126e-002
+ 9.274375000000e-002,-2.75126e-002
+ 9.275000000000e-002,-2.75126e-002
+ 9.275625000000e-002,-2.75126e-002
+ 9.276250000000e-002,-2.75126e-002
+ 9.276875000000e-002,-2.75126e-002
+ 9.277500000000e-002,-2.75126e-002
+ 9.278125000000e-002,-2.75126e-002
+ 9.278750000000e-002,-2.75126e-002
+ 9.279375000000e-002,-2.75126e-002
+ 9.280000000000e-002,-2.24876e-002
+ 9.280625000000e-002,-2.75126e-002
+ 9.281250000000e-002,-2.75126e-002
+ 9.281875000000e-002,-2.75126e-002
+ 9.282500000000e-002,-2.75126e-002
+ 9.283125000000e-002,-2.75126e-002
+ 9.283750000000e-002,-2.75126e-002
+ 9.284375000000e-002,-2.75126e-002
+ 9.285000000000e-002,-2.75126e-002
+ 9.285625000000e-002,-2.75126e-002
+ 9.286250000000e-002,-2.75126e-002
+ 9.286875000000e-002,-2.75126e-002
+ 9.287500000000e-002,-2.75126e-002
+ 9.288125000000e-002,-2.75126e-002
+ 9.288750000000e-002,-2.75126e-002
+ 9.289375000000e-002,-2.75126e-002
+ 9.290000000000e-002,-2.75126e-002
+ 9.290625000000e-002,-2.75126e-002
+ 9.291250000000e-002,-2.75126e-002
+ 9.291875000000e-002,-2.75126e-002
+ 9.292500000000e-002,-2.24876e-002
+ 9.293125000000e-002,-2.75126e-002
+ 9.293750000000e-002,-2.75126e-002
+ 9.294375000000e-002,-2.75126e-002
+ 9.295000000000e-002,-2.75126e-002
+ 9.295625000000e-002,-2.75126e-002
+ 9.296250000000e-002,-2.75126e-002
+ 9.296875000000e-002,-2.75126e-002
+ 9.297500000000e-002,-2.75126e-002
+ 9.298125000000e-002,-2.75126e-002
+ 9.298750000000e-002,-2.75126e-002
+ 9.299375000000e-002,-2.75126e-002
+ 9.300000000000e-002,-2.75126e-002
+ 9.300625000000e-002,-2.75126e-002
+ 9.301250000000e-002,-2.75126e-002
+ 9.301875000000e-002,-2.75126e-002
+ 9.302500000000e-002,-2.75126e-002
+ 9.303125000000e-002,-2.75126e-002
+ 9.303750000000e-002,-2.75126e-002
+ 9.304375000000e-002,-2.75126e-002
+ 9.305000000000e-002,-2.75126e-002
+ 9.305625000000e-002,-2.75126e-002
+ 9.306250000000e-002,-2.75126e-002
+ 9.306875000000e-002,-2.75126e-002
+ 9.307500000000e-002,-2.75126e-002
+ 9.308125000000e-002,-2.75126e-002
+ 9.308750000000e-002,-2.75126e-002
+ 9.309375000000e-002,-2.75126e-002
+ 9.310000000000e-002,-2.75126e-002
+ 9.310625000000e-002,-2.75126e-002
+ 9.311250000000e-002,-2.75126e-002
+ 9.311875000000e-002,-2.75126e-002
+ 9.312500000000e-002,-2.75126e-002
+ 9.313125000000e-002,-2.75126e-002
+ 9.313750000000e-002,-2.75126e-002
+ 9.314375000000e-002,-2.75126e-002
+ 9.315000000000e-002,-2.75126e-002
+ 9.315625000000e-002,-2.75126e-002
+ 9.316250000000e-002,-2.75126e-002
+ 9.316875000000e-002,-2.75126e-002
+ 9.317500000000e-002,-2.75126e-002
+ 9.318125000000e-002,-2.75126e-002
+ 9.318750000000e-002,-2.75126e-002
+ 9.319375000000e-002,-2.75126e-002
+ 9.320000000000e-002,-2.75126e-002
+ 9.320625000000e-002,-2.75126e-002
+ 9.321250000000e-002,-2.75126e-002
+ 9.321875000000e-002,-2.75126e-002
+ 9.322500000000e-002,-2.75126e-002
+ 9.323125000000e-002,-2.75126e-002
+ 9.323750000000e-002,-2.75126e-002
+ 9.324375000000e-002,-2.75126e-002
+ 9.325000000000e-002,-2.75126e-002
+ 9.325625000000e-002,-2.75126e-002
+ 9.326250000000e-002,-2.75126e-002
+ 9.326875000000e-002,-2.75126e-002
+ 9.327500000000e-002,-2.75126e-002
+ 9.328125000000e-002,-2.75126e-002
+ 9.328750000000e-002,-2.75126e-002
+ 9.329375000000e-002,-2.75126e-002
+ 9.330000000000e-002,-2.75126e-002
+ 9.330625000000e-002,-2.75126e-002
+ 9.331250000000e-002,-2.75126e-002
+ 9.331875000000e-002,-2.75126e-002
+ 9.332500000000e-002,-2.24876e-002
+ 9.333125000000e-002,-2.75126e-002
+ 9.333750000000e-002,-2.75126e-002
+ 9.334375000000e-002,-2.75126e-002
+ 9.335000000000e-002,-2.75126e-002
+ 9.335625000000e-002,-2.75126e-002
+ 9.336250000000e-002,-2.24876e-002
+ 9.336875000000e-002,-2.75126e-002
+ 9.337500000000e-002,-2.75126e-002
+ 9.338125000000e-002,-2.75126e-002
+ 9.338750000000e-002,-2.75126e-002
+ 9.339375000000e-002,-2.75126e-002
+ 9.340000000000e-002,-2.75126e-002
+ 9.340625000000e-002,-2.75126e-002
+ 9.341250000000e-002,-2.75126e-002
+ 9.341875000000e-002,-2.75126e-002
+ 9.342500000000e-002,-2.75126e-002
+ 9.343125000000e-002,-2.75126e-002
+ 9.343750000000e-002,-2.75126e-002
+ 9.344375000000e-002,-2.75126e-002
+ 9.345000000000e-002,-2.75126e-002
+ 9.345625000000e-002,-2.75126e-002
+ 9.346250000000e-002,-2.75126e-002
+ 9.346875000000e-002,-2.75126e-002
+ 9.347500000000e-002,-2.75126e-002
+ 9.348125000000e-002,-2.75126e-002
+ 9.348750000000e-002,-2.75126e-002
+ 9.349375000000e-002,-2.75126e-002
+ 9.350000000000e-002,-2.75126e-002
+ 9.350625000000e-002,-2.75126e-002
+ 9.351250000000e-002,-2.75126e-002
+ 9.351875000000e-002,-2.75126e-002
+ 9.352500000000e-002,-2.75126e-002
+ 9.353125000000e-002,-2.75126e-002
+ 9.353750000000e-002,-2.75126e-002
+ 9.354375000000e-002,-2.75126e-002
+ 9.355000000000e-002,-2.75126e-002
+ 9.355625000000e-002,-2.75126e-002
+ 9.356250000000e-002,-2.75126e-002
+ 9.356875000000e-002,-2.75126e-002
+ 9.357500000000e-002,-2.75126e-002
+ 9.358125000000e-002,-2.75126e-002
+ 9.358750000000e-002,-2.75126e-002
+ 9.359375000000e-002,-2.75126e-002
+ 9.360000000000e-002,-2.75126e-002
+ 9.360625000000e-002,-2.75126e-002
+ 9.361250000000e-002,-2.75126e-002
+ 9.361875000000e-002,-2.75126e-002
+ 9.362500000000e-002,-2.75126e-002
+ 9.363125000000e-002,-2.75126e-002
+ 9.363750000000e-002,-2.75126e-002
+ 9.364375000000e-002,-2.75126e-002
+ 9.365000000000e-002,-2.75126e-002
+ 9.365625000000e-002,-2.75126e-002
+ 9.366250000000e-002,-2.75126e-002
+ 9.366875000000e-002,-2.75126e-002
+ 9.367500000000e-002,-2.75126e-002
+ 9.368125000000e-002,-2.75126e-002
+ 9.368750000000e-002,-2.75126e-002
+ 9.369375000000e-002,-2.75126e-002
+ 9.370000000000e-002,-2.75126e-002
+ 9.370625000000e-002,-2.75126e-002
+ 9.371250000000e-002,-2.75126e-002
+ 9.371875000000e-002,-2.75126e-002
+ 9.372500000000e-002,-2.75126e-002
+ 9.373125000000e-002,-2.75126e-002
+ 9.373750000000e-002,-2.75126e-002
+ 9.374375000000e-002,-2.75126e-002
+ 9.375000000000e-002,-2.75126e-002
+ 9.375625000000e-002,-2.75126e-002
+ 9.376250000000e-002,-2.75126e-002
+ 9.376875000000e-002,-2.75126e-002
+ 9.377500000000e-002,-2.75126e-002
+ 9.378125000000e-002,-2.75126e-002
+ 9.378750000000e-002,-2.75126e-002
+ 9.379375000000e-002,-2.75126e-002
+ 9.380000000000e-002,-2.75126e-002
+ 9.380625000000e-002,-2.75126e-002
+ 9.381250000000e-002,-2.75126e-002
+ 9.381875000000e-002,-2.75126e-002
+ 9.382500000000e-002,-2.75126e-002
+ 9.383125000000e-002,-2.75126e-002
+ 9.383750000000e-002,-2.75126e-002
+ 9.384375000000e-002,-2.75126e-002
+ 9.385000000000e-002,-2.75126e-002
+ 9.385625000000e-002,-2.75126e-002
+ 9.386250000000e-002,-2.75126e-002
+ 9.386875000000e-002,-2.75126e-002
+ 9.387500000000e-002,-2.75126e-002
+ 9.388125000000e-002,-2.75126e-002
+ 9.388750000000e-002,-2.75126e-002
+ 9.389375000000e-002,-2.75126e-002
+ 9.390000000000e-002,-2.75126e-002
+ 9.390625000000e-002,-2.75126e-002
+ 9.391250000000e-002,-2.75126e-002
+ 9.391875000000e-002,-2.75126e-002
+ 9.392500000000e-002,-2.75126e-002
+ 9.393125000000e-002,-2.75126e-002
+ 9.393750000000e-002,-2.75126e-002
+ 9.394375000000e-002,-2.75126e-002
+ 9.395000000000e-002,-2.75126e-002
+ 9.395625000000e-002,-2.75126e-002
+ 9.396250000000e-002,-2.75126e-002
+ 9.396875000000e-002,-2.75126e-002
+ 9.397500000000e-002,-2.75126e-002
+ 9.398125000000e-002,-2.75126e-002
+ 9.398750000000e-002,-2.75126e-002
+ 9.399375000000e-002,-2.75126e-002
+ 9.400000000000e-002,-2.75126e-002
+ 9.400625000000e-002,-2.75126e-002
+ 9.401250000000e-002,-2.75126e-002
+ 9.401875000000e-002,-2.75126e-002
+ 9.402500000000e-002,-2.75126e-002
+ 9.403125000000e-002,-2.75126e-002
+ 9.403750000000e-002,-2.75126e-002
+ 9.404375000000e-002,-2.75126e-002
+ 9.405000000000e-002,-2.75126e-002
+ 9.405625000000e-002,-2.24876e-002
+ 9.406250000000e-002,-2.75126e-002
+ 9.406875000000e-002,-2.75126e-002
+ 9.407500000000e-002,-2.24876e-002
+ 9.408125000000e-002,-2.75126e-002
+ 9.408750000000e-002,-2.75126e-002
+ 9.409375000000e-002,-2.75126e-002
+ 9.410000000000e-002,-2.75126e-002
+ 9.410625000000e-002,-2.75126e-002
+ 9.411250000000e-002,-2.75126e-002
+ 9.411875000000e-002,-2.75126e-002
+ 9.412500000000e-002,-2.75126e-002
+ 9.413125000000e-002,-2.75126e-002
+ 9.413750000000e-002,-2.75126e-002
+ 9.414375000000e-002,-2.24876e-002
+ 9.415000000000e-002,-2.75126e-002
+ 9.415625000000e-002,-2.75126e-002
+ 9.416250000000e-002,-2.75126e-002
+ 9.416875000000e-002,-2.75126e-002
+ 9.417500000000e-002,-2.75126e-002
+ 9.418125000000e-002,-2.75126e-002
+ 9.418750000000e-002,-2.75126e-002
+ 9.419375000000e-002,-2.75126e-002
+ 9.420000000000e-002,-2.75126e-002
+ 9.420625000000e-002,-2.75126e-002
+ 9.421250000000e-002,-2.75126e-002
+ 9.421875000000e-002,-2.75126e-002
+ 9.422500000000e-002,-2.75126e-002
+ 9.423125000000e-002,-2.75126e-002
+ 9.423750000000e-002,-2.75126e-002
+ 9.424375000000e-002,-2.75126e-002
+ 9.425000000000e-002,-2.75126e-002
+ 9.425625000000e-002,-2.75126e-002
+ 9.426250000000e-002,-2.75126e-002
+ 9.426875000000e-002,-2.75126e-002
+ 9.427500000000e-002,-2.75126e-002
+ 9.428125000000e-002,-2.24876e-002
+ 9.428750000000e-002,-2.75126e-002
+ 9.429375000000e-002,-2.75126e-002
+ 9.430000000000e-002,-2.75126e-002
+ 9.430625000000e-002,-2.75126e-002
+ 9.431250000000e-002,-2.75126e-002
+ 9.431875000000e-002,-2.75126e-002
+ 9.432500000000e-002,-2.75126e-002
+ 9.433125000000e-002,-2.75126e-002
+ 9.433750000000e-002,-2.75126e-002
+ 9.434375000000e-002,-2.75126e-002
+ 9.435000000000e-002,-2.75126e-002
+ 9.435625000000e-002,-2.75126e-002
+ 9.436250000000e-002,-2.75126e-002
+ 9.436875000000e-002,-2.75126e-002
+ 9.437500000000e-002,-2.75126e-002
+ 9.438125000000e-002,-2.75126e-002
+ 9.438750000000e-002,-2.75126e-002
+ 9.439375000000e-002,-2.75126e-002
+ 9.440000000000e-002,-2.75126e-002
+ 9.440625000000e-002,-2.75126e-002
+ 9.441250000000e-002,-2.75126e-002
+ 9.441875000000e-002,-2.75126e-002
+ 9.442500000000e-002,-2.75126e-002
+ 9.443125000000e-002,-2.75126e-002
+ 9.443750000000e-002,-2.75126e-002
+ 9.444375000000e-002,-2.75126e-002
+ 9.445000000000e-002,-2.75126e-002
+ 9.445625000000e-002,-2.75126e-002
+ 9.446250000000e-002,-2.75126e-002
+ 9.446875000000e-002,-2.75126e-002
+ 9.447500000000e-002,-2.75126e-002
+ 9.448125000000e-002,-2.75126e-002
+ 9.448750000000e-002,-2.75126e-002
+ 9.449375000000e-002,-2.75126e-002
+ 9.450000000000e-002,-2.75126e-002
+ 9.450625000000e-002,-2.75126e-002
+ 9.451250000000e-002,-2.75126e-002
+ 9.451875000000e-002,-2.75126e-002
+ 9.452500000000e-002,-2.75126e-002
+ 9.453125000000e-002,-2.75126e-002
+ 9.453750000000e-002,-2.75126e-002
+ 9.454375000000e-002,-2.75126e-002
+ 9.455000000000e-002,-2.75126e-002
+ 9.455625000000e-002,-2.75126e-002
+ 9.456250000000e-002,-2.75126e-002
+ 9.456875000000e-002,-2.75126e-002
+ 9.457500000000e-002,-2.75126e-002
+ 9.458125000000e-002,-2.24876e-002
+ 9.458750000000e-002,-2.75126e-002
+ 9.459375000000e-002,-2.75126e-002
+ 9.460000000000e-002,-2.75126e-002
+ 9.460625000000e-002,-2.75126e-002
+ 9.461250000000e-002,-2.75126e-002
+ 9.461875000000e-002,-2.75126e-002
+ 9.462500000000e-002,-2.75126e-002
+ 9.463125000000e-002,-2.75126e-002
+ 9.463750000000e-002,-2.75126e-002
+ 9.464375000000e-002,-2.75126e-002
+ 9.465000000000e-002,-2.75126e-002
+ 9.465625000000e-002,-2.75126e-002
+ 9.466250000000e-002,-2.75126e-002
+ 9.466875000000e-002,-2.75126e-002
+ 9.467500000000e-002,-2.75126e-002
+ 9.468125000000e-002,-2.75126e-002
+ 9.468750000000e-002,-2.75126e-002
+ 9.469375000000e-002,-2.75126e-002
+ 9.470000000000e-002,-2.75126e-002
+ 9.47062500
