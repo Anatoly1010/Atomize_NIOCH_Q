@@ -3983,10 +3983,6 @@ class Worker():
             # NIOCH: compile the AWG buffer (zero-filled waveform) after all pulses
             awg.awg_setup()
 
-            # NIOCH Spectrum digitizer: point/posttrigger based, fixed 2 ns/point.
-            # dig_points = record length (DETECTION window in points); posttrigger = posttrigger points.
-            WIN_ADC = int( dig_points )
-
             t3104.oscilloscope_trigger_channel('Ext')
             t3104.oscilloscope_record_length(5000)
             t3104.oscilloscope_acquisition_type('Average')
@@ -4008,6 +4004,7 @@ class Worker():
             rep_rate = float(rep_rate)
             PHASES = len( rect1[3] )
 
+            # scope returns quadratures separately; x-axis built once (us)
             x_axis = np.linspace(0, real_length * t_res, num = real_length, endpoint = False)
             cycle_data_x = np.zeros( ( PHASES, WIN_ADC ) )
             cycle_data_y = np.zeros( ( PHASES, WIN_ADC ) )
@@ -4162,7 +4159,7 @@ class Worker():
             conn.send( ('Error', exc_info) )
         finally:
             # Always return the instruments to a safe idle state on every exit
-            # path (normal, Stop, or exception): stop+close the digitizer, stop+
+            # path (normal, Stop, or exception): stop the oscilloscope, stop+
             # close the AWG (so it cannot keep outputting), and stop the pulse
             # generator. Each call is guarded (device closes are idempotent), so
             # cleanup for a device that was never opened cannot mask the error.
@@ -4249,8 +4246,6 @@ class Worker():
             mw = mwBridge.Micran_Q_band_MW_bridge()
 
             iq_cor = iq_corr
-            t3104.win_left = win_left
-            t3104.win_right = win_right
             zp = zero_phase
 
             #rect1 DETECTION
@@ -4454,12 +4449,10 @@ class Worker():
             # NIOCH: compile the zero-filled AWG buffer after all pulses
             awg.awg_setup()
 
-            # DEC_COEF is the digitizer record length (= DETECTION window in points,
-            # 2 ns/point). Posttrigger defaults to half the window.
-            DIG_POINTS = int( DEC_COEF )
-            POSTTRIGGER = int( DIG_POINTS / 2 )
+            # NIOCH Spectrum digitizer (point/posttrigger based, 2 ns/point).
+            # DEC_COEF is reinterpreted as the detection record length (points).
             t3104.oscilloscope_trigger_channel('Ext')
-            t3104.oscilloscope_record_length(5000)
+            t3104.oscilloscope_record_length( int( DEC_COEF ) )
             t3104.oscilloscope_acquisition_type('Average')
             t3104.oscilloscope_stop()
 
@@ -4471,18 +4464,22 @@ class Worker():
 
             real_length = t3104.oscilloscope_record_length( )
             t_res = round( t3104.oscilloscope_timebase() / real_length, 5 )    # in us
+            t3104.oscilloscope_number_of_averages(AVERAGES)
 
-            t3104.oscilloscope_number_of_averages( AVERAGES )
+            points_window = int( real_length )
+            t3104.win_left = win_left
+            t3104.win_right = win_right
 
-            data = np.zeros( ( 2, POINTS ) )
+            data = np.zeros( ( 2, points_window, POINTS ) )
+            cycle_data_x = np.zeros( ( PHASES, points_window ) )
+            cycle_data_y = np.zeros( ( PHASES, points_window ) )
+
+            dec_calc = t_res * 1e-6
+            step_ns = STEP / 1e9
+
             x_axis = f_delay + np.linspace(0, (POINTS - 1)*STEP, num = POINTS)
             x_axis_plot = x_axis / 1e9
             a = 0
-
-            # one phase-cycle buffer reused every point (all PHASES elements are
-            # overwritten each acquisition, so no need to re-allocate per point)
-            cyc_x = np.zeros( PHASES )
-            cyc_y = np.zeros( PHASES )
 
             # general.scans() yields only 1 when test_flag == 'test'; production
             # mode uses a closure-based generator so the 'SC' command can
@@ -4510,25 +4507,44 @@ class Worker():
                         break
 
                     for j in range(POINTS):
-                        # phase cycle for this tau point: one integral per phase,
-                        # combined by the pulser, then averaged over scans (k)
+                        # NIOCH AWG phase cycle: AWG advances phase, one digitizer
+                        # curve per phase, then the pulser combines the cycle
+                        # (see dig_on / tests/pulse_epr/awg/digitizer baseline).
                         pb.pulser_update()
                         ph = 0
                         while ph < PHASES:
                             awg.awg_next_phase()
-                            cyc_x[ph], cyc_y[ph] = t3104.oscilloscope_get_curve('CH1', integral = True), t3104.oscilloscope_get_curve('CH2', integral = True)
+                            t3104.oscilloscope_start_acquisition()
+                            cycle_data_x[ph], cycle_data_y[ph] = t3104.oscilloscope_get_curve('CH1'), t3104.oscilloscope_get_curve('CH2')
                             awg.awg_stop()
                             ph += 1
 
-                        ix, iy = pb.pulser_acquisition_cycle( cyc_x, cyc_y, acq_cycle = rect1[3] )
-                        data[0, j] = ( data[0, j] * (k - 1) + ix ) / k
-                        data[1, j] = ( data[1, j] * (k - 1) + iy ) / k
+                        data_x, data_y = pb.pulser_acquisition_cycle( cycle_data_x, cycle_data_y, acq_cycle = rect1[3] )
 
-                        if (not script_test) or j == POINTS - 1:
-                            if step != 1:
-                                general.plot_1d(EXP_NAME, x_axis_plot, ( data[0], data[1] ), xname = 'Time', xscale = 's', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Time: ' + str(k) + ' / ' + str(round(j*STEP, 1)))
-                            else:
-                                general.plot_1d(EXP_NAME, x_axis, ( data[0], data[1] ), xname = 'Point', xscale = '', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Time: ' + str(k) + ' / ' + str(round(j, 1)))
+                        # scan-average the oscillogram into the 2D array
+                        data[0, :, j] = ( data[0, :, j] * (k - 1) + data_x ) / k
+                        data[1, :, j] = ( data[1, :, j] * (k - 1) + data_y ) / k
+
+                        if (not script_test) or j == 0:
+                            if iq_cor == 0:
+                                if step != 1:
+                                    process = general.plot_2d(EXP_NAME, data,
+                                        start_step = ((0, dec_calc), (f_delay/1e9, step_ns)),
+                                        xname = 'Time', xscale = 's', yname = 'Delay', yscale = 's',
+                                        zname = 'Intensity', zscale = 'mV',
+                                        text = f"Scan / Time: {k} / {j * STEP:.1f}", pr = process)
+                                else:
+                                    process = general.plot_2d(EXP_NAME, data,
+                                        start_step = ((0, dec_calc), (0, 1)),
+                                        xname = 'Time', xscale = 's', yname = 'Point', yscale = '',
+                                        zname = 'Intensity', zscale = 'mV',
+                                        text = f"Scan / Time: {k} / {j * STEP:.1f}", pr = process)
+                            elif iq_cor == 1:
+                                area_x, area_y = t3104.oscilloscope_iq(data[0], data[1], iq_freq, zp, first_order, sec_order, integral = True)
+                                if step != 1:
+                                    general.plot_1d(EXP_NAME, x_axis_plot, ( area_x, area_y ), xname = 'Time', xscale = 's', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Time: ' + str(k) + ' / ' + str(round(j*STEP, 1)))
+                                else:
+                                    general.plot_1d(EXP_NAME, x_axis, ( area_x, area_y ), xname = 'Point', xscale = '', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Time: ' + str(k) + ' / ' + str(round(j, 1)))
 
                         pb.pulser_shift()
                         if increment == 1:
@@ -4557,16 +4573,46 @@ class Worker():
                 self.command = 'exit'
 
             if self.command == 'exit':
-                tb = round( int(DEC_COEF) * 2, 1)      # detection window, ns (2 ns/point)
+                tb = round( (t3104.win_right - t3104.win_left) * t_res * 1000, 1 )   # window width, ns
                 t3104.oscilloscope_stop()
                 awg.awg_stop()
                 awg.awg_close()
                 pb.pulser_stop()
 
-                if step != 1:
-                    general.plot_1d(EXP_NAME, x_axis_plot, ( data[0], data[1] ), xname = 'Time', xscale = 's', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Time: ' + str(k) + ' / ' + str(round(j*STEP, 1)))
-                else:
-                    general.plot_1d(EXP_NAME, x_axis, ( data[0], data[1] ), xname = 'Point', xscale = '', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Time: ' + str(k) + ' / ' + str(round(j, 1)))
+                if iq_cor == 0:
+                    if step != 1:
+                        general.plot_2d(
+                            EXP_NAME, 
+                            data, 
+                            start_step = ((0, dec_calc), (f_delay/1e9, step_ns)), 
+                            xname = 'Time', 
+                            xscale = 's', 
+                            yname = 'Delay', 
+                            yscale = 's', 
+                            zname = 'Intensity', 
+                            zscale = 'mV', 
+                            text = f"Scan / Time: {k} / {j * STEP:.1f}"
+                        )
+                    else:
+                        general.plot_2d(
+                            EXP_NAME, 
+                            data, 
+                            start_step = ((0, dec_calc), (0, 1)), 
+                            xname = 'Time', 
+                            xscale = 's', 
+                            yname = 'Point', 
+                            yscale = '', 
+                            zname = 'Intensity', 
+                            zscale = 'mV', 
+                            text = f"Scan / Time: {k} / {j * STEP:.1f}"
+                        )
+                elif iq_cor == 1:
+                    data_x, data_y = t3104.oscilloscope_iq(data[0], data[1], iq_freq, zp, first_order, sec_order, integral = True)
+                    if step != 1:
+                        general.plot_1d(EXP_NAME, x_axis_plot, ( data_x, data_y ), xname = 'Time', xscale = 's', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Time: ' + str(k) + ' / ' + str(round(j*STEP, 1)))
+                    else:
+                        general.plot_1d(EXP_NAME, x_axis, ( data_x, data_y ), xname = 'Point', xscale = '', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Time: ' + str(k) + ' / ' + str(round(j, 1)))
+
 
                 now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
                 w = 30
@@ -4584,16 +4630,41 @@ class Worker():
                     f"{'Number of Scans:':<{w}} {SCANS}\n"
                     f"{'Averages:':<{w}} {AVERAGES}\n"
                     f"{'Points:':<{w}} {POINTS}\n"
-                    f"{'Window:':<{w}} {tb} ns\n"
-                    f"{'Horizontal Resolution:':<{w}} {STEP} ns\n"
+                    f"{'Window:':<{w}} {rect1[2]}\n"
+                    f"{'Horizontal Resolution:':<{w}} {t_res:.1f} ns\n"
+                    f"{'Vertical Resolution:':<{w}} {STEP} ns\n"
                     f"{'Temperature:':<{w}} {ptc.tc_temperature('A')} K\n"
                     f"{'-'*50}\n"
                     f"Pulse List:\n{pb.pulser_pulse_list()}"
                     f"{'-'*50}\n"
                     f"AWG Pulse List:\n{awg.awg_pulse_list()}"
                     f"{'-'*50}\n"
-                    f"Time (ns), I (A.U.), Q (A.U.)"
+                    f"2D Data"
                 )
+
+                if iq_cor == 1:
+                    header2 = (
+                        f"{'Date:':<{w}} {now}\n"
+                        f"{'Experiment:':<{w}} Pulsed EPR AWG Experiment\n"
+                        f"{'Field:':<{w}} {FIELD} G\n"
+                        f"{general.fmt(mw.mw_bridge_att_prm(), w)}\n"
+                        f"{general.fmt(mw.mw_bridge_att1_prd(), w)}\n"
+                        f"{general.fmt(mw.mw_bridge_att2_prm(), w)}\n"
+                        f"{general.fmt(mw.mw_bridge_synthesizer(), w)}\n"
+                        f"{'Repetition Rate:':<{w}} {pb.pulser_repetition_rate()}\n"
+                        f"{'Number of Scans:':<{w}} {SCANS}\n"
+                        f"{'Averages:':<{w}} {AVERAGES}\n"
+                        f"{'Points:':<{w}} {POINTS}\n"
+                        f"{'Window:':<{w}} {tb} ns\n"
+                        f"{'Horizontal Resolution:':<{w}} {STEP} ns\n"
+                        f"{'Temperature:':<{w}} {ptc.tc_temperature('A')} K\n"
+                        f"{'-'*50}\n"
+                        f"Pulse List:\n{pb.pulser_pulse_list()}"
+                        f"{'-'*50}\n"
+                        f"AWG Pulse List:\n{awg.awg_pulse_list()}"
+                        f"{'-'*50}\n"
+                        f"Time (ns), I (A.U.), Q (A.U.)"
+                    )
 
                 if script_test:
                     conn.send( ('test', f'') )
@@ -4608,7 +4679,30 @@ class Worker():
                                 break
                         general.wait('200 ms')
 
-                    file_handler.save_data(file_data, np.c_[x_axis, data[0], data[1]], header = header, mode = 'w')
+                    if iq_cor == 0:
+                        file_handler.save_data(
+                            file_data,
+                            data,
+                            header = header,
+                            mode = 'w'
+                        )
+                    elif iq_cor == 1:
+
+                        file_handler.save_data(
+                            file_data,
+                            np.c_[x_axis, data_x, data_y],
+                            header = header2,
+                            mode = 'w'
+                            )
+                        if save2d == 1:
+                            file_data2 = file_data.replace(".csv", "_2d.csv")
+
+                            file_handler.save_data(
+                                file_data2,
+                                data,
+                                header = header,
+                                mode = 'w'
+                        )
 
                     conn.send( ('', f'Experiment {EXP_NAME} finished') )
 
@@ -4617,7 +4711,7 @@ class Worker():
             conn.send( ('Error', exc_info) )
         finally:
             # Always return the instruments to a safe idle state on every exit
-            # path (normal, Stop, or exception): stop+close the digitizer, stop+
+            # path (normal, Stop, or exception): stop the oscilloscope, stop+
             # close the AWG (so it cannot keep outputting), and stop the pulse
             # generator. Each call is guarded (device closes are idempotent), so
             # cleanup for a device that was never opened cannot mask the error.
@@ -4651,10 +4745,12 @@ class Worker():
         pulser_pulse_reset() returns to the absolute base after every scan, the
         cycle offset is re-applied at the start of each scan.
 
-        `data` holds the running mean over every (cycle, scan) pass
-        (m = cycle*SCANS + k). Because each cycle re-traces the same point/phase
-        sequence with the pulses shifted by an extra tau, that cumulative average
-        IS the tau-averaged result that suppresses nuclear ESEEM modulation.
+        The digitizer averages on-board across every call for the whole run and
+        never resets between cycles, so digitizer_get_curve always returns the
+        cumulative average over all shots acquired so far. Because each cycle
+        re-traces the same point/phase sequence with the pulses shifted by an
+        extra tau, that running on-board average IS the tau-averaged result that
+        suppresses nuclear ESEEM modulation — no software re-averaging is done.
         `data` therefore holds the current cumulative average throughout and is
         what we plot live and save at the end. With save_each set, each cycle's
         own trace is recovered by differencing the cumulative snapshots taken at
@@ -4697,8 +4793,6 @@ class Worker():
             mw = mwBridge.Micran_Q_band_MW_bridge()
 
             iq_cor = iq_corr
-            t3104.win_left = win_left
-            t3104.win_right = win_right
             zp = zero_phase
 
             #rect1 DETECTION
@@ -4942,12 +5036,9 @@ class Worker():
             # NIOCH: compile the zero-filled AWG buffer after all pulses
             awg.awg_setup()
 
-            # DEC_COEF is the digitizer record length (= DETECTION window in points,
-            # 2 ns/point). Posttrigger defaults to half the window.
-            DIG_POINTS = int( DEC_COEF )
-            POSTTRIGGER = int( DIG_POINTS / 2 )
+            # NIOCH Spectrum digitizer (point/posttrigger based, 2 ns/point).
             t3104.oscilloscope_trigger_channel('Ext')
-            t3104.oscilloscope_record_length(5000)
+            t3104.oscilloscope_record_length( int( DEC_COEF ) )
             t3104.oscilloscope_acquisition_type('Average')
             t3104.oscilloscope_stop()
 
@@ -4959,8 +5050,17 @@ class Worker():
 
             real_length = t3104.oscilloscope_record_length( )
             t_res = round( t3104.oscilloscope_timebase() / real_length, 5 )    # in us
+            t3104.oscilloscope_number_of_averages(AVERAGES)
 
-            t3104.oscilloscope_number_of_averages( AVERAGES )
+            points_window = int( real_length )
+            t3104.win_left = win_left
+            t3104.win_right = win_right
+
+            cycle_data_x = np.zeros( ( PHASES, points_window ) )
+            cycle_data_y = np.zeros( ( PHASES, points_window ) )
+
+            dec_calc = t_res * 1e-6
+            step_ns = STEP / 1e9
 
             x_axis = f_delay + np.linspace(0, (POINTS - 1)*STEP, num = POINTS)
             x_axis_plot = x_axis / 1e9
@@ -4969,22 +5069,19 @@ class Worker():
             # Whether any pulse actually carries a non-zero Start Increment 2.
             has_eseem = any( float( v.split(' ')[0] ) != 0 for v in eseem_all_inc2 )
 
-            # `data` holds the cumulative tau-average (running mean over every
-            # (cycle, scan) pass, m = cycle*SCANS + k). It is the live-plotted and
+            # `data` holds the cumulative tau-average. The NIOCH digitizer averages
+            # on-board only within a single get_curve call, so the cross-cycle/scan
+            # average IS done in software here: at each point a running mean over all
+            # (cycle, scan) passes (m = cycle*SCANS + k). It is the live-plotted and
             # final tau-averaged result. For the optional per-cycle export we snapshot
             # the cumulative average after each completed cycle and difference the
             # snapshots to recover individual cycles. Allocated once so the live plot
             # shows the running average continuously rather than blanking each cycle.
-            data = np.zeros( ( 2, POINTS ) )
+            data = np.zeros( ( 2, points_window, POINTS ) )
             cycle_snapshots = []
             completed_cycles = 0
             k = 1
             j = 0
-
-            # one phase-cycle buffer reused every point (all PHASES elements are
-            # overwritten each acquisition, so no need to re-allocate per point)
-            cyc_x = np.zeros( PHASES )
-            cyc_y = np.zeros( PHASES )
 
             def _scan_iter():
                 if script_test:
@@ -5030,27 +5127,62 @@ class Worker():
 
                     for j in range(POINTS):
 
-                        # phase cycle for this tau point: one integral per phase,
-                        # combined by the pulser, then averaged over all passes
+                        # NIOCH AWG phase cycle: AWG advances phase, one digitizer
+                        # curve per phase, then the pulser combines the cycle.
                         pb.pulser_update()
                         ph = 0
                         while ph < PHASES:
                             awg.awg_next_phase()
-                            cyc_x[ph], cyc_y[ph] = t3104.oscilloscope_get_curve('CH1', integral = True), t3104.oscilloscope_get_curve('CH2', integral = True)
+                            t3104.oscilloscope_start_acquisition()
+                            cycle_data_x[ph], cycle_data_y[ph] = t3104.oscilloscope_get_curve('CH1'), t3104.oscilloscope_get_curve('CH2')
                             awg.awg_stop()
                             ph += 1
 
-                        ix, iy = pb.pulser_acquisition_cycle( cyc_x, cyc_y, acq_cycle = rect1[3] )
-                        # cumulative tau-average across every (cycle, scan) pass
+                        data_x, data_y = pb.pulser_acquisition_cycle( cycle_data_x, cycle_data_y, acq_cycle = rect1[3] )
+                        # cumulative tau-average across every (cycle, scan) pass at
+                        # this point: m counts passes so the running mean is the
+                        # ESEEM-averaged result and the cycle-boundary snapshots stay
+                        # consistent with the per-cycle differencing export.
                         m = cycle * SCANS + k
-                        data[0, j] = ( data[0, j] * (m - 1) + ix ) / m
-                        data[1, j] = ( data[1, j] * (m - 1) + iy ) / m
+                        data[0, :, j] = ( data[0, :, j] * (m - 1) + data_x ) / m
+                        data[1, :, j] = ( data[1, :, j] * (m - 1) + data_y ) / m
 
-                        if (not script_test) or j == POINTS - 1:
-                            if step != 1:
-                                general.plot_1d(EXP_NAME, x_axis_plot, ( data[0], data[1] ), xname = 'Time', xscale = 's', yname = 'Area', yscale = 'A.U.', label = curve_name, text = f"Cycle / Scan: {cycle + 1}/{CYCLES} / {k}")
-                            else:
-                                general.plot_1d(EXP_NAME, x_axis, ( data[0], data[1] ), xname = 'Point', xscale = '', yname = 'Area', yscale = 'A.U.', label = curve_name, text = f"Cycle / Scan: {cycle + 1}/{CYCLES} / {k}")
+                        if (not script_test) or j == 0:
+                            if iq_cor == 0:
+                                if step != 1:
+                                    process = general.plot_2d(
+                                        EXP_NAME,
+                                        data,
+                                        start_step = ((0, dec_calc), (f_delay/1e9, step_ns)),
+                                        xname = 'Time',
+                                        xscale = 's',
+                                        yname = 'Delay',
+                                        yscale = 's',
+                                        zname = 'Intensity',
+                                        zscale = 'mV',
+                                        text = f"Cycle / Scan: {cycle + 1}/{CYCLES} / {k}",
+                                        pr = process
+                                    )
+                                else:
+                                    process = general.plot_2d(
+                                        EXP_NAME,
+                                        data,
+                                        start_step = ((0, dec_calc), (0, 1)),
+                                        xname = 'Time',
+                                        xscale = 's',
+                                        yname = 'Point',
+                                        yscale = '',
+                                        zname = 'Intensity',
+                                        zscale = 'mV',
+                                        text = f"Cycle / Scan: {cycle + 1}/{CYCLES} / {k}",
+                                        pr = process
+                                    )
+                            elif iq_cor == 1:
+                                area_x, area_y = t3104.oscilloscope_iq(data[0], data[1], iq_freq, zp, first_order, sec_order, integral = True)
+                                if step != 1:
+                                    general.plot_1d(EXP_NAME, x_axis_plot, ( area_x, area_y ), xname = 'Time', xscale = 's', yname = 'Area', yscale = 'A.U.', label = curve_name, text = f'Cycle {cycle + 1}/{CYCLES} Scan {k}')
+                                else:
+                                    general.plot_1d(EXP_NAME, x_axis, ( area_x, area_y ), xname = 'Point', xscale = '', yname = 'Area', yscale = 'A.U.', label = curve_name, text = f'Cycle {cycle + 1}/{CYCLES} Scan {k}')
 
                         pb.pulser_shift()
                         if increment == 1:
@@ -5094,10 +5226,17 @@ class Worker():
 
                 # Refresh the live plot with the cumulative tau-averaged trace.
                 if a is not None and not script_test:
-                    if step != 1:
-                        general.plot_1d(EXP_NAME, x_axis_plot, ( data[0], data[1] ), xname = 'Time', xscale = 's', yname = 'Area', yscale = 'A.U.', label = curve_name, text = f"ESEEM average over {completed_cycles} cycle(s)")
-                    else:
-                        general.plot_1d(EXP_NAME, x_axis, ( data[0], data[1] ), xname = 'Point', xscale = '', yname = 'Area', yscale = 'A.U.', label = curve_name, text = f"ESEEM average over {completed_cycles} cycle(s)")
+                    if iq_cor == 0:
+                        if step != 1:
+                            general.plot_2d(EXP_NAME, data, start_step = ((0, dec_calc), (f_delay/1e9, step_ns)), xname = 'Time', xscale = 's', yname = 'Delay', yscale = 's', zname = 'Intensity', zscale = 'mV', text = f"ESEEM average over {completed_cycles} cycle(s)")
+                        else:
+                            general.plot_2d(EXP_NAME, data, start_step = ((0, dec_calc), (0, 1)), xname = 'Time', xscale = 's', yname = 'Point', yscale = '', zname = 'Intensity', zscale = 'mV', text = f"ESEEM average over {completed_cycles} cycle(s)")
+                    elif iq_cor == 1:
+                        rdx, rdy = t3104.oscilloscope_iq(data[0], data[1], iq_freq, zp, first_order, sec_order, integral = True)
+                        if step != 1:
+                            general.plot_1d(EXP_NAME, x_axis_plot, ( rdx, rdy ), xname = 'Time', xscale = 's', yname = 'Area', yscale = 'A.U.', label = curve_name, text = f"ESEEM average over {completed_cycles} cycle(s)")
+                        else:
+                            general.plot_1d(EXP_NAME, x_axis, ( rdx, rdy ), xname = 'Point', xscale = '', yname = 'Area', yscale = 'A.U.', label = curve_name, text = f"ESEEM average over {completed_cycles} cycle(s)")
 
             self.command = 'exit'
 
@@ -5106,16 +5245,46 @@ class Worker():
             # answer as-is (this is the bug fix: no software division/re-average).
 
             if self.command == 'exit':
-                tb = round( int(DEC_COEF) * 2, 1)      # detection window, ns (2 ns/point)
+                tb = round( (t3104.win_right - t3104.win_left) * t_res * 1000, 1 )   # window width, ns
                 t3104.oscilloscope_stop()
                 awg.awg_stop()
                 awg.awg_close()
                 pb.pulser_stop()
 
-                if step != 1:
-                    general.plot_1d(EXP_NAME, x_axis_plot, ( data[0], data[1] ), xname = 'Time', xscale = 's', yname = 'Area', yscale = 'A.U.', label = curve_name, text = f"ESEEM average over {completed_cycles} cycle(s)")
-                else:
-                    general.plot_1d(EXP_NAME, x_axis, ( data[0], data[1] ), xname = 'Point', xscale = '', yname = 'Area', yscale = 'A.U.', label = curve_name, text = f"ESEEM average over {completed_cycles} cycle(s)")
+                if iq_cor == 0:
+                    if step != 1:
+                        general.plot_2d(
+                            EXP_NAME,
+                            data,
+                            start_step = ((0, dec_calc), (f_delay/1e9, step_ns)),
+                            xname = 'Time',
+                            xscale = 's',
+                            yname = 'Delay',
+                            yscale = 's',
+                            zname = 'Intensity',
+                            zscale = 'mV',
+                            text = f"ESEEM average over {completed_cycles} cycle(s)"
+                        )
+                    else:
+                        general.plot_2d(
+                            EXP_NAME,
+                            data,
+                            start_step = ((0, dec_calc), (0, 1)),
+                            xname = 'Time',
+                            xscale = 's',
+                            yname = 'Point',
+                            yscale = '',
+                            zname = 'Intensity',
+                            zscale = 'mV',
+                            text = f"ESEEM average over {completed_cycles} cycle(s)"
+                        )
+                elif iq_cor == 1:
+                    data_x, data_y = t3104.oscilloscope_iq(data[0], data[1], iq_freq, zp, first_order, sec_order, integral = True)
+                    if step != 1:
+                        general.plot_1d(EXP_NAME, x_axis_plot, ( data_x, data_y ), xname = 'Time', xscale = 's', yname = 'Area', yscale = 'A.U.', label = curve_name, text = f"ESEEM average over {completed_cycles} cycle(s)")
+                    else:
+                        general.plot_1d(EXP_NAME, x_axis, ( data_x, data_y ), xname = 'Point', xscale = '', yname = 'Area', yscale = 'A.U.', label = curve_name, text = f"ESEEM average over {completed_cycles} cycle(s)")
+
 
                 now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
                 w = 30
@@ -5141,16 +5310,43 @@ class Worker():
                     f"{'Start Increment 2:':<{w}} {inc2_summary}\n"
                     f"{'Averages:':<{w}} {AVERAGES}\n"
                     f"{'Points:':<{w}} {POINTS}\n"
-                    f"{'Window:':<{w}} {tb} ns\n"
-                    f"{'Horizontal Resolution:':<{w}} {STEP} ns\n"
+                    f"{'Window:':<{w}} {rect1[2]}\n"
+                    f"{'Horizontal Resolution:':<{w}} {t_res:.1f} ns\n"
+                    f"{'Vertical Resolution:':<{w}} {STEP} ns\n"
                     f"{'Temperature:':<{w}} {ptc.tc_temperature('A')} K\n"
                     f"{'-'*50}\n"
                     f"Pulse List:\n{pb.pulser_pulse_list()}"
                     f"{'-'*50}\n"
                     f"AWG Pulse List:\n{awg.awg_pulse_list()}"
                     f"{'-'*50}\n"
-                    f"Time (ns), I (A.U.), Q (A.U.)"
+                    f"2D Data"
                 )
+
+                if iq_cor == 1:
+                    header2 = (
+                        f"{'Date:':<{w}} {now}\n"
+                        f"{'Experiment:':<{w}} Pulsed EPR AWG ESEEM-Averaged Experiment\n"
+                        f"{'Field:':<{w}} {FIELD} G\n"
+                        f"{general.fmt(mw.mw_bridge_att_prm(), w)}\n"
+                        f"{general.fmt(mw.mw_bridge_att1_prd(), w)}\n"
+                        f"{general.fmt(mw.mw_bridge_att2_prm(), w)}\n"
+                        f"{general.fmt(mw.mw_bridge_synthesizer(), w)}\n"
+                        f"{'Repetition Rate:':<{w}} {pb.pulser_repetition_rate()}\n"
+                        f"{'Number of Scans:':<{w}} {SCANS}\n"
+                        f"{'ESEEM Cycles:':<{w}} {completed_cycles}\n"
+                        f"{'Start Increment 2:':<{w}} {inc2_summary}\n"
+                        f"{'Averages:':<{w}} {AVERAGES}\n"
+                        f"{'Points:':<{w}} {POINTS}\n"
+                        f"{'Window:':<{w}} {tb} ns\n"
+                        f"{'Horizontal Resolution:':<{w}} {STEP} ns\n"
+                        f"{'Temperature:':<{w}} {ptc.tc_temperature('A')} K\n"
+                        f"{'-'*50}\n"
+                        f"Pulse List:\n{pb.pulser_pulse_list()}"
+                        f"{'-'*50}\n"
+                        f"AWG Pulse List:\n{awg.awg_pulse_list()}"
+                        f"{'-'*50}\n"
+                        f"Time (ns), I (A.U.), Q (A.U.)"
+                    )
 
                 if script_test:
                     conn.send( ('test', f'') )
@@ -5165,13 +5361,39 @@ class Worker():
                                 break
                         general.wait('200 ms')
 
-                    file_handler.save_data(file_data, np.c_[x_axis, data[0], data[1]], header = header, mode = 'w')
+                    if iq_cor == 0:
+                        file_handler.save_data(
+                            file_data,
+                            data,
+                            header = header,
+                            mode = 'w'
+                        )
+                    elif iq_cor == 1:
+
+                        file_handler.save_data(
+                            file_data,
+                            np.c_[x_axis, data_x, data_y],
+                            header = header2,
+                            mode = 'w'
+                            )
+                        if save2d == 1:
+                            file_data2 = file_data.replace(".csv", "_2d.csv")
+
+                            file_handler.save_data(
+                                file_data2,
+                                data,
+                                header = header,
+                                mode = 'w'
+                        )
 
                     # Optionally save every cycle's own trace alongside the
-                    # average. `data` is the cumulative mean, so each individual
-                    # cycle is recovered by differencing consecutive cumulative
-                    # snapshots: with M_c = mean over cycles 0..c, the isolated
-                    # trace is cycle_c = (c+1)*M_c - c*M_{c-1} (cycle 0 = M_0).
+                    # average. The digitizer only ever hands back the cumulative
+                    # mean, so each individual cycle is recovered by differencing
+                    # consecutive cumulative snapshots: with M_c = mean over
+                    # cycles 0..c (cycle_snapshots[c]), the isolated trace is
+                    # cycle_c = (c+1)*M_c - c*M_{c-1} (cycle 0 = M_0). Exact while
+                    # every cycle carries the same shot count, which holds for all
+                    # fully completed cycles.
                     if save_each:
                         for idx in range(len(cycle_snapshots)):
                             Mc = cycle_snapshots[idx]
@@ -5180,7 +5402,11 @@ class Worker():
                             else:
                                 cdat = (idx + 1) * Mc - idx * cycle_snapshots[idx - 1]
                             cpath = file_data.replace(".csv", f"_cycle{idx}.csv")
-                            file_handler.save_data(cpath, np.c_[x_axis, cdat[0], cdat[1]], header = header, mode = 'w')
+                            if iq_cor == 0:
+                                file_handler.save_data(cpath, cdat, header = header, mode = 'w')
+                            elif iq_cor == 1:
+                                cdx, cdy = t3104.oscilloscope_iq(cdat[0], cdat[1], iq_freq, zp, first_order, sec_order, integral = True)
+                                file_handler.save_data(cpath, np.c_[x_axis, cdx, cdy], header = header2, mode = 'w')
 
                     conn.send( ('', f'Experiment {EXP_NAME} finished') )
 
@@ -5189,7 +5415,7 @@ class Worker():
             conn.send( ('Error', exc_info) )
         finally:
             # Always return the instruments to a safe idle state on every exit
-            # path (normal, Stop, or exception): stop+close the digitizer, stop+
+            # path (normal, Stop, or exception): stop the oscilloscope, stop+
             # close the AWG (so it cannot keep outputting), and stop the pulse
             # generator. Each call is guarded (device closes are idempotent), so
             # cleanup for a device that was never opened cannot mask the error.
@@ -5242,8 +5468,6 @@ class Worker():
             mw = mwBridge.Micran_Q_band_MW_bridge()
 
             iq_cor = iq_corr
-            t3104.win_left = win_left
-            t3104.win_right = win_right
             zp = zero_phase
 
             awg.phase_shift_ch1_seq_mode = iq_phase
@@ -5404,12 +5628,10 @@ class Worker():
             # NIOCH: compile the zero-filled AWG buffer after all pulses
             awg.awg_setup()
 
-            # DEC_COEF is the digitizer record length (= DETECTION window in points,
-            # 2 ns/point). Posttrigger defaults to half the window.
-            DIG_POINTS = int( DEC_COEF )
-            POSTTRIGGER = int( DIG_POINTS / 2 )
+            # NIOCH Spectrum digitizer (point/posttrigger based, 2 ns/point).
+            # DEC_COEF is reinterpreted as the detection record length (points).
             t3104.oscilloscope_trigger_channel('Ext')
-            t3104.oscilloscope_record_length(5000)
+            t3104.oscilloscope_record_length( int( DEC_COEF ) )
             t3104.oscilloscope_acquisition_type('Average')
             t3104.oscilloscope_stop()
 
@@ -5421,18 +5643,20 @@ class Worker():
 
             real_length = t3104.oscilloscope_record_length( )
             t_res = round( t3104.oscilloscope_timebase() / real_length, 5 )    # in us
+            t3104.oscilloscope_number_of_averages(AVERAGES)
 
-            t3104.oscilloscope_number_of_averages( AVERAGES )
+            points_window = int( real_length )
+            t3104.win_left = win_left
+            t3104.win_right = win_right
 
             POINTS = int( (END_FIELD - START_FIELD) / FIELD_STEP ) + 1
-            data = np.zeros( ( 2, POINTS ) )
+            data = np.zeros( ( 2, points_window, POINTS ) )
+            cycle_data_x = np.zeros( ( PHASES, points_window ) )
+            cycle_data_y = np.zeros( ( PHASES, points_window ) )
+            dec_calc = t_res * 1e-6
+
             x_axis = np.linspace(START_FIELD, END_FIELD, num = POINTS)
             a = 0
-
-            # one phase-cycle buffer reused every point (all PHASES elements are
-            # overwritten each acquisition, so no need to re-allocate per point)
-            cyc_x = np.zeros( PHASES )
-            cyc_y = np.zeros( PHASES )
 
             def _scan_iter():
                 if script_test:
@@ -5470,21 +5694,39 @@ class Worker():
                         # the phase_list.
                         awg.awg_pulse_reset()
 
-                        # phase cycle at this field; combine phases, average scans (k)
+                        # NIOCH AWG phase cycle: AWG advances phase, one digitizer
+                        # curve per phase, then the pulser combines the cycle.
                         pb.pulser_update()
                         ph = 0
                         while ph < PHASES:
                             awg.awg_next_phase()
-                            cyc_x[ph], cyc_y[ph] = t3104.oscilloscope_get_curve('CH1', integral = True), t3104.oscilloscope_get_curve('CH2', integral = True)
+                            t3104.oscilloscope_start_acquisition()
+                            cycle_data_x[ph], cycle_data_y[ph] = t3104.oscilloscope_get_curve('CH1'), t3104.oscilloscope_get_curve('CH2')
                             awg.awg_stop()
                             ph += 1
 
-                        ix, iy = pb.pulser_acquisition_cycle( cyc_x, cyc_y, acq_cycle = rect1[3] )
-                        data[0, j] = ( data[0, j] * (k - 1) + ix ) / k
-                        data[1, j] = ( data[1, j] * (k - 1) + iy ) / k
+                        data_x, data_y = pb.pulser_acquisition_cycle( cycle_data_x, cycle_data_y, acq_cycle = rect1[3] )
+                        data[0, :, j] = ( data[0, :, j] * (k - 1) + data_x ) / k
+                        data[1, :, j] = ( data[1, :, j] * (k - 1) + data_y ) / k
 
-                        if (not script_test) or j == POINTS - 1:
-                            process = general.plot_1d(EXP_NAME, x_axis, ( data[0], data[1] ), xname = 'Field', xscale = 'G', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Field: ' + str(k) + ' / ' + str(field), pr = process)
+                        if (not script_test) or j == 0:
+                            if iq_cor == 0:
+                                process = general.plot_2d(
+                                    EXP_NAME,
+                                    data,
+                                    start_step = ((0, dec_calc), (START_FIELD, FIELD_STEP)),
+                                    xname = 'Time',
+                                    xscale = 's',
+                                    yname = 'Field',
+                                    yscale = 'G',
+                                    zname = 'Intensity',
+                                    zscale = 'mV',
+                                    text = f"Scan / Field: {k} / {field}",
+                                    pr = process
+                                )
+                            elif iq_cor == 1:
+                                area_x, area_y = t3104.oscilloscope_iq(data[0], data[1], iq_freq, zp, first_order, sec_order, integral = True)
+                                process = general.plot_1d(EXP_NAME, x_axis, ( area_x, area_y ), xname = 'Field', xscale = 'G', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Field: ' + str(k) + ' / ' + str(field), pr = process)
 
                         field = round( (FIELD_STEP + field), 3 )
 
@@ -5516,13 +5758,28 @@ class Worker():
                 self.command = 'exit'
 
             if self.command == 'exit':
-                tb = round( int(DEC_COEF) * 2, 1)      # detection window, ns (2 ns/point)
+                tb = round( (t3104.win_right - t3104.win_left) * t_res * 1000, 1 )   # window width, ns
                 t3104.oscilloscope_stop()
                 awg.awg_stop()
                 awg.awg_close()
                 pb.pulser_stop()
 
-                general.plot_1d(EXP_NAME, x_axis, ( data[0], data[1] ), xname = 'Field', xscale = 'G', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Field: ' + str(k) + ' / ' + str(field))
+                if iq_cor == 0:
+                    general.plot_2d(
+                        EXP_NAME, 
+                        data, 
+                        start_step = ((0, dec_calc), (START_FIELD, FIELD_STEP)), 
+                        xname = 'Time', 
+                        xscale = 's', 
+                        yname = 'Field', 
+                        yscale = 'G', 
+                        zname = 'Intensity', 
+                        zscale = 'mV', 
+                        text = f"Scan / Field: {k} / {field}"
+                        )
+                elif iq_cor == 1:
+                    data_x, data_y = t3104.oscilloscope_iq(data[0], data[1], iq_freq, zp, first_order, sec_order, integral = True)
+                    general.plot_1d(EXP_NAME, x_axis, ( data_x, data_y ), xname = 'Field', xscale = 'G', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Field: ' + str(k) + ' / ' + str(field))
 
                 now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
                 w = 30
@@ -5542,15 +5799,40 @@ class Worker():
                     f"{'Number of Scans:':<{w}} {SCANS}\n"
                     f"{'Averages:':<{w}} {AVERAGES}\n"
                     f"{'Points:':<{w}} {POINTS}\n"
-                    f"{'Window:':<{w}} {tb} ns\n"
+                    f"{'Window:':<{w}} {rect1[2]}\n"
+                    f"{'Horizontal Resolution:':<{w}} {t_res:.1f} ns\n"
+                    f"{'Vertical Resolution:':<{w}} {FIELD_STEP} G\n"
                     f"{'Temperature:':<{w}} {ptc.tc_temperature('A')} K\n"
                     f"{'-'*50}\n"
                     f"Pulse List:\n{pb.pulser_pulse_list()}"
                     f"{'-'*50}\n"
                     f"AWG Pulse List:\n{awg.awg_pulse_list()}"
                     f"{'-'*50}\n"
-                    f"Field (G), I (A.U.), Q (A.U.)"
+                    f"2D Data"
                 )
+                if iq_cor == 1:
+                    header2 = (
+                        f"{'Date:':<{w}} {now}\n"
+                        f"{'Experiment:':<{w}} Pulsed EPR AWG Experiment\n"
+                        f"{'Start Field:':<{w}} {START_FIELD} G\n"
+                        f"{'End Field:':<{w}} {END_FIELD} G\n"
+                        f"{'Field Step:':<{w}} {FIELD_STEP} G\n"
+                        f"{general.fmt(mw.mw_bridge_att_prm(), w)}\n"
+                        f"{general.fmt(mw.mw_bridge_att1_prd(), w)}\n"
+                        f"{general.fmt(mw.mw_bridge_att2_prm(), w)}\n"
+                        f"{general.fmt(mw.mw_bridge_synthesizer(), w)}\n"
+                        f"{'Repetition Rate:':<{w}} {pb.pulser_repetition_rate()}\n"
+                        f"{'Number of Scans:':<{w}} {SCANS}\n"
+                        f"{'Averages:':<{w}} {AVERAGES}\n"
+                        f"{'Window:':<{w}} {tb} ns\n"
+                        f"{'Temperature:':<{w}} {ptc.tc_temperature('A')} K\n"
+                        f"{'-'*50}\n"
+                        f"Pulse List:\n{pb.pulser_pulse_list()}"
+                        f"{'-'*50}\n"
+                        f"AWG Pulse List:\n{awg.awg_pulse_list()}"
+                        f"{'-'*50}\n"
+                        f"Field (G), I (A.U.), Q (A.U.)"
+                    )
 
                 if script_test:
                     conn.send( ('test', f'') )
@@ -5565,7 +5847,31 @@ class Worker():
                                 break
                         general.wait('200 ms')
 
-                    file_handler.save_data(file_data, np.c_[x_axis, data[0], data[1]], header = header, mode = 'w')
+                    if iq_cor == 0:
+                        file_handler.save_data(
+                            file_data,
+                            data,
+                            header = header,
+                            mode = 'w'
+                        )
+                    elif iq_cor == 1:
+
+                        file_handler.save_data(
+                            file_data,
+                            np.c_[x_axis, data_x, data_y],
+                            header = header2,
+                            mode = 'w'
+                            )
+
+                        if save2d == 1:
+                            file_data2 = file_data.replace(".csv", "_2d.csv")
+
+                            file_handler.save_data(
+                                file_data2,
+                                data,
+                                header = header,
+                                mode = 'w'
+                            )
 
                     conn.send( ('', f'Experiment {EXP_NAME} finished') )
 
@@ -5574,7 +5880,7 @@ class Worker():
             conn.send( ('Error', exc_info) )
         finally:
             # Always return the instruments to a safe idle state on every exit
-            # path (normal, Stop, or exception): stop+close the digitizer, stop+
+            # path (normal, Stop, or exception): stop the oscilloscope, stop+
             # close the AWG (so it cannot keep outputting), and stop the pulse
             # generator. Each call is guarded (device closes are idempotent), so
             # cleanup for a device that was never opened cannot mask the error.
@@ -5640,8 +5946,6 @@ class Worker():
             mw = mwBridge.Micran_Q_band_MW_bridge()
 
             iq_cor = iq_corr
-            t3104.win_left = win_left
-            t3104.win_right = win_right
             zp = zero_phase
 
             awg.phase_shift_ch1_seq_mode = iq_phase
@@ -5879,12 +6183,9 @@ class Worker():
             # NIOCH: compile the zero-filled AWG buffer after all pulses
             awg.awg_setup()
 
-            # DEC_COEF is the digitizer record length (= DETECTION window in points,
-            # 2 ns/point). Posttrigger defaults to half the window.
-            DIG_POINTS = int( DEC_COEF )
-            POSTTRIGGER = int( DIG_POINTS / 2 )
+            # NIOCH Spectrum digitizer (point/posttrigger based, 2 ns/point).
             t3104.oscilloscope_trigger_channel('Ext')
-            t3104.oscilloscope_record_length(5000)
+            t3104.oscilloscope_record_length( int( DEC_COEF ) )
             t3104.oscilloscope_acquisition_type('Average')
             t3104.oscilloscope_stop()
 
@@ -5896,17 +6197,18 @@ class Worker():
 
             real_length = t3104.oscilloscope_record_length( )
             t_res = round( t3104.oscilloscope_timebase() / real_length, 5 )    # in us
+            t3104.oscilloscope_number_of_averages(AVERAGES)
 
-            t3104.oscilloscope_number_of_averages( AVERAGES )
+            points_window = int( real_length )
+            t3104.win_left = win_left
+            t3104.win_right = win_right
 
-            data = np.zeros( ( 2, POINTS ) )
+            data = np.zeros( ( 2, points_window, POINTS ) )
+            cycle_data_x = np.zeros( ( PHASES, points_window ) )
+            cycle_data_y = np.zeros( ( PHASES, points_window ) )
+            dec_calc = t_res * 1e-6
             x_axis_plot = x_axis / 1e9
             a = 0
-
-            # one phase-cycle buffer reused every point (all PHASES elements are
-            # overwritten each acquisition, so no need to re-allocate per point)
-            cyc_x = np.zeros( PHASES )
-            cyc_y = np.zeros( PHASES )
 
             def _scan_iter():
                 if script_test:
@@ -5932,22 +6234,39 @@ class Worker():
 
                     for j in range(POINTS):
 
-                        # phase cycle for this tau point: one integral per phase,
-                        # combined by the pulser, then averaged over scans (k)
+                        # NIOCH AWG phase cycle: AWG advances phase, one digitizer
+                        # curve per phase, then the pulser combines the cycle.
                         pb.pulser_update()
                         ph = 0
                         while ph < PHASES:
                             awg.awg_next_phase()
-                            cyc_x[ph], cyc_y[ph] = t3104.oscilloscope_get_curve('CH1', integral = True), t3104.oscilloscope_get_curve('CH2', integral = True)
+                            t3104.oscilloscope_start_acquisition()
+                            cycle_data_x[ph], cycle_data_y[ph] = t3104.oscilloscope_get_curve('CH1'), t3104.oscilloscope_get_curve('CH2')
                             awg.awg_stop()
                             ph += 1
 
-                        ix, iy = pb.pulser_acquisition_cycle( cyc_x, cyc_y, acq_cycle = rect1[3] )
-                        data[0, j] = ( data[0, j] * (k - 1) + ix ) / k
-                        data[1, j] = ( data[1, j] * (k - 1) + iy ) / k
+                        data_x, data_y = pb.pulser_acquisition_cycle( cycle_data_x, cycle_data_y, acq_cycle = rect1[3] )
+                        data[0, :, j] = ( data[0, :, j] * (k - 1) + data_x ) / k
+                        data[1, :, j] = ( data[1, :, j] * (k - 1) + data_y ) / k
 
-                        if (not script_test) or j == POINTS - 1:
-                            process = general.plot_1d(EXP_NAME, x_axis_plot, ( data[0], data[1] ), xname = 'Time', xscale = 's', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Point: ' + str(k) + ' / ' + str(j), pr = process)
+                        if (not script_test) or j == 0:
+                            if iq_cor == 0:
+                                process = general.plot_2d(
+                                    EXP_NAME,
+                                    data,
+                                    start_step = ((0, dec_calc), (0, 1)),
+                                    xname = 'Time',
+                                    xscale = 's',
+                                    yname = 'Point',
+                                    yscale = '',
+                                    zname = 'Intensity',
+                                    zscale = 'mV',
+                                    text = f"Scan / Point: {k} / {j}",
+                                    pr = process
+                                )
+                            elif iq_cor == 1:
+                                area_x, area_y = t3104.oscilloscope_iq(data[0], data[1], iq_freq, zp, first_order, sec_order, integral = True)
+                                process = general.plot_1d(EXP_NAME, x_axis_plot, ( area_x, area_y ), xname = 'Time', xscale = 's', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Point: ' + str(k) + ' / ' + str(j), pr = process)
 
                         # nonlinear (log) spacing: redefine both the pulser pulses and
                         # their AWG counterparts to the next non-uniform delta, then apply
@@ -5983,13 +6302,28 @@ class Worker():
                 self.command = 'exit'
 
             if self.command == 'exit':
-                tb = round( int(DEC_COEF) * 2, 1)      # detection window, ns (2 ns/point)
+                tb = round( (t3104.win_right - t3104.win_left) * t_res * 1000, 1 )   # window width, ns
                 t3104.oscilloscope_stop()
                 awg.awg_stop()
                 awg.awg_close()
                 pb.pulser_stop()
 
-                general.plot_1d(EXP_NAME, x_axis_plot, ( data[0], data[1] ), xname = 'Time', xscale = 's', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Point: ' + str(k) + ' / ' + str(j))
+                if iq_cor == 0:
+                    general.plot_2d(
+                        EXP_NAME, 
+                        data, 
+                        start_step = ((0, dec_calc), (0, 1)), 
+                        xname = 'Time', 
+                        xscale = 's', 
+                        yname = 'Point', 
+                        yscale = '', 
+                        zname = 'Intensity', 
+                        zscale = 'mV', 
+                        text = f"Scan / Point: {k} / {j}"
+                    )
+                elif iq_cor == 1:
+                    data_x, data_y = t3104.oscilloscope_iq(data[0], data[1], iq_freq, zp, first_order, sec_order, integral = True)
+                    general.plot_1d(EXP_NAME, x_axis_plot, ( data_x, data_y ), xname = 'Time', xscale = 's', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Point: ' + str(k) + ' / ' + str(j))
 
                 now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
                 w = 30
@@ -6024,7 +6358,8 @@ class Worker():
                     f"{'Number of Scans:':<{w}} {SCANS}\n"
                     f"{'Averages:':<{w}} {AVERAGES}\n"
                     f"{'Points:':<{w}} {POINTS}\n"
-                    f"{'Window:':<{w}} {tb} ns\n"
+                    f"{'Window:':<{w}} {rect1[2]}\n"
+                    f"{'Horizontal Resolution:':<{w}} {t_res:.1f} ns\n"
                     f"{'Vertical Resolution (ns):':<{w}} {v_res_formatted}\n"
                     f"{'Lg(X0/ns):':<{w}} {T_start}\n"
                     f"{'Lg(ΔX/ns):':<{w}} {T_end}\n"
@@ -6034,8 +6369,32 @@ class Worker():
                     f"{'-'*50}\n"
                     f"AWG Pulse List:\n{awg.awg_pulse_list()}"
                     f"{'-'*50}\n"
-                    f"Time (ns), I (A.U.), Q (A.U.)"
+                    f"2D Data"
                 )
+                if iq_cor == 1:
+                    header2 = (
+                        f"{'Date:':<{w}} {now}\n"
+                        f"{'Experiment:':<{w}} Pulsed EPR AWG Log Experiment\n"
+                        f"{'Field:':<{w}} {FIELD} G\n"
+                        f"{general.fmt(mw.mw_bridge_att_prm(), w)}\n"
+                        f"{general.fmt(mw.mw_bridge_att1_prd(), w)}\n"
+                        f"{general.fmt(mw.mw_bridge_att2_prm(), w)}\n"
+                        f"{general.fmt(mw.mw_bridge_synthesizer(), w)}\n"
+                        f"{'Repetition Rate:':<{w}} {pb.pulser_repetition_rate()}\n"
+                        f"{'Number of Scans:':<{w}} {SCANS}\n"
+                        f"{'Averages:':<{w}} {AVERAGES}\n"
+                        f"{'Points:':<{w}} {POINTS}\n"
+                        f"{'Window:':<{w}} {tb} ns\n"
+                        f"{'Lg(X0/ns):':<{w}} {T_start}\n"
+                        f"{'Lg(ΔX/ns):':<{w}} {T_end}\n"
+                        f"{'Temperature:':<{w}} {ptc.tc_temperature('A')} K\n"
+                        f"{'-'*50}\n"
+                        f"Pulse List:\n{pb.pulser_pulse_list()}"
+                        f"{'-'*50}\n"
+                        f"AWG Pulse List:\n{awg.awg_pulse_list()}"
+                        f"{'-'*50}\n"
+                        f"Time (ns), I (A.U.), Q (A.U.)"
+                    )
 
                 if script_test:
                     conn.send( ('test', f'') )
@@ -6050,7 +6409,30 @@ class Worker():
                                 break
                         general.wait('200 ms')
 
-                    file_handler.save_data(file_data, np.c_[x_axis, data[0], data[1]], header = header, mode = 'w')
+                    if iq_cor == 0:
+                        file_handler.save_data(
+                            file_data,
+                            data,
+                            header = header,
+                            mode = 'w'
+                        )
+                    elif iq_cor == 1:
+
+                        file_handler.save_data(
+                            file_data,
+                            np.c_[x_axis, data_x, data_y],
+                            header = header2,
+                            mode = 'w'
+                            )
+
+                        if save2d == 1:
+                            file_data2 = file_data.replace(".csv", "_2d.csv")
+                            file_handler.save_data(
+                                file_data2,
+                                data,
+                                header = header,
+                                mode = 'w'
+                            )
 
                     conn.send( ('', f'Experiment {EXP_NAME} finished') )
 
@@ -6059,7 +6441,7 @@ class Worker():
             conn.send( ('Error', exc_info) )
         finally:
             # Always return the instruments to a safe idle state on every exit
-            # path (normal, Stop, or exception): stop+close the digitizer, stop+
+            # path (normal, Stop, or exception): stop the oscilloscope, stop+
             # close the AWG (so it cannot keep outputting), and stop the pulse
             # generator. Each call is guarded (device closes are idempotent), so
             # cleanup for a device that was never opened cannot mask the error.
@@ -6112,8 +6494,6 @@ class Worker():
             mw = mwBridge.Micran_Q_band_MW_bridge()
 
             iq_cor = iq_corr
-            t3104.win_left = win_left
-            t3104.win_right = win_right
             zp = zero_phase
 
             #rect1 DETECTION
@@ -6312,12 +6692,9 @@ class Worker():
             # NIOCH: compile the zero-filled AWG buffer after all pulses
             awg.awg_setup()
 
-            # DEC_COEF is the digitizer record length (= DETECTION window in points,
-            # 2 ns/point). Posttrigger defaults to half the window.
-            DIG_POINTS = int( DEC_COEF )
-            POSTTRIGGER = int( DIG_POINTS / 2 )
+            # NIOCH Spectrum digitizer (point/posttrigger based, 2 ns/point).
             t3104.oscilloscope_trigger_channel('Ext')
-            t3104.oscilloscope_record_length(5000)
+            t3104.oscilloscope_record_length( int( DEC_COEF ) )
             t3104.oscilloscope_acquisition_type('Average')
             t3104.oscilloscope_stop()
 
@@ -6329,18 +6706,20 @@ class Worker():
 
             real_length = t3104.oscilloscope_record_length( )
             t_res = round( t3104.oscilloscope_timebase() / real_length, 5 )    # in us
+            t3104.oscilloscope_number_of_averages(AVERAGES)
 
-            t3104.oscilloscope_number_of_averages( AVERAGES )
+            points_window = int( real_length )
+            t3104.win_left = win_left
+            t3104.win_right = win_right
 
-            data = np.zeros( ( 2, POINTS ) )
+            data = np.zeros( ( 2, points_window, POINTS ) )
+            cycle_data_x = np.zeros( ( PHASES, points_window ) )
+            cycle_data_y = np.zeros( ( PHASES, points_window ) )
+            dec_calc = t_res * 1e-6
+
             x_axis = f_delay + np.linspace(0, (POINTS - 1)*STEP, num = POINTS)
             x_axis_plot = x_axis
             a = 0
-
-            # one phase-cycle buffer reused every point (all PHASES elements are
-            # overwritten each acquisition, so no need to re-allocate per point)
-            cyc_x = np.zeros( PHASES )
-            cyc_y = np.zeros( PHASES )
 
             def _scan_iter():
                 if script_test:
@@ -6366,25 +6745,57 @@ class Worker():
 
                     for j in range(POINTS):
 
-                        # phase cycle for this amplitude point: one integral per
-                        # phase, combined by the pulser, then averaged over scans (k)
+                        # NIOCH AWG phase cycle: AWG advances phase, one digitizer
+                        # curve per phase, then the pulser combines the cycle.
                         pb.pulser_update()
                         ph = 0
                         while ph < PHASES:
                             awg.awg_next_phase()
-                            cyc_x[ph], cyc_y[ph] = t3104.oscilloscope_get_curve('CH1', integral = True), t3104.oscilloscope_get_curve('CH2', integral = True)
+                            t3104.oscilloscope_start_acquisition()
+                            cycle_data_x[ph], cycle_data_y[ph] = t3104.oscilloscope_get_curve('CH1'), t3104.oscilloscope_get_curve('CH2')
                             awg.awg_stop()
                             ph += 1
 
-                        ix, iy = pb.pulser_acquisition_cycle( cyc_x, cyc_y, acq_cycle = rect1[3] )
-                        data[0, j] = ( data[0, j] * (k - 1) + ix ) / k
-                        data[1, j] = ( data[1, j] * (k - 1) + iy ) / k
+                        data_x, data_y = pb.pulser_acquisition_cycle( cycle_data_x, cycle_data_y, acq_cycle = rect1[3] )
+                        data[0, :, j] = ( data[0, :, j] * (k - 1) + data_x ) / k
+                        data[1, :, j] = ( data[1, :, j] * (k - 1) + data_y ) / k
 
-                        if (not script_test) or j == POINTS - 1:
-                            if point_flag != 1:
-                                general.plot_1d(EXP_NAME, x_axis_plot, ( data[0], data[1] ), xname = 'Amplitude', xscale = '%', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Amplitude: ' + str(k) + ' / ' + str(round(f_delay + j * STEP, 1)))
-                            else:
-                                general.plot_1d(EXP_NAME, x_axis, ( data[0], data[1] ), xname = 'Point', xscale = '', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Time: ' + str(k) + ' / ' + str(round(j, 1)))
+                        if (not script_test) or j == 0:
+                            if iq_cor == 0:
+                                if point_flag != 1:
+                                    process = general.plot_2d(
+                                        EXP_NAME,
+                                        data,
+                                        start_step = ((0, dec_calc), (f_delay, step)),
+                                        xname = 'Time',
+                                        xscale = 's',
+                                        yname = 'Amplitude',
+                                        yscale = '%',
+                                        zname = 'Intensity',
+                                        zscale = 'mV',
+                                        text = f"Scan / Amplitude: {k} / { (f_delay + j * STEP):.1f}",
+                                        pr = process
+                                    )
+                                else:
+                                    process = general.plot_2d(
+                                        EXP_NAME,
+                                        data,
+                                        start_step = ((0, dec_calc), (0, 1)),
+                                        xname = 'Time',
+                                        xscale = 's',
+                                        yname = 'Point',
+                                        yscale = '',
+                                        zname = 'Intensity',
+                                        zscale = 'mV',
+                                        text = f"Scan / Point: {k} / {j}",
+                                        pr = process
+                                    )
+                            elif iq_cor == 1:
+                                area_x, area_y = t3104.oscilloscope_iq(data[0], data[1], iq_freq, zp, first_order, sec_order, integral = True)
+                                if point_flag != 1:
+                                    general.plot_1d(EXP_NAME, x_axis_plot, ( area_x, area_y ), xname = 'Amplitude', xscale = '%', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Amplitude: ' + str(k) + ' / ' + str(round(f_delay + j * STEP, 1)))
+                                else:
+                                    general.plot_1d(EXP_NAME, x_axis, ( area_x, area_y ), xname = 'Point', xscale = '', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Time: ' + str(k) + ' / ' + str(round(j, 1)))
 
                         # amplitude sweep: pulses are static in time (the start
                         # increment is only a selector, not a shift) -> NO pulser_shift,
@@ -6416,16 +6827,48 @@ class Worker():
                 self.command = 'exit'
 
             if self.command == 'exit':
-                tb = round( int(DEC_COEF) * 2, 1)      # detection window, ns (2 ns/point)
+                tb = round( (t3104.win_right - t3104.win_left) * t_res * 1000, 1 )   # window width, ns
                 t3104.oscilloscope_stop()
                 awg.awg_stop()
                 awg.awg_close()
                 pb.pulser_stop()
 
-                if point_flag != 1:
-                    general.plot_1d(EXP_NAME, x_axis_plot, ( data[0], data[1] ), xname = 'Amplitude', xscale = '%', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Amplitude: ' + str(k) + ' / ' + str(round(f_delay + j * STEP, 1)))
-                else:
-                    general.plot_1d(EXP_NAME, x_axis, ( data[0], data[1] ), xname = 'Point', xscale = '', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Time: ' + str(k) + ' / ' + str(round(j, 1)))
+                if iq_cor == 0:
+                    if point_flag != 1:
+                        process = general.plot_2d(
+                            EXP_NAME, 
+                            data, 
+                            start_step = ((0, dec_calc), (f_delay, step)), 
+                            xname = 'Time', 
+                            xscale = 's', 
+                            yname = 'Amplitude', 
+                            yscale = '%', 
+                            zname = 'Intensity', 
+                            zscale = 'mV', 
+                            text = f"Scan / Amplitude: {k} / { (f_delay + j * STEP):.1f}",
+                            pr = process
+                        )
+                    else:
+                        process = general.plot_2d(
+                            EXP_NAME, 
+                            data, 
+                            start_step = ((0, dec_calc), (0, 1)), 
+                            xname = 'Time', 
+                            xscale = 's', 
+                            yname = 'Point', 
+                            yscale = '', 
+                            zname = 'Intensity', 
+                            zscale = 'mV', 
+                            text = f"Scan / Point: {k} / {j}",
+                            pr = process
+                        )
+                elif iq_cor == 1:
+                    data_x, data_y = t3104.oscilloscope_iq(data[0], data[1], iq_freq, zp, first_order, sec_order, integral = True)
+                    if point_flag != 1:
+                        general.plot_1d(EXP_NAME, x_axis_plot, ( data_x, data_y ), xname = 'Amplitude', xscale = '%', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Amplitude: ' + str(k) + ' / ' + str(round(f_delay + j * STEP, 1)))
+                    else:
+                        general.plot_1d(EXP_NAME, x_axis, ( data_x, data_y ), xname = 'Point', xscale = '', yname = 'Area', yscale = 'A.U.', label = curve_name, text = 'Scan / Time: ' + str(k) + ' / ' + str(round(j, 1)))
+
 
                 now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
                 w = 30
@@ -6443,17 +6886,42 @@ class Worker():
                     f"{'Number of Scans:':<{w}} {SCANS}\n"
                     f"{'Averages:':<{w}} {AVERAGES}\n"
                     f"{'Points:':<{w}} {POINTS}\n"
-                    f"{'Window:':<{w}} {tb} ns\n"
+                    f"{'Window:':<{w}} {rect1[2]}\n"
+                    f"{'Horizontal Resolution:':<{w}} {t_res:.1f} ns\n"
                     f"{'Start Amplitude:':<{w}} {f_delay} %\n"
-                    f"{'Horizontal Resolution:':<{w}} {STEP} %\n"
+                    f"{'Vertical Resolution:':<{w}} {STEP} %\n"
                     f"{'Temperature:':<{w}} {ptc.tc_temperature('A')} K\n"
                     f"{'-'*50}\n"
                     f"Pulse List:\n{pb.pulser_pulse_list()}"
                     f"{'-'*50}\n"
                     f"AWG Pulse List:\n{awg.awg_pulse_list()}"
                     f"{'-'*50}\n"
-                    f"Time (ns), I (A.U.), Q (A.U.)"
+                    f"2D Data"
                 )
+                if iq_cor == 1:
+                    header2 = (
+                        f"{'Date:':<{w}} {now}\n"
+                        f"{'Experiment:':<{w}} Pulsed EPR AWG Experiment\n"
+                        f"{'Field:':<{w}} {FIELD} G\n"
+                        f"{general.fmt(mw.mw_bridge_att_prm(), w)}\n"
+                        f"{general.fmt(mw.mw_bridge_att1_prd(), w)}\n"
+                        f"{general.fmt(mw.mw_bridge_att2_prm(), w)}\n"
+                        f"{general.fmt(mw.mw_bridge_synthesizer(), w)}\n"
+                        f"{'Repetition Rate:':<{w}} {pb.pulser_repetition_rate()}\n"
+                        f"{'Number of Scans:':<{w}} {SCANS}\n"
+                        f"{'Averages:':<{w}} {AVERAGES}\n"
+                        f"{'Points:':<{w}} {POINTS}\n"
+                        f"{'Window:':<{w}} {tb} ns\n"
+                        f"{'Start Amplitude:':<{w}} {f_delay} %\n"
+                        f"{'Horizontal Resolution:':<{w}} {STEP} %\n"
+                        f"{'Temperature:':<{w}} {ptc.tc_temperature('A')} K\n"
+                        f"{'-'*50}\n"
+                        f"Pulse List:\n{pb.pulser_pulse_list()}"
+                        f"{'-'*50}\n"
+                        f"AWG Pulse List:\n{awg.awg_pulse_list()}"
+                        f"{'-'*50}\n"                        
+                        f"Time (ns), I (A.U.), Q (A.U.)"
+                    )
 
                 if script_test:
                     conn.send( ('test', f'') )
@@ -6468,7 +6936,30 @@ class Worker():
                                 break
                         general.wait('200 ms')
 
-                    file_handler.save_data(file_data, np.c_[x_axis, data[0], data[1]], header = header, mode = 'w')
+                    if iq_cor == 0:
+                        file_handler.save_data(
+                            file_data,
+                            data,
+                            header = header,
+                            mode = 'w'
+                        )
+                    elif iq_cor == 1:
+
+                        file_handler.save_data(
+                            file_data,
+                            np.c_[x_axis, data_x, data_y],
+                            header = header2,
+                            mode = 'w'
+                            )
+                        if save2d == 1:
+                            file_data2 = file_data.replace(".csv", "_2d.csv")
+
+                            file_handler.save_data(
+                                file_data2,
+                                data,
+                                header = header,
+                                mode = 'w'
+                            )
 
                     conn.send( ('', f'Experiment {EXP_NAME} finished') )
 
@@ -6477,7 +6968,7 @@ class Worker():
             conn.send( ('Error', exc_info) )
         finally:
             # Always return the instruments to a safe idle state on every exit
-            # path (normal, Stop, or exception): stop+close the digitizer, stop+
+            # path (normal, Stop, or exception): stop the oscilloscope, stop+
             # close the AWG (so it cannot keep outputting), and stop the pulse
             # generator. Each call is guarded (device closes are idempotent), so
             # cleanup for a device that was never opened cannot mask the error.
