@@ -3,15 +3,17 @@
 
 import os
 import sys
-import datetime
-import socket
+import time
 import numpy as np
 from multiprocessing import Process, Pipe
-from PyQt6 import QtWidgets, uic
-from PyQt6.QtWidgets import QWidget 
-from PyQt6.QtGui import QIcon
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QLabel, QDoubleSpinBox, QSpinBox, QComboBox, QPushButton, QTextEdit, QGridLayout, QFrame, QCheckBox, QProgressBar, QFileDialog,  QTreeView, QHeaderView, QSizeGrip, QLineEdit, QFileIconProvider
+from PyQt6.QtGui import QIcon, QAction
+from PyQt6.QtCore import Qt, QTimer
+import atomize.general_modules.csv_opener_saver as openfile
+import atomize.general_modules.last_dir as ldir
+import atomize.control_center.field_param as field_param
 
-class MainWindow(QtWidgets.QMainWindow):
+class MainWindow(QMainWindow):
     """
     A main window class
     """
@@ -20,120 +22,327 @@ class MainWindow(QtWidgets.QMainWindow):
         A function for connecting actions and creating a main window
         """
         super(MainWindow, self).__init__(*args, **kwargs)
-        
-        self.destroyed.connect(lambda: self._on_destroyed())         # connect some actions to exit
-        # Load the UI Page
-        path_to_main = os.path.dirname(os.path.abspath(__file__))
-        gui_path = os.path.join(path_to_main,'gui/tr_main_window.ui')
-        icon_path = os.path.join(path_to_main, 'gui/icon_tr.png')
-        self.setWindowIcon( QIcon(icon_path) )
-
-        uic.loadUi(gui_path, self)                        # Design file
-
-        # Connection of different action to different Menus and Buttons
-        self.button_start.clicked.connect(self.start)
-        self.button_start.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(63, 63, 97);\
-         border-style: outset; color: rgb(193, 202, 227); font-weight: bold; }\
-          QPushButton:pressed {background-color: rgb(211, 194, 78); border-style: inset; font-weight: bold; }")
-        self.button_off.clicked.connect(self.turn_off)
-        self.button_off.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(63, 63, 97);\
-         border-style: outset; color: rgb(193, 202, 227); font-weight: bold; }\
-          QPushButton:pressed {background-color: rgb(211, 194, 78); border-style: inset; font-weight: bold; }")
-        self.button_stop.clicked.connect(self.stop)
-        self.button_stop.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(63, 63, 97);\
-         border-style: outset; color: rgb(193, 202, 227); font-weight: bold; }\
-          QPushButton:pressed {background-color: rgb(211, 194, 78); border-style: inset; font-weight: bold; }")
-
-        # text labels
-        self.label.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_2.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_3.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_4.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_5.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_6.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_7.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_8.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_9.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_10.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_11.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-
-        # text edits
-        self.text_edit_exp_name.setStyleSheet("QTextEdit { color : rgb(211, 194, 78) ; }") # rgb(193, 202, 227)
-        self.cur_exp_name = self.text_edit_exp_name.toPlainText()
-        self.text_edit_exp_name.textChanged.connect(self.exp_name)
-
-        # Spinboxes
-        self.box_end_field.valueChanged.connect(self.end_field)
-        self.box_end_field.setStyleSheet("QDoubleSpinBox { color : rgb(193, 202, 227); }")
-        self.cur_end_field = float( self.box_end_field.value() )
-        self.box_st_field.valueChanged.connect(self.st_field)
-        self.box_st_field.setStyleSheet("QDoubleSpinBox { color : rgb(193, 202, 227); }")
-        self.cur_start_field = float( self.box_st_field.value() )
-        self.box_step_field.valueChanged.connect(self.step_field)
-        self.box_step_field.setStyleSheet("QDoubleSpinBox { color : rgb(193, 202, 227); }")
-        self.cur_step = float( self.box_step_field.value() )
-        
-        self.box_off_res_field.valueChanged.connect(self.offres_field)
-        self.box_off_res_field.setStyleSheet("QDoubleSpinBox { color : rgb(193, 202, 227); }")
-        self.cur_offres_field = float( self.box_off_res_field.value() )
-        
-        self.box_scan.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); }")
-        self.box_scan.valueChanged.connect(self.scan)
-        #self.box_scan.lineEdit().setReadOnly( True )
-        self.cur_scan = int( self.box_scan.value() )
-        
-        self.box_ave.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); }")
-        self.box_ave.valueChanged.connect(self.ave)
-        #self.box_ave.lineEdit().setReadOnly( True )
-        self.cur_ave = int( self.box_ave.value() )
-        
-        self.box_ave_offres.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); }")
-        self.box_ave_offres.valueChanged.connect(self.ave_offres)
-        #self.box_ave_offres.lineEdit().setReadOnly( True )
-        self.cur_ave_offres = int( self.box_ave_offres.value() )
-
-        self.combo_num_osc.currentIndexChanged.connect(self.num_osc)
-        if len( self.combo_num_osc.currentText() ) > 1:
-            self.cur_num_osc = 3
-        else:
-            self.cur_num_osc = int( self.combo_num_osc.currentText() )
-        self.combo_num_osc.setStyleSheet("QComboBox { color : rgb(193, 202, 227); selection-color: rgb(211, 194, 78); }")
-
-        self.combo_trig_ch.setStyleSheet("QComboBox { color : rgb(193, 202, 227); selection-color: rgb(211, 194, 78); }")
-        self.cur_trig_ch = str( self.combo_trig_ch.currentText() )
-        self.combo_trig_ch.currentIndexChanged.connect(self.trig_ch)
-        
-        self.check_scan.setStyleSheet("QCheckBox { color : rgb(193, 202, 227); }")
-        self.check_scan.stateChanged.connect( self.save_each_scan )
+        self.menu()
 
         self.save_scan = 0
-        
+        self.two_side = 0
+        self.design()
+        self.exit_clicked = 0
+
         """
         Create a process to interact with an experimental script that will run on a different thread.
-        We need a different thread here, since PyQt GUI applications have a main thread of execution 
-        that runs the event loop and GUI. If you launch a long-running task in this thread, then your GUI
-        will freeze until the task terminates. During that time, the user won’t be able to interact with 
-        the application
+        We need a different thread here, since PyQt GUI applications have a main thread of execution that runs the event loop and GUI. If you launch a long-running task in this thread, then your GUI will freeze until the task terminates. During that time, the user won’t be able to interact with the application
         """
-        self.worker = Worker()
 
-    def _on_destroyed(self):
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.check_messages)
+        self.monitor_timer = QTimer()
+        self.monitor_timer.timeout.connect(self.check_process_status)
+        self.file_handler = openfile.Saver_Opener()
+
+    def design(self):
+
+        self.setObjectName("MainWindow")
+        self.setWindowTitle("TR EPR")
+        self.setStyleSheet("background-color: rgb(42,42,64);")
+
+        path_to_main = os.path.dirname(os.path.abspath(__file__))
+        icon_path = os.path.join(path_to_main, 'gui/icon_tr.png')
+        self.setWindowIcon( QIcon(icon_path) )
+        self.path = os.path.join(path_to_main, '..', '..', '..', '..', 'experimental_data')
+
+        centralwidget = QWidget(self)
+        self.setCentralWidget(centralwidget)
+
+        gridLayout = QGridLayout()
+        gridLayout.setContentsMargins(15, 10, 10, 10)
+        gridLayout.setVerticalSpacing(4)
+        gridLayout.setHorizontalSpacing(20)
+
+        centralwidget.setLayout(gridLayout)
+
+        # ---- Labels & Inputs ----
+        labels = [("Start Field", "label_1"), ("End Field", "label_2"), ("Field Step", "label_3"), ("Off-Resonance Field", "label_4"), ("Off-Resonance Acquisitions", "label_5"), ("Acquisitions", "label_6"), ("Number of Scans", "label_7"), ("Save Each Scan", "label_8"), ("Two-Side Measurement", "label_9"), ("Number of Oscilloscopes", "label_10"), ("Trigger Channel", "label_11"), ("Experiment Name", "label_12"), ("Progress", "label_13")]
+
+        for name, attr_name in labels:
+            lbl = QLabel(name)
+            lbl.setFixedSize(190, 26)
+            setattr(self, attr_name, lbl)
+            lbl.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
+
+
+        # ---- Boxes ----
+        double_boxes = [(QDoubleSpinBox, "box_st_field", "cur_start_field", self.st_field, 0, 15000, 3000, 1, 1, " G"),
+                      (QDoubleSpinBox, "box_end_field", "cur_end_field", self.end_field, 0, 15000, 4000, 1, 1, " G"),
+                      (QDoubleSpinBox, "box_step_field", "cur_step", self.step_field, 0.01, 50, 0.5, 0.1, 2, " G"),
+                      (QDoubleSpinBox, "box_off_res_field", "cur_offres_field", self.offres_field, 0, 15000, 500, 1, 1, " G"),
+                      (QSpinBox, "box_ave", "cur_ave", self.ave, 2, 2000, 10, 1, 0, ""),
+                      (QSpinBox, "box_ave_offres", "cur_ave_offres", self.ave_offres, 2, 2000, 10, 1, 0, ""),
+                      (QSpinBox, "box_scan", "cur_scan", self.scan, 1, 100, 1, 1, 0, "")
+                        ]
+
+        for widget_class, attr_name, par_name, func, v_min, v_max, cur_val, v_step, dec, suf in double_boxes:
+            spin_box = widget_class()
+            if isinstance(spin_box, QDoubleSpinBox):
+                spin_box.setRange(v_min, v_max)
+                spin_box.setStyleSheet("QDoubleSpinBox { color : rgb(193, 202, 227); selection-background-color: rgb(211, 194, 78); selection-color: rgb(63, 63, 97);}")                
+            else:
+                spin_box.setRange(int(v_min), int(v_max))
+                spin_box.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); selection-background-color: rgb(211, 194, 78); selection-color: rgb(63, 63, 97);}")
+            spin_box.setSingleStep(v_step)
+            spin_box.setValue(cur_val)
+            if isinstance(spin_box, QDoubleSpinBox):
+                spin_box.setDecimals(dec)
+            spin_box.setSuffix(suf)
+            spin_box.valueChanged.connect(func)
+            spin_box.setFixedSize(130, 26)
+            spin_box.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.PlusMinus)
+            spin_box.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+
+            spin_box.setKeyboardTracking( False )
+            
+            setattr(self, attr_name, spin_box)
+            if isinstance(spin_box, QDoubleSpinBox):
+                setattr(self, par_name, float(spin_box.value()))
+            else:
+                setattr(self, par_name, int(spin_box.value()))
+
+
+        # ---- Combo boxes----
+        combo_boxes = [("1", "combo_num_osc", "cur_num_osc", self.num_osc, 
+                        [
+                        "1", "2", "2 + THz Pulse"
+                        ]),
+                      ("CH2", "combo_trig_ch", "cur_trig_ch", self.trig_ch, 
+                        [
+                        "CH2", "Ext"
+                        ])
+                      ]
+
+        for cur_text, attr_name, par_name, func, item in combo_boxes:
+            combo = QComboBox()
+            setattr(self, attr_name, combo)
+            setattr(self, par_name, combo.currentText())
+            combo.currentIndexChanged.connect(func)
+            combo.addItems(item)
+            combo.setCurrentText(cur_text)            
+            combo.setFixedSize(130, 26)
+            combo.setStyleSheet("""
+                QComboBox 
+                { color : rgb(193, 202, 227); 
+                selection-color: rgb(211, 194, 78); 
+                selection-background-color: rgb(63, 63, 97);
+                outline: none;
+                }
+                """)
+
+            if par_name == 'cur_num_osc' and len( str( self.cur_num_osc ) ) > 1:
+                self.cur_num_osc = 3
+            elif par_name == 'cur_num_osc':
+                self.cur_num_osc = int( self.cur_num_osc )
+
+        # ---- Text Edits ----
+        text_edit = [("TR", "text_edit_exp_name", "cur_exp_name", self.exp_name),
+                    ]
+
+        for text, attr_name, par_name, func in text_edit:
+            txt = QTextEdit(text)
+            setattr(self, attr_name, txt)
+            setattr(self, par_name, txt.toPlainText())
+            txt.textChanged.connect(func)
+            txt.setFixedSize(130, 26)
+            txt.setAcceptRichText(False)
+            txt.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            txt.setStyleSheet("QTextEdit { color : rgb(211, 194, 78) ; selection-background-color: rgb(211, 194, 78); selection-color: rgb(63, 63, 97);}")
+            txt.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+
+        # ---- Check Boxes ----
+        check_boxes = [("checkbox_back_scan", self.two_side_measure),
+                       ("check_scan", self.save_each_scan)
+                       ]
+
+        for attr_name, func in check_boxes:
+            check = QCheckBox("")
+            setattr(self, attr_name, check)
+            check.stateChanged.connect(func)
+            check.setFixedSize(130, 26)
+            check.setStyleSheet("""
+                QCheckBox { 
+                    color: rgb(193, 202, 227); 
+                    background-color: transparent; 
+                    font-weight: bold;
+                    spacing: 8px; 
+                }
+
+                QCheckBox::indicator {
+                    width: 14px;
+                    height: 14px;
+                    background-color: rgb(63, 63, 97);
+                    border: 1px solid rgb(83, 83, 117);
+                    border-radius: 3px;
+                }
+
+                QCheckBox::indicator:hover {
+                    border: 1px solid rgb(211, 194, 78);
+                }
+
+                QCheckBox::indicator:pressed {
+                    background-color: rgb(83, 83, 117);
+                }
+
+                QCheckBox::indicator:checked {
+                    background-color: rgb(211, 194, 78);
+                    border: 3px solid rgb(63, 63, 97); 
+                }
+            """)            
+
+        # ---- Buttons ----
+        buttons = [("Start", "button_start", self.start),
+                   ("Stop", "button_stop", self.stop),
+                   ("Exit", "button_off", self.turn_off) ]
+
+        for name, attr_name, func in buttons:
+            btn = QPushButton(name)
+            btn.setFixedSize(140, 40)
+            btn.clicked.connect(func)
+            btn.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(63, 63, 97); border-style: outset; color: rgb(193, 202, 227); font-weight: bold; } QPushButton:pressed {background-color: rgb(211, 194, 78); border-style: inset; font-weight: bold; }")
+            setattr(self, attr_name, btn)
+
+        # ---- Separators ----
+        def hline():
+            line = QFrame()
+            line.setFrameShape(QFrame.Shape.HLine)
+            line.setFrameShadow(QFrame.Shadow.Sunken)
+            line.setLineWidth(2)
+            return line
+
+        # ---- Progress Bar ----
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFixedSize(130, 15)
+        self.progress_bar.setTextVisible(True)
+        #self.progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.progress_bar.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid rgb(83, 83, 117);
+                border-radius: 4px;
+                background-color: rgb(42, 42, 64);
+                color: rgb(211, 194, 78);
+                font-weight: bold;
+                text-align: right; 
+                margin-right: 40px;
+                height: 20px;
+            }
+
+            QProgressBar::chunk {
+                background-color: rgb(193, 202, 227);
+                border-radius: 2px;
+            }
+        """)
+
+        # ---- Layout placement ----
+        gridLayout.addWidget(self.label_1, 0, 0)
+        gridLayout.addWidget(self.box_st_field, 0, 1)
+        gridLayout.addWidget(self.label_2, 1, 0)
+        gridLayout.addWidget(self.box_end_field, 1, 1)
+        gridLayout.addWidget(self.label_3, 2, 0)
+        gridLayout.addWidget(self.box_step_field, 2, 1)
+        gridLayout.addWidget(self.label_4, 3, 0)
+        gridLayout.addWidget(self.box_off_res_field, 3, 1)
+
+        gridLayout.addWidget(hline(), 4, 0, 1, 2)
+
+        gridLayout.addWidget(self.label_5, 5, 0)
+        gridLayout.addWidget(self.box_ave_offres, 5, 1)
+        gridLayout.addWidget(self.label_6, 6, 0)
+        gridLayout.addWidget(self.box_ave, 6, 1)
+        gridLayout.addWidget(self.label_7, 7, 0)
+        gridLayout.addWidget(self.box_scan, 7, 1)
+        gridLayout.addWidget(self.label_8, 8, 0)
+        gridLayout.addWidget(self.check_scan, 8, 1)
+        gridLayout.addWidget(self.label_9, 9, 0)
+        gridLayout.addWidget(self.checkbox_back_scan, 9, 1)
+
+        gridLayout.addWidget(hline(), 10, 0, 1, 2)
+
+        gridLayout.addWidget(self.label_10, 11, 0)
+        gridLayout.addWidget(self.combo_num_osc, 11, 1)
+        gridLayout.addWidget(self.label_11, 12, 0)
+        gridLayout.addWidget(self.combo_trig_ch, 12, 1)
+
+        gridLayout.addWidget(hline(), 13, 0, 1, 2)
+
+        gridLayout.addWidget(self.label_12, 14, 0)
+        gridLayout.addWidget(self.text_edit_exp_name, 14, 1)
+
+        gridLayout.addWidget(hline(), 15, 0, 1, 2)
+
+        gridLayout.addWidget(self.label_13, 16, 0)
+        gridLayout.addWidget(self.progress_bar, 16, 1)
+
+        gridLayout.addWidget(hline(), 17, 0, 1, 2)
+
+        gridLayout.addWidget(self.button_start, 18, 0)
+        gridLayout.addWidget(self.button_stop, 19, 0)
+        gridLayout.addWidget(self.button_off, 20, 0)
+
+        gridLayout.setRowStretch(21, 2)
+        gridLayout.setColumnStretch(21, 2)
+
+    def menu(self):
+        menubar = self.menuBar()
+        menubar.setStyleSheet("""
+            QMenuBar { 
+                color: rgb(193, 202, 227); 
+                font-weight: bold; 
+                font-size: 14px;  
+                
+                border-bottom: 2px solid rgb(60, 65, 85); 
+                margin-bottom: 1px;
+                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                                  stop:0.95 transparent, 
+                                  stop:1.0 rgb(100, 105, 130));
+                
+                padding-top: 2px; 
+                padding-bottom: 1px; 
+            } 
+            QMenu::item { color: rgb(193, 202, 227); } 
+            QMenu::item:selected { color: rgb(211, 194, 78); background-color: rgb(63, 63, 97); } 
+            QMenuBar::item:selected { background-color: rgb(63, 63, 97); }
+        """)
+        file_menu = menubar.addMenu("File")
+
+        menubar.setFixedHeight(27)
+
+        self.action_read = QAction("Read from file", self)
+        self.action_read.triggered.connect( self.open_file_dialog )
+        file_menu.addAction(self.action_read)
+
+        self.action_save = QAction("Save to file", self)
+        self.action_save.triggered.connect(self.save_file_dialog)
+        file_menu.addAction(self.action_save)
+
+    def two_side_measure(self):
         """
-        A function to do some actions when the main window is closing.
+        Turn on/off backward measurement
         """
-        try:
-            self.parent_conn.send('exit')
-        except BrokenPipeError:
-            self.message('Experimental script is not running')
-        except AttributeError:
-            self.message('Experimental script is not running')
-        self.exp_process.join()
+        if self.checkbox_back_scan.checkState().value == 2: # checked
+            self.two_side = 1
+        elif self.checkbox_back_scan.checkState().value == 0: # unchecked
+            self.two_side = 0
+
+    def closeEvent(self, event):
+        event.ignore()
+        self.turn_off()
 
     def quit(self):
         """
         A function to quit the programm
         """
-        self._on_destroyed()
+        self.turn_off()
         sys.exit()
 
     def save_each_scan(self):
@@ -193,7 +402,8 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             self.parent_conn.send( 'SC' + str( self.cur_scan ) )
         except AttributeError:
-            self.message('Experimental script is not running')
+            pass
+            #self.message('Experimental script is not running')
 
     def ave(self):
         """
@@ -222,14 +432,27 @@ class MainWindow(QtWidgets.QMainWindow):
         """
          A function to turn off a program.
         """
+        self.exit_clicked = 1
         try:
-            self.parent_conn.send('exit')
-            self.exp_process.join()
+            self.parent_conn.send( 'exit' )
+            self.monitor_timer.start(200)
         except AttributeError:
-            self.message('Experimental script is not running')
             sys.exit()
+            #self.message('Experimental script is not running')
 
-        sys.exit()
+    def check_process_status(self):
+        if self.exp_process.is_alive():
+            return
+        
+        self.monitor_timer.stop()
+        self.exp_process.join() 
+        #self.timer.stop()
+        self.progress_bar.setValue(0)
+        self.button_start.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(63, 63, 97); border-style: outset; color: rgb(193, 202, 227); font-weight: bold; } QPushButton:pressed {background-color: rgb(211, 194, 78); border-style: inset; font-weight: bold; } ")
+        field_param.clear_lock()
+        
+        if self.exit_clicked == 1:
+            sys.exit()
 
     def stop(self):
         """
@@ -237,10 +460,12 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         try:
             self.parent_conn.send( 'exit' )
-            self.exp_process.join()
+            self.monitor_timer.start(200)
+
         except AttributeError:
-            self.message('Experimental script is not running')
-   
+            pass
+            #self.message('Experimental script is not running')
+
     def start(self):
         """
         Button Start; Run function script(pipe_addres, four parameters of the experimental script)
@@ -248,6 +473,7 @@ class MainWindow(QtWidgets.QMainWindow):
         Create a Pipe for interaction with this thread
         self.param_i are used as parameters for script function
         """
+        worker = Worker()
         # prevent running two processes
         try: 
             if self.exp_process.is_alive() == True:
@@ -264,475 +490,1637 @@ class MainWindow(QtWidgets.QMainWindow):
         self.parent_conn, self.child_conn = Pipe()
         # a process for running function script 
         # sending parameters for initial initialization
-        self.exp_process = Process( target = self.worker.exp_on, args = ( self.child_conn, self.cur_offres_field, self.cur_exp_name, \
-                                            self.cur_end_field, self.cur_start_field, self.cur_step, self.cur_ave_offres, self.cur_scan, \
-                                            self.cur_ave, self.cur_num_osc, self.cur_trig_ch, self.save_scan, ) )
+        self.exp_process = Process( target = worker.exp_test, args = ( self.child_conn, self.cur_offres_field, self.cur_exp_name, self.cur_end_field, self.cur_start_field, self.cur_step, self.cur_ave_offres, self.cur_scan, self.cur_ave, self.cur_num_osc, self.cur_trig_ch, self.save_scan, self.two_side, ) )
             
+
+        self.button_start.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(211, 194, 78); border-style: outset; color: rgb(63, 63, 97); font-weight: bold; } QPushButton:pressed {background-color: rgb(211, 194, 78); border-style: inset; font-weight: bold; }")
+        self.progress_bar.setValue(0)
 
         self.exp_process.start()
 
         # send a command in a different thread about the current state
         self.parent_conn.send('start')
+        field_param.set_lock('tr_control')
 
-    def message(*text):
-        sock = socket.socket()
-        sock.connect(('localhost', 9091))
+        self.is_testing = True 
+        self.timer.start(300)
+
+    def message(self, *text):
         if len(text) == 1:
-            sock.send(str(text[0]).encode())
-            sock.close()
+            print(f'{text[0]}', flush=True)
         else:
-            sock.send(str(text).encode())
-            sock.close()
+            print(f'{text}', flush=True)
+
+    def parse_message(self):
+        msg_type, data = self.parent_conn.recv()
+            
+        if msg_type == 'Status':
+            self.progress_bar.setValue(int(data))
+        elif msg_type == 'Open':
+            self.open_dialog()
+        elif msg_type == 'Error':
+            self.last_error = True
+            self.timer.stop()
+            self.progress_bar.setValue(0)
+            if msg_type != 'test':
+                self.message(data)
+            self.button_start.setStyleSheet("""
+                QPushButton {
+                    border-radius: 4px; 
+                    background-color: rgb(63, 63, 97); 
+                    border-style: outset; 
+                    color: rgb(193, 202, 227); 
+                    font-weight: bold; 
+                }
+                QPushButton:pressed {
+                    background-color: rgb(211, 194, 78); 
+                    border-style: inset; 
+                    font-weight: bold; 
+                }
+            """)
+        else:
+            self.timer.stop()
+            self.progress_bar.setValue(0)
+            if msg_type != 'test':
+                self.message(data)
+                self.button_start.setStyleSheet("""
+                    QPushButton {
+                        border-radius: 4px; 
+                        background-color: rgb(63, 63, 97); 
+                        border-style: outset; 
+                        color: rgb(193, 202, 227); 
+                        font-weight: bold; 
+                    }
+                    QPushButton:pressed {
+                        background-color: rgb(211, 194, 78); 
+                        border-style: inset; 
+                        font-weight: bold; 
+                    }
+                """)
+
+    def check_messages(self):
+
+
+        if not hasattr(self, 'last_error'):
+            self.last_error = False
+
+        while self.parent_conn.poll():
+            try:
+                self.parse_message()
+
+            except EOFError:
+                self.timer.stop()
+                break
+            except Exception as e:
+                # never swallow silently: surface the failure in the TextEdit
+                import traceback
+                self.errors.appendPlainText('GUI message-pump error:\n' + traceback.format_exc())
+                break
+        
+        if self.exp_process.is_alive() and not self.timer.isActive():
+            self.exp_process.join()
+
+        if hasattr(self, 'exp_process') and not self.exp_process.is_alive():
+            if self.parent_conn.poll():
+                #return
+                self.parse_message()
+
+            self.timer.stop()
+
+            if getattr(self, 'is_testing', False):
+                self.is_testing = False
+                if not self.last_error:
+                    self.last_error = False 
+                    time.sleep(0.3)
+                    self.run_main_experiment()
+                else:
+                    self.last_error = False
+                    field_param.clear_lock()
+            else:
+                field_param.clear_lock()
+                self.button_start.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(63, 63, 97); border-style: outset; color: rgb(193, 202, 227); font-weight: bold; } QPushButton:pressed {background-color: rgb(211, 194, 78); border-style: inset; font-weight: bold; } ")
+
+    def open_dialog(self):
+        file_data = self.file_handler.create_file_dialog(multiprocessing = True)
+
+        if file_data:
+            if file_data != 'None':
+                self.save_file(file_data.split(".csv")[0])
+            self.parent_conn.send( 'FL' + str( file_data ) )
+        else:
+            self.parent_conn.send( 'FL' + '' )
+
+    def run_main_experiment(self):
+
+        worker = Worker()
+        
+        self.parent_conn, self.child_conn = Pipe()
+
+        self.exp_process = Process( target = worker.exp_on, args = ( self.child_conn, self.cur_offres_field, self.cur_exp_name, self.cur_end_field, self.cur_start_field, self.cur_step, self.cur_ave_offres, self.cur_scan, self.cur_ave, self.cur_num_osc, self.cur_trig_ch, self.save_scan, self.two_side, ) )
+            
+        self.exp_process.start()
+        self.parent_conn.send('start')
+        self.timer.start(300)
+
+    def open_file_dialog(self):
+        """
+        A function to open a new window for choosing a pulse list
+        """
+        filedialog = QFileDialog(self, 'Open File', directory = ldir.load('tr', self.path), filter = "TR Parameters (*.tr)", options = QFileDialog.Option.DontUseNativeDialog)
+        
+        filedialog.setMinimumWidth(800)
+
+        tree = filedialog.findChild(QTreeView)
+        header = tree.header()
+        for i in range(header.count()):
+            header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+
+        buttons = filedialog.findChildren(QPushButton)
+        seen_texts = []
+        for btn in buttons:
+            if btn.text() in seen_texts:
+                btn.hide()
+            else:
+                seen_texts.append(btn.text())
+        
+        line_edit = filedialog.findChild(QLineEdit)
+
+        if line_edit:
+            line_edit.setCompleter(None)
+
+        size_grip = filedialog.findChild(QSizeGrip)
+        if size_grip:
+            size_grip.setVisible(False)
+
+        filedialog.setStyleSheet("""
+            QFileDialog, QDialog { 
+                background-color: rgb(42, 42, 64); 
+                color: rgb(193, 202, 227);
+                font-size: 11px;
+            }
+
+            QFileDialog QListView {
+                min-width: 150px; 
+                background-color: rgb(35, 35, 55);
+                border: 1px solid rgb(63, 63, 97);
+                color: rgb(193, 202, 227);
+            }
+
+            QTreeView {
+                min-width: 500px;
+                background-color: rgb(35, 35, 55);
+                border: 1px solid rgb(63, 63, 97);
+                color: rgb(193, 202, 227);
+                outline: none;
+            }
+
+            QFileDialog QFrame#qt_contents, QFileDialog QWidget {
+                background-color: rgb(42, 42, 64);
+            }
+            
+            QFileDialog QToolBar {
+                background-color: rgb(42, 42, 64);
+                border-bottom: 1px solid rgb(63, 63, 97);
+                min-height: 34px; 
+                padding: 2px;
+            }
+
+            QToolButton {
+                background-color: rgb(63, 63, 97);
+                border: 1px solid rgb(83, 83, 117);
+                border-radius: 4px;
+                min-height: 23px; 
+                max-height: 23px;
+                min-width: 23px;
+                qproperty-iconSize: 14px 14px; 
+                margin: 0px 2px;
+                vertical-align: middle;
+            }
+
+            QToolButton:hover {
+                border: 1px solid rgb(211, 194, 78);
+                background-color: rgb(83, 83, 117);
+            }
+
+            QLineEdit, QComboBox {
+                background-color: rgb(63, 63, 97);
+                color: rgb(193, 202, 227);
+                border: 1px solid rgb(83, 83, 117);
+                border-radius: 3px;
+                padding: 2px 5px;
+                min-height: 16px; 
+            }
+
+            QLineEdit:focus, QFileDialog QComboBox:focus {
+                border: 1px solid rgb(211, 194, 78);
+                color: rgb(211, 194, 78);
+                outline: none;
+            }
+
+            QFileDialog QComboBox#lookInCombo {
+                background-color: rgb(42, 42, 64);
+                color: rgb(193, 202, 227);
+                border: 1px solid rgb(83, 83, 117);
+                border-radius: 3px;
+                padding-left: 5px;
+                min-height: 19px;
+                max-height: 19px;
+                selection-background-color: rgb(48, 48, 75);
+                selection-color: rgb(211, 194, 78);
+            }
+
+            QFileDialog QComboBox#lookInCombo QAbstractItemView {
+                outline: none;
+                border: 1px solid rgb(48, 48, 75);
+                background-color: rgb(42, 42, 64);
+            }
+
+            QFileDialog QDialogButtonBox QPushButton {
+                background-color: rgb(63, 63, 97);
+                color: rgb(193, 202, 227);
+                border: 1px solid rgb(83, 83, 117);
+                border-radius: 4px;
+                font-weight: bold;
+                min-height: 23px;
+                max-height: 23px;
+                min-width: 75px;
+                padding: 0px 12px;
+            }
+
+            QFileDialog QDialogButtonBox QPushButton:hover {
+                background-color: rgb(83, 83, 117);
+                border: 1px solid rgb(211, 194, 78);
+                color: rgb(211, 194, 78);
+            }
+            
+            QHeaderView::section {
+                background-color: rgb(63, 63, 97);
+                color: rgb(193, 202, 227);
+                padding: 4px;
+                border: none;
+                border-right: 1px solid rgb(83, 83, 117);
+                min-height: 20px;
+            }
+
+            QScrollBar:vertical {
+                border: none; background: rgb(43, 43, 77); 
+                width: 10px; margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: rgb(193, 202, 227); min-height: 20px; border-radius: 5px;
+            }
+            QScrollBar::handle:vertical:hover { background: rgb(211, 194, 78); }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
+
+            QScrollBar:horizontal {
+                border: none; 
+                background: rgb(43, 43, 77); 
+                height: 10px; 
+                margin: 0px;
+            }
+            QScrollBar::handle:horizontal {
+                background: rgb(193, 202, 227); 
+                min-width: 20px; 
+                border-radius: 5px;
+            }
+            QScrollBar::handle:horizontal:hover { 
+                background: rgb(211, 194, 78); 
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { 
+                width: 0px; 
+            }
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { 
+                background: none; 
+            }
+
+            QFileDialog QDialogButtonBox {
+                background-color: rgb(42, 42, 64);
+                border-top: 1px solid rgb(63, 63, 97);
+                padding: 6px;
+            }
+
+            QFileDialog QLabel {
+                color: rgb(193, 202, 227);
+            }
+
+            QFileDialog QListView::item:hover {
+                background-color: rgb(48, 48, 75);
+                color: rgb(211, 194, 78);
+            }
+
+            QHeaderView {
+                background-color: rgb(63, 63, 97);
+            }
+
+            QFileDialog QListView#sidebar:inactive, 
+            QTreeView:inactive {
+                selection-background-color: rgb(35, 35, 55);
+                selection-color: rgb(211, 194, 78);
+            }
+
+            QTreeView::item:hover { 
+                background-color: rgb(48, 48, 75);
+                color: rgb(211, 194, 78); 
+                } 
+            QTreeView::item:selected:inactive, 
+            QFileDialog QListView#sidebar::item:selected:inactive {
+                selection-background-color: rgb(63, 63, 97);
+                selection-color: rgb(211, 194, 78);
+            }
+            QFileDialog QListView#sidebar::item {
+                padding-left: 5px; 
+                padding-top: 5px;
+            }
+
+            QMenu {
+                background-color: rgb(42, 42, 64);
+                border: 1px solid rgb(63, 63, 97);
+                padding: 3px;
+            }
+            QMenu::item { color: rgb(211, 194, 78); } 
+            QMenu::item:selected { 
+                background-color: rgb(48, 48, 75); 
+                color: rgb(211, 194, 78);
+                }
+
+        """)
+        
+        filedialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        filedialog.fileSelected.connect(self.open_file)
+        filedialog.show()
+
+    def save_file_dialog(self):
+        """
+        A function to open a new window for choosing a pulse list
+        """
+        filedialog = QFileDialog(self, 'Save File', directory = ldir.load('tr', self.path), filter = "TR Parameters (*.tr)", options = QFileDialog.Option.DontUseNativeDialog)
+        filedialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+
+        filedialog.setMinimumWidth(800)
+        tree = filedialog.findChild(QTreeView)
+        header = tree.header()
+        for i in range(header.count()):
+            header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+
+        buttons = filedialog.findChildren(QPushButton)
+        seen_texts = []
+        for btn in buttons:
+            if btn.text() in seen_texts:
+                btn.hide()
+            else:
+                seen_texts.append(btn.text())
+        
+        line_edit = filedialog.findChild(QLineEdit)
+
+        if line_edit:
+            line_edit.setCompleter(None)
+
+        size_grip = filedialog.findChild(QSizeGrip)
+        if size_grip:
+            size_grip.setVisible(False)
+
+        filedialog.setStyleSheet("""
+            QFileDialog, QDialog { 
+                background-color: rgb(42, 42, 64); 
+                color: rgb(193, 202, 227);
+                font-size: 11px;
+            }
+
+            QFileDialog QListView {
+                min-width: 150px; 
+                background-color: rgb(35, 35, 55);
+                border: 1px solid rgb(63, 63, 97);
+                color: rgb(193, 202, 227);
+            }
+
+            QTreeView {
+                min-width: 500px;
+                background-color: rgb(35, 35, 55);
+                border: 1px solid rgb(63, 63, 97);
+                color: rgb(193, 202, 227);
+                outline: none;
+            }
+
+            QFileDialog QFrame#qt_contents, QFileDialog QWidget {
+                background-color: rgb(42, 42, 64);
+            }
+            
+            QFileDialog QToolBar {
+                background-color: rgb(42, 42, 64);
+                border-bottom: 1px solid rgb(63, 63, 97);
+                min-height: 34px; 
+                padding: 2px;
+            }
+
+            QToolButton {
+                background-color: rgb(63, 63, 97);
+                border: 1px solid rgb(83, 83, 117);
+                border-radius: 4px;
+                min-height: 23px; 
+                max-height: 23px;
+                min-width: 23px;
+                qproperty-iconSize: 14px 14px; 
+                margin: 0px 2px;
+                vertical-align: middle;
+            }
+
+            QToolButton:hover {
+                border: 1px solid rgb(211, 194, 78);
+                background-color: rgb(83, 83, 117);
+            }
+
+            QLineEdit, QComboBox {
+                background-color: rgb(63, 63, 97);
+                color: rgb(193, 202, 227);
+                border: 1px solid rgb(83, 83, 117);
+                border-radius: 3px;
+                padding: 2px 5px;
+                min-height: 16px; 
+            }
+
+            QLineEdit:focus, QFileDialog QComboBox:focus {
+                border: 1px solid rgb(211, 194, 78);
+                color: rgb(211, 194, 78);
+                outline: none;
+            }
+
+            QFileDialog QComboBox#lookInCombo {
+                background-color: rgb(42, 42, 64);
+                color: rgb(193, 202, 227);
+                border: 1px solid rgb(83, 83, 117);
+                border-radius: 3px;
+                padding-left: 5px;
+                min-height: 19px;
+                max-height: 19px;
+                selection-background-color: rgb(48, 48, 75);
+                selection-color: rgb(211, 194, 78);
+            }
+
+            QFileDialog QComboBox#lookInCombo QAbstractItemView {
+                outline: none;
+                border: 1px solid rgb(48, 48, 75);
+                background-color: rgb(42, 42, 64);
+            }
+
+            QFileDialog QDialogButtonBox QPushButton {
+                background-color: rgb(63, 63, 97);
+                color: rgb(193, 202, 227);
+                border: 1px solid rgb(83, 83, 117);
+                border-radius: 4px;
+                font-weight: bold;
+                min-height: 23px;
+                max-height: 23px;
+                min-width: 75px;
+                padding: 0px 12px;
+            }
+
+            QFileDialog QDialogButtonBox QPushButton:hover {
+                background-color: rgb(83, 83, 117);
+                border: 1px solid rgb(211, 194, 78);
+                color: rgb(211, 194, 78);
+            }
+            
+            QHeaderView::section {
+                background-color: rgb(63, 63, 97);
+                color: rgb(193, 202, 227);
+                padding: 4px;
+                border: none;
+                border-right: 1px solid rgb(83, 83, 117);
+                min-height: 20px;
+            }
+
+            QScrollBar:vertical {
+                border: none; background: rgb(43, 43, 77); 
+                width: 10px; margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: rgb(193, 202, 227); min-height: 20px; border-radius: 5px;
+            }
+            QScrollBar::handle:vertical:hover { background: rgb(211, 194, 78); }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
+
+            QScrollBar:horizontal {
+                border: none; 
+                background: rgb(43, 43, 77); 
+                height: 10px; 
+                margin: 0px;
+            }
+            QScrollBar::handle:horizontal {
+                background: rgb(193, 202, 227); 
+                min-width: 20px; 
+                border-radius: 5px;
+            }
+            QScrollBar::handle:horizontal:hover { 
+                background: rgb(211, 194, 78); 
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { 
+                width: 0px; 
+            }
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { 
+                background: none; 
+            }
+
+            QFileDialog QDialogButtonBox {
+                background-color: rgb(42, 42, 64);
+                border-top: 1px solid rgb(63, 63, 97);
+                padding: 6px;
+            }
+
+            QFileDialog QLabel {
+                color: rgb(193, 202, 227);
+            }
+
+            QFileDialog QListView::item:hover {
+                background-color: rgb(48, 48, 75);
+                color: rgb(211, 194, 78);
+            }
+
+            QHeaderView {
+                background-color: rgb(63, 63, 97);
+            }
+
+            QFileDialog QListView#sidebar:inactive, 
+            QTreeView:inactive {
+                selection-background-color: rgb(35, 35, 55);
+                selection-color: rgb(211, 194, 78);
+            }
+
+            QTreeView::item:hover { 
+                background-color: rgb(48, 48, 75);
+                color: rgb(211, 194, 78); 
+                } 
+            QTreeView::item:selected:inactive, 
+            QFileDialog QListView#sidebar::item:selected:inactive {
+                selection-background-color: rgb(63, 63, 97);
+                selection-color: rgb(211, 194, 78);
+            }
+            QFileDialog QListView#sidebar::item {
+                padding-left: 5px; 
+                padding-top: 5px;
+            }
+
+            QMenu {
+                background-color: rgb(42, 42, 64);
+                border: 1px solid rgb(63, 63, 97);
+                padding: 3px;
+            }
+            QMenu::item { color: rgb(211, 194, 78); } 
+            QMenu::item:selected { 
+                background-color: rgb(48, 48, 75); 
+                color: rgb(211, 194, 78);
+                }
+
+        """)
+
+        filedialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        filedialog.fileSelected.connect(self.save_file)
+        filedialog.show()
+
+    def open_file(self, filename):
+        """
+        A function to open a pulse list
+        :param filename: string
+        """
+        self.path = os.path.dirname(filename)
+        ldir.save('tr', self.path)
+        text = open(filename).read()
+        lines = text.split('\n')
+
+        self.box_st_field.setValue( float( lines[0].split(':  ')[1] ) )
+        self.box_end_field.setValue( float( lines[1].split(':  ')[1] ) )
+        self.box_step_field.setValue( float( lines[2].split(':  ')[1] ) )
+        self.box_off_res_field.setValue( float( lines[3].split(':  ')[1] ) )
+        self.box_ave_offres.setValue( int( lines[4].split(':  ')[1] ) )
+        self.box_ave.setValue( int( lines[5].split(':  ')[1] ) )
+        self.box_scan.setValue( int( lines[6].split(':  ')[1] ) )
+
+        if int( lines[7].split(':  ')[1] ) == 2:
+            self.check_scan.setCheckState(Qt.CheckState.Checked)
+        else:
+            self.check_scan.setCheckState(Qt.CheckState.Unchecked)
+        if int( lines[8].split(':  ')[1] ) == 2:
+            self.checkbox_back_scan.setCheckState(Qt.CheckState.Checked)
+        else:
+            self.checkbox_back_scan.setCheckState(Qt.CheckState.Unchecked)
+
+        self.combo_num_osc.setCurrentText( str( lines[9].split(':  ')[1] ) )
+        self.combo_trig_ch.setCurrentText( str( lines[10].split(':  ')[1] ) )
+
+    def save_file(self, filename):
+        """
+        A function to save a new pulse list
+        :param filename: string
+        """
+        self.path = os.path.dirname(filename)
+        ldir.save('tr', self.path)
+        if filename[-2:] != 'tr':
+            filename = filename + '.tr'
+        with open(filename, 'w') as file:
+            file.write( 'Start Field:  ' + str(self.box_st_field.value()) + '\n' )
+            file.write( 'End Field:  ' + str(self.box_end_field.value()) + '\n' )
+            file.write( 'Field Step:  ' + str(self.box_step_field.value()) + '\n' )
+            file.write( 'Off Resonance Field:  ' + str(self.box_off_res_field.value()) + '\n' )
+            file.write( 'Off Resonance Averages:  ' + str(self.box_ave_offres.value()) + '\n' )
+            file.write( 'Averages:  ' + str(self.box_ave.value()) + '\n' )
+            file.write( 'Scans:  ' + str(self.box_scan.value()) + '\n' )
+            file.write( 'Save Each Scan:  ' + str(self.check_scan.checkState().value) + '\n' )
+            file.write( 'Two-Side:  ' + str(self.checkbox_back_scan.checkState().value) + '\n' )
+            file.write( 'Number of Oscilloscopes:  ' + str(self.combo_num_osc.currentText()) + '\n' )
+            file.write( 'Trigger Channel:  ' + str(self.combo_trig_ch.currentText()) + '\n' )
 
 # The worker class that run the digitizer in a different thread
-class Worker(QWidget):
-    def __init__(self, parent = None):
-        super(Worker, self).__init__(parent)
+class Worker():
+    def __init__(self):
+        super(Worker, self).__init__()
         # initialization of the attribute we use to stop the experimental script
 
         self.command = 'start'
-                   
-    def exp_on(self, conn, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11):
+
+    def exp_on(self, conn, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12):
         """
         function that contains experimental script
         """
         # [                  1,                 2,                  3,                    4, ]
         #self.cur_offres_field, self.cur_exp_name, self.cur_end_field, self.cur_start_field, 
-        # [          5,                   6,              7,           8,                9,               10,             11 ]
-        #self.cur_step, self.cur_ave_offres, self.cur_scan, self.cur_ave, self.cur_num_osc, self.cur_trig_ch, self.save_scan
+        # [          5,                   6,              7,           8,                9,               10,             11,       12 ]
+        #self.cur_step, self.cur_ave_offres, self.cur_scan, self.cur_ave, self.cur_num_osc, self.cur_trig_ch, self.save_scan, self.two_side,
 
         # should be inside dig_on() function;
         # freezing after digitizer restart otherwise
-        import sys
-        import atomize.general_modules.general_functions as general
-        import atomize.device_modules.Keysight_2000_Xseries as key
-        import atomize.device_modules.Keysight_2000_Xseries_2 as key2
-        #import atomize.device_modules.BH_15 as bh
-        import atomize.device_modules.ITC_FC as itc
-        import atomize.device_modules.Lakeshore_335 as ls
-        import atomize.device_modules.Agilent_53131a as ag
-        import atomize.general_modules.csv_opener_saver_tk_kinter as openfile
+        import traceback
 
-        file_handler = openfile.Saver_Opener()
-        process = 'None'
-        ag53131a = ag.Agilent_53131a()
-        ls335 = ls.Lakeshore_335()
-        a2012 = key.Keysight_2000_Xseries()
-        bh15 = itc.ITC_FC()
-        
-        ag53131a.freq_counter_digits(8)
-        ag53131a.freq_counter_stop_mode('Digits')
-
-        if p9 == 1:
-            a2012.oscilloscope_trigger_channel(p10)
-            a2012.oscilloscope_acquisition_type('Average')
-            a2012.oscilloscope_run_stop()
-
-        else:
-            a2012_2 = key2.Keysight_2000_Xseries()
-            
-            a2012.oscilloscope_trigger_channel(p10)
-            a2012.oscilloscope_acquisition_type('Average')
-            a2012.oscilloscope_run_stop()
-
-            a2012_2.oscilloscope_trigger_channel('Ext')
-            a2012_2.oscilloscope_acquisition_type('Average')
-            a2012_2.oscilloscope_run_stop()
-
-        a2012.oscilloscope_record_length( 4000 )
         try:
-            real_length = a2012.oscilloscope_record_length( )
-        except ZeroDivisionError:
-            general.message('Incorrect Trigger Channel')
+            import datetime
+            import atomize.general_modules.general_functions as general
+            import atomize.device_modules.Keysight_3000_Xseries as key
+            #import atomize.device_modules.BH_15 as itc
+            import pyqtgraph as pg
+            import atomize.device_modules.ITC_FC as itc
+            import atomize.device_modules.Lakeshore_335 as ls
+            import atomize.general_modules.csv_opener_saver as openfile
 
-        t_res = round( a2012.oscilloscope_timebase() / real_length, 7 )    # in us
-        t_res_rough = round( t_res, 3 )
-        ##real_length = 4000
-        if p9 > 1:
-            a2012_2.oscilloscope_record_length( 4000 )
-            t_res_2 = round( a2012_2.oscilloscope_timebase() / real_length, 7 ) # in us
-            t_res_2_rough = round( t_res_2, 3 )
+            w = 30
+            file_handler = openfile.Saver_Opener()
+            process = 'None'
+            ls335 = ls.Lakeshore_335()
+            a2012 = key.Keysight_3000_Xseries()
+            #bh15 = itc.BH_15()
+            bh15 = itc.ITC_FC()
 
-        # parameters for initial initialization
-        field = 100
-        START_FIELD = p4
-        END_FIELD = p3
-        FIELD_STEP = p5
-        OFFRES_FIELD = p1
-        initialization_step = 10
-        SCANS = p7
-        points = int( (END_FIELD - START_FIELD) / FIELD_STEP ) + 1
+            a2012.oscilloscope_trigger_channel(p10)
+            a2012.oscilloscope_acquisition_type('Average')
+            a2012.oscilloscope_run_stop()
 
-        if p9 == 1:
-            data = np.zeros( (2, real_length, points + 1) )
-        elif p9 == 2:
-            data = np.zeros( (4, real_length, points + 1) )
-        else:
-            data = np.zeros( (5, real_length, points + 1) )
-        
-        ##axis_x = np.arange(4000)
-        
-        bh15.magnet_setup(field, p5)
-        temp_start = str( ls335.tc_temperature('B') )
+            a2012.oscilloscope_record_length( 4000 )
+            try:
+                real_length = a2012.oscilloscope_record_length( )
+            except ZeroDivisionError:
+                general.message('Incorrect Trigger Channel')
 
-        # Oscilloscopes bugs
-        a2012.oscilloscope_number_of_averages(2)
-        if p9 > 1:
-            a2012_2.oscilloscope_number_of_averages(2)
+            ##t_res = round( a2012.oscilloscope_timebase() / real_length, 7 )    # in us
+            ##t_res_rough = round( t_res, 3 )
+            t_res = a2012.oscilloscope_time_resolution()
+            t_step = float(f"{pg.siEval(t_res):.4g}")
 
-        a2012.oscilloscope_start_acquisition()
-        if p9 > 1:
-            a2012_2.oscilloscope_start_acquisition()
-        
-        if p9 == 1:
-            y = a2012.oscilloscope_get_curve('CH1')
+            ##real_length = 4000
 
-        elif p9 == 2:
-            y = a2012.oscilloscope_get_curve('CH1')
-            y2 = a2012_2.oscilloscope_get_curve('CH1')
+            # parameters for initial initialization
+            field = 100
+            START_FIELD = p4
+            END_FIELD = p3
+            FIELD_STEP = p5
+            OFFRES_FIELD = p1
+            initialization_step = 10
+            SCANS = p7
+            points = int( (END_FIELD - START_FIELD) / FIELD_STEP ) + 1
 
-        # the idea of automatic and dynamic changing is
-        # sending a new value of repetition rate via self.command
-        # in each cycle we will check the current value of self.command
-        # self.command = 'exit' will stop the script
-        while self.command != 'exit':
-            # Start of experiment
-            while field < OFFRES_FIELD:
-                field = bh15.magnet_field( field + initialization_step )
-                field = field + initialization_step
-                general.wait('30 ms')
+            #bh15.magnet_setup( 100, FIELD_STEP)
 
-            # Data saving
-            j = 1
             if p9 == 1:
-                file_save_1, file_save_param = file_handler.create_file_parameters('.param')
-                ##t_res = 1
-                header = 'Date: ' + str(datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")) + '\n' + 'Time Resolved EPR Spectrum\n' + \
-                            'Start Field: ' + str(START_FIELD) + ' G \n' + 'End Field: ' + str(END_FIELD) + ' G \n' + \
-                            'Field Step: ' + str(FIELD_STEP) + ' G \n' + \
-                            'Off Resonance Field: ' + str(OFFRES_FIELD) + ' G \n' + \
-                            'Number of Off Resonance Averages: ' + str(p6) + '\n' + \
-                            'Number of Averages: ' + str(p8) + '\n' + \
-                            'Number of Scans: ' + str(SCANS) + '\n' + \
-                            'Temperature Start Exp: ' + str( temp_start ) + ' K\n' +\
-                            'Temperature End Exp: ' + str( temp_start ) + ' K\n' +\
-                            'Record Length: ' + str(real_length) + ' Points\n' + 'Time Resolution: ' + str(t_res) + ' us\n' + \
-                            'Frequency: ' + str( round( ag53131a.freq_counter_frequency('CH3') / 1000000, 6) ) + ' GHz\n' + '2D Data'
-                
-                file_handler.save_header(file_save_1, header = header, mode = 'w')
+                data = np.zeros( (2, real_length, points + 1) )
             elif p9 == 2:
-                file_save_1, file_save_2 = file_handler.create_file_parameters('_osc2.csv')
+                data = np.zeros( (2, real_length, points + 1) )
+            else:
+                data = np.zeros( (4, real_length, points + 1) )
 
-                header = 'Date: ' + str(datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")) + '\n' + 'Time Resolved EPR Spectrum\n' + \
-                            'Start Field: ' + str(START_FIELD) + ' G \n' + 'End Field: ' + str(END_FIELD) + ' G \n' + \
-                            'Field Step: ' + str(FIELD_STEP) + ' G \n' + \
-                            'Off Resonance Field: ' + str(OFFRES_FIELD) + ' G \n' + \
-                            'Number of Off Resonance Averages: ' + str(p6) + '\n' + \
-                            'Number of Averages: ' + str(p8) + '\n' + \
-                            'Number of Scans: ' + str(SCANS) + '\n' + \
-                            'Temperature Start Exp: ' + str( temp_start ) + ' K\n' +\
-                            'Temperature End Exp: ' + str( temp_start ) + ' K\n' +\
-                            'Record Length: ' + str(real_length) + ' Points\n' + 'Time Resolution: ' + str(t_res) + ' us\n' + \
-                            'Frequency: ' + str( round( ag53131a.freq_counter_frequency('CH3') / 1000000, 6) ) + ' GHz\n' + '2D Data'
+            temp_start = str( ls335.tc_temperature('A') )
 
-                header_2 = 'Date: ' + str(datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")) + '\n' + 'Time Resolved EPR Spectrum\n' + \
-                            'Start Field: ' + str(START_FIELD) + ' G \n' + 'End Field: ' + str(END_FIELD) + ' G \n' + \
-                            'Field Step: ' + str(FIELD_STEP) + ' G \n' + \
-                            'Off Resonance Field: ' + str(OFFRES_FIELD) + ' G \n' + \
-                            'Number of Off Resonance Averages: ' + str(p6) + '\n' + \
-                            'Number of Averages: ' + str(p8) + '\n' + \
-                            'Number of Scans: ' + str(SCANS) + '\n' + \
-                            'Temperature Start Exp: ' + str( temp_start ) + ' K\n' +\
-                            'Temperature End Exp: ' + str( temp_start ) + ' K\n' +\
-                            'Record Length: ' + str(real_length) + ' Points\n' + 'Time Resolution: ' + str(t_res_2) + ' us\n' + \
-                            'Frequency: ' + str( round( ag53131a.freq_counter_frequency('CH3') / 1000000, 6) ) + ' GHz\n' + '2D Data'
+            # Oscilloscopes bugs
+            #a2012.oscilloscope_number_of_averages(2)
 
-                file_handler.save_header(file_save_1, header = header, mode = 'w')
-                file_handler.save_header(file_save_2, header = header_2, mode = 'w')
+            #a2012.oscilloscope_start_acquisition()
 
+            #if p9 == 1:
+            #    y = a2012.oscilloscope_get_curve('CH1')
+
+            conn.send(('Open', ''))
+            
+            while True:
+                if conn.poll():
+                    msg = conn.recv()
+                    if msg.startswith('FL'):
+                        file_save_1 = msg[2:]
+                        break
+                general.wait('200 ms')
+
+            if p9 == 1:
+                pass
+            elif p9 == 2:
+                pass
             elif p9 == 3:
-                file_save_1, file_save_2 = file_handler.create_file_parameters('_osc2.csv')
-                file_save_3 = file_save_1.split('.csv')[0] + '_pulse.csv'
+                file_save_3 = f"{file_save_1[0:-4]}_pulse.csv"
 
-                header = 'Date: ' + str(datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")) + '\n' + 'Time Resolved EPR Spectrum\n' + \
-                            'Start Field: ' + str(START_FIELD) + ' G \n' + 'End Field: ' + str(END_FIELD) + ' G \n' + \
-                            'Field Step: ' + str(FIELD_STEP) + ' G \n' + \
-                            'Off Resonance Field: ' + str(OFFRES_FIELD) + ' G \n' + \
-                            'Number of Off Resonance Averages: ' + str(p6) + '\n' + \
-                            'Number of Averages: ' + str(p8) + '\n' + \
-                            'Number of Scans: ' + str(SCANS) + '\n' + \
-                            'Temperature Start Exp: ' + str( temp_start ) + ' K\n' +\
-                            'Temperature End Exp: ' + str( temp_start ) + ' K\n' +\
-                            'Record Length: ' + str(real_length) + ' Points\n' + 'Time Resolution: ' + str(t_res) + ' us\n' + \
-                            'Frequency: ' + str( round( ag53131a.freq_counter_frequency('CH3') / 1000000, 6) ) + ' GHz\n' + '2D Data'
+            # the idea of automatic and dynamic changing is
+            # sending a new value of repetition rate via self.command
+            # in each cycle we will check the current value of self.command
+            # self.command = 'exit' will stop the script
+            while self.command != 'exit':
+                # Start of experiment
+                while field < OFFRES_FIELD:
+                    field = bh15.magnet_field( field + initialization_step)
+                    field = field + initialization_step
+                    general.wait('30 ms')
 
-                header_2 = 'Date: ' + str(datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")) + '\n' + 'Time Resolved EPR Spectrum\n' + \
-                            'Start Field: ' + str(START_FIELD) + ' G \n' + 'End Field: ' + str(END_FIELD) + ' G \n' + \
-                            'Field Step: ' + str(FIELD_STEP) + ' G \n' + \
-                            'Off Resonance Field: ' + str(OFFRES_FIELD) + ' G \n' + \
-                            'Number of Off Resonance Averages: ' + str(p6) + '\n' + \
-                            'Number of Averages: ' + str(p8) + '\n' + \
-                            'Number of Scans: ' + str(SCANS) + '\n' + \
-                            'Temperature Start Exp: ' + str( temp_start ) + ' K\n' +\
-                            'Temperature End Exp: ' + str( temp_start ) + ' K\n' +\
-                            'Record Length: ' + str(real_length) + ' Points\n' + 'Time Resolution: ' + str(t_res_2) + ' us\n' + \
-                            'Frequency: ' + str( round( ag53131a.freq_counter_frequency('CH3') / 1000000, 6) ) + ' GHz\n' + '2D Data'
-
-                file_handler.save_header(file_save_1, header = header, mode = 'w')
-                file_handler.save_header(file_save_2, header = header_2, mode = 'w')
-                file_handler.save_header(file_save_3, header = header, mode = 'w')
-
-            while j <= SCANS:
-                if self.command == 'exit':
-                    break
-
-                field = bh15.magnet_field( OFFRES_FIELD )
-                field = OFFRES_FIELD
-
-                general.wait('4000 ms')
-
-                a2012.oscilloscope_number_of_averages(p6)
-                if p9 > 1:
-                    a2012_2.oscilloscope_number_of_averages(p6)
-                
-                a2012.oscilloscope_start_acquisition()
-                if p9 > 1:
-                    a2012_2.oscilloscope_start_acquisition()
-
-                ##ch_time = np.random.randint(250, 500, 1)
+                # Data saving
+                j = 1
                 if p9 == 1:
-                    y = a2012.oscilloscope_get_curve('CH1')
-                    ##y = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
-                    data[0, :, 0] = ( data[0, :, 0] * (j - 1) + y ) / j
-                    data[1, :, 0] = ( data[0, :, 0] - data[0, :, 0] )
-                    data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
-                    
-                elif p9 == 2:
-                    y = a2012.oscilloscope_get_curve('CH1')
-                    ##y = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
-                    data[0, :, 0] = ( data[0, :, 0] * (j - 1) + y ) / j
-                    data[1, :, 0] = ( data[0, :, 0] - data[0, :, 0] )
-                    data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
 
-                    y2 = a2012_2.oscilloscope_get_curve('CH1')
-                    ##y2 = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
-                    data[2, :, 0] = ( data[2, :, 0] * (j - 1) + y2 ) / j
-                    data[3, :, 0] = ( data[2, :, 0] - data[2, :, 0] )
-                    data[3, :, :] = ( data[3, :, :] - data[3, 0, :] )
+                    now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
+                    temp_end = str( ls335.tc_temperature('A') )
+
+                    header = (
+                        f"{'Date:':<{w}} {now}\n"
+                        f"{'Experiment:':<{w}} Time Resolved EPR Spectrum\n"
+                        f"{'Start Field:':<{w}} {START_FIELD} G\n"
+                        f"{'End Field:':<{w}} {END_FIELD} G\n"
+                        f"{'Field Step:':<{w}} {FIELD_STEP} G\n"
+                        f"{'Off-Resonance Field:':<{w}} {OFFRES_FIELD} G\n"
+                        f"{'Off-Resonance Averages:':<{w}} {p6}\n"
+                        f"{'Number of Averages:':<{w}} {p8}\n"
+                        f"{'Number of Scans:':<{w}} {SCANS}\n"
+                        f"{'Temperature Start Exp:':<{w}} {temp_start} K\n"
+                        f"{'Temperature End Exp:':<{w}} {temp_end} K\n"
+                        f"{'Temperature Cernox:':<{w}} {ls335.tc_temperature('B')} K\n"
+                        f"{'Record Length:':<{w}} {real_length} Points\n"
+                        f"{'Time Resolution:':<{w}} {t_res}\n"
+                        f"{'-'*50}\n"
+                        f"2D Data"
+                    )
+
+                    file_handler.save_header(file_save_1, header = header, mode = 'w')
+                elif p9 == 2:
+
+                    now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
+                    temp_end = str( ls335.tc_temperature('A') )
+
+                    header = (
+                        f"{'Date:':<{w}} {now}\n"
+                        f"{'Experiment:':<{w}} Time Resolved EPR Spectrum\n"
+                        f"{'Start Field:':<{w}} {START_FIELD} G\n"
+                        f"{'End Field:':<{w}} {END_FIELD} G\n"
+                        f"{'Field Step:':<{w}} {FIELD_STEP} G\n"
+                        f"{'Off-Resonance Field:':<{w}} {OFFRES_FIELD} G\n"
+                        f"{'Off-Resonance Averages:':<{w}} {p6}\n"
+                        f"{'Number of Averages:':<{w}} {p8}\n"
+                        f"{'Number of Scans:':<{w}} {SCANS}\n"
+                        f"{'Temperature Start Exp:':<{w}} {temp_start} K\n"
+                        f"{'Temperature End Exp:':<{w}} {temp_end} K\n"
+                        f"{'Temperature Cernox:':<{w}} {ls335.tc_temperature('B')} K\n"
+                        f"{'Record Length:':<{w}} {real_length} Points\n"
+                        f"{'Time Resolution:':<{w}} {t_res}\n"
+                        f"{'-'*50}\n"
+                        f"2D Data"
+                    )
+
+                    file_handler.save_header(file_save_1, header = header, mode = 'w')
 
                 elif p9 == 3:
-                    y = a2012.oscilloscope_get_curve('CH1')
-                    ##y = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
-                    data[0, :, 0] = ( data[0, :, 0] * (j - 1) + y ) / j
-                    data[1, :, 0] = ( data[0, :, 0] - data[0, :, 0] )
-                    data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
 
-                    y2 = a2012_2.oscilloscope_get_curve('CH1')
-                    ##y2 = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
-                    data[2, :, 0] = ( data[2, :, 0] * (j - 1) + y2 ) / j
-                    data[3, :, 0] = ( data[2, :, 0] - data[2, :, 0] )
-                    data[3, :, :] = ( data[3, :, :] - data[3, 0, :] )
+                    now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
+                    temp_end = str( ls335.tc_temperature('A') )
 
-                    y3 = a2012.oscilloscope_get_curve('CH2')
-                    ##y3 = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
-                    data[4, :, 0] = ( data[4, :, 0] * (j - 1) + y3 ) / j
+                    header = (
+                        f"{'Date:':<{w}} {now}\n"
+                        f"{'Experiment:':<{w}} Time Resolved EPR Spectrum\n"
+                        f"{'Start Field:':<{w}} {START_FIELD} G\n"
+                        f"{'End Field:':<{w}} {END_FIELD} G\n"
+                        f"{'Field Step:':<{w}} {FIELD_STEP} G\n"
+                        f"{'Off-Resonance Field:':<{w}} {OFFRES_FIELD} G\n"
+                        f"{'Off-Resonance Averages:':<{w}} {p6}\n"
+                        f"{'Number of Averages:':<{w}} {p8}\n"
+                        f"{'Number of Scans:':<{w}} {SCANS}\n"
+                        f"{'Temp Start Exp:':<{w}} {temp_start} K\n"
+                        f"{'Temp End Exp:':<{w}} {temp_end} K\n"
+                        f"{'Temperature Cernox:':<{w}} {ls335.tc_temperature('B')} K\n"
+                        f"{'Record Length:':<{w}} {real_length} Points\n"
+                        f"{'Time Resolution:':<{w}} {t_res}\n"
+                        f"{'-'*50}\n"
+                        f"2D Data"
+                    )
 
-                while field < START_FIELD:
-                    field = bh15.magnet_field( field + initialization_step )
-                    general.wait('30 ms')
-                    field = field + initialization_step
+                    file_handler.save_header(file_save_1, header = header, mode = 'w')
+                    file_handler.save_header(file_save_3, header = header, mode = 'w')
 
-                field = bh15.magnet_field( START_FIELD )
-                field = START_FIELD
-
-                general.wait('4000 ms')
-
-                a2012.oscilloscope_number_of_averages(p8)
-                if p9 > 1:
-                    a2012_2.oscilloscope_number_of_averages(p8)
-
-                i = 0
-                while field <= END_FIELD:
-                    
+                while j <= SCANS:
                     if self.command == 'exit':
                         break
 
-                    general.wait('50 ms')
+                    field = bh15.magnet_field( OFFRES_FIELD )
+                    field = OFFRES_FIELD
+
+                    general.wait('4000 ms')
+
+                    a2012.oscilloscope_number_of_averages(p6)
 
                     a2012.oscilloscope_start_acquisition()
-                    if p9 > 1:
-                        a2012_2.oscilloscope_start_acquisition()
-                    
+
                     ##ch_time = np.random.randint(250, 500, 1)
                     if p9 == 1:
                         y = a2012.oscilloscope_get_curve('CH1')
-                        ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
-                        
-                        data[0, :, i+1] = ( data[0, :, i+1] * (j - 1) + y ) / j
-                        data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
+                        ##y = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
+                        data[0, :, 0] = ( data[0, :, 0] * (j - 1) + y ) / j
+                        data[1, :, 0] = ( data[0, :, 0] - data[0, :, 0] )
                         data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
 
                     elif p9 == 2:
                         y = a2012.oscilloscope_get_curve('CH1')
-                        ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
-                        y2 = a2012_2.oscilloscope_get_curve('CH1')
-                        ##y2 = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
-
-                        data[0, :, i+1] = ( data[0, :, i+1] * (j - 1) + y ) / j
-                        data[2, :, i+1] = ( data[2, :, i+1] * (j - 1) + y2) / j
-                        data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
+                        ##y = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
+                        data[0, :, 0] = ( data[0, :, 0] * (j - 1) + y ) / j
+                        data[1, :, 0] = ( data[0, :, 0] - data[0, :, 0] )
                         data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
-                        data[3, :, i+1] = ( data[2, :, i+1] - data[2, :, 0] )
-                        data[3, :, :] = ( data[3, :, :] - data[3, 0, :] )
 
                     elif p9 == 3:
                         y = a2012.oscilloscope_get_curve('CH1')
-                        ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
-                        y2 = a2012_2.oscilloscope_get_curve('CH1')
-                        ##y2 = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
-                        y3 = a2012.oscilloscope_get_curve('CH2')
-                        ##y3 = 1 + 100*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
-
-                        data[0, :, i+1] = ( data[0, :, i+1] * (j - 1) + y ) / j
-                        data[2, :, i+1] = ( data[2, :, i+1] * (j - 1) + y2) / j
-                        data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
+                        ##y = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
+                        data[0, :, 0] = ( data[0, :, 0] * (j - 1) + y ) / j
+                        data[1, :, 0] = ( data[0, :, 0] - data[0, :, 0] )
                         data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
-                        data[3, :, i+1] = ( data[2, :, i+1] - data[2, :, 0] )
-                        data[3, :, :] = ( data[3, :, :] - data[3, 0, :] )
-                        data[4, :, i+1] = ( data[4, :, i+1] * (j - 1) + y3 ) / j
 
-                    #start_time = time.time()
+                        y3 = a2012.oscilloscope_get_curve('CH2')
+                        ##y3 = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
+                        data[2, :, 0] = ( data[2, :, 0] * (j - 1) + y3 ) / j
 
-                    # (0, t_res) xscale='us'
-                    process = general.plot_2d( p2, data[:,:,1:points+1],  xname='Time', start_step=( (0, t_res_rough), (START_FIELD, FIELD_STEP) ),\
-                        xscale='us', yname='Field', yscale='G', zname='Intensity', zscale='V', pr = process, \
-                        text = 'Scan / Field: ' + str(j) + ' / ' + str(field))
+                    while field < START_FIELD:
+                        field = bh15.magnet_field( field + initialization_step)
+                        general.wait('30 ms')
+                        field = field + initialization_step
 
-                    #general.message( str( time.time() - start_time ) )
+                    field = bh15.magnet_field( START_FIELD )
+                    field = START_FIELD
 
-                    field = round( (FIELD_STEP + field), 3 )
-                    bh15.magnet_field(field)
+                    general.wait('4000 ms')
 
-                    # check our polling data
-                    if self.command[0:2] == 'SC':
-                        SCANS = int( self.command[2:] )
-                        self.command = 'start'
-                    elif self.command == 'exit':
-                        break
+                    a2012.oscilloscope_number_of_averages(p8)
+
+                    i = 0
+
+                    if p12 == 0:
+                        j = j
+                    elif p12 == 1:
+                        j = 2*j - 1
+
+                    while field <= END_FIELD:
+                        
+                        if self.command == 'exit':
+                            break
+
+                        general.wait('80 ms')
+
+                        a2012.oscilloscope_start_acquisition()
+
+
+                        ##ch_time = np.random.randint(250, 500, 1)
+                        if p9 == 1:
+                            y = a2012.oscilloscope_get_curve('CH1')
+                            ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
+
+                            data[0, :, i+1] = ( data[0, :, i+1] * (j - 1) + y ) / j
+                            data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
+                            data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
+
+                        elif p9 == 2:
+                            y = a2012.oscilloscope_get_curve('CH1')
+                            ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
+
+                            data[0, :, i+1] = ( data[0, :, i+1] * (j - 1) + y ) / j
+                            data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
+                            data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
+
+                        elif p9 == 3:
+                            y = a2012.oscilloscope_get_curve('CH1')
+                            ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
+                            y3 = a2012.oscilloscope_get_curve('CH2')
+                            ##y3 = 1 + 100*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
+
+                            data[0, :, i+1] = ( data[0, :, i+1] * (j - 1) + y ) / j
+                            data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
+                            data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
+                            data[3, :, i+1] = ( data[3, :, i+1] * (j - 1) + y3 ) / j
+
+                        #start_time = time.time()
+
+                        if p12 == 0:
+                            conn.send( ('Status', int( 100 * ((j - 1) * points + i + 1) / points / SCANS)) )
+                        elif p12 == 1:
+                            conn.send( ('Status', int( 100 * ((j - 1) * points + i + 1) / points / SCANS / 2)) )
+
+
+                        process = general.plot_2d( p2, data[:,:,1:points+1],  xname='Time', start_step=( (0, t_step), (START_FIELD, FIELD_STEP) ), xscale='s', yname='Field', yscale='G', zname='Intensity', zscale='V', pr = process, text = 'S / F: ' + str(j) + ' / ' + str(field))
+
+                        #general.message( str( time.time() - start_time ) )
+
+                        field = round( (FIELD_STEP + field), 3 )
+                        bh15.magnet_field(field)
+
+                        # check our polling data
+                        if self.command[0:2] == 'SC':
+                            SCANS = int( self.command[2:] )
+                            self.command = 'start'
+                        elif self.command == 'exit':
+                            break
+                        
+                        if conn.poll() == True:
+                            self.command = conn.recv()
+
+                        i += 1
+
+                    if p12 == 1:
+
+                        while field > START_FIELD:
+                            
+                            if self.command == 'exit':
+                                break
+
+                            i -= 1
+                            general.wait('80 ms')
+
+                            field = round( (-FIELD_STEP + field), 3 )
+                            bh15.magnet_field(field)
+
+                            a2012.oscilloscope_start_acquisition()
+
+                            ##ch_time = np.random.randint(250, 500, 1)
+                            if p9 == 1:
+                                y = a2012.oscilloscope_get_curve('CH1')
+                                ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
+
+                                data[0, :, i+1] = ( data[0, :, i+1] * j + y ) / ( j + 1 )
+                                data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
+                                data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
+
+                            elif p9 == 2:
+                                y = a2012.oscilloscope_get_curve('CH1')
+                                ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
+
+                                data[0, :, i+1] = ( data[0, :, i+1] * j + y ) / ( j + 1 )
+                                data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
+                                data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
+
+                            elif p9 == 3:
+                                y = a2012.oscilloscope_get_curve('CH1')
+                                ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
+                                y3 = a2012.oscilloscope_get_curve('CH2')
+                                ##y3 = 1 + 100*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
+
+                                data[0, :, i+1] = ( data[0, :, i+1] * j + y ) / ( j + 1 )
+                                data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
+                                data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
+                                data[3, :, i+1] = ( data[3, :, i+1] * j + y3 ) / ( j + 1 )
+
+                            #start_time = time.time()
+                            conn.send( ('Status', int( 100 * (( j ) * points - i + points) / points / SCANS / 2)) )
+
+                            process = general.plot_2d( p2, data[:,:,1:points+1],  xname='Time', start_step=( (0, t_step), (START_FIELD, FIELD_STEP) ), xscale='s', yname='Field', yscale='G', zname='Intensity', zscale='V', pr = process, text = 'S / F: ' + str(j) + ' / ' + str(field))
+
+                            #general.message( str( time.time() - start_time ) )
+
+                            # check our polling data
+                            if self.command[0:2] == 'SC':
+                                SCANS = int( self.command[2:] )
+                                self.command = 'start'
+                            elif self.command == 'exit':
+                                break
+                            
+                            if conn.poll() == True:
+                                self.command = conn.recv()
+
+
+                    if j != SCANS:
+                        while field > OFFRES_FIELD:
+                            field = bh15.magnet_field( field - initialization_step)
+                            field = field - initialization_step
+                            general.wait('30 ms')
                     
-                    if conn.poll() == True:
-                        self.command = conn.recv()
+                        field = bh15.magnet_field( OFFRES_FIELD )
+                        field = OFFRES_FIELD
+                    
+                    if p9 == 1 and p11 == 1 and p12 == 0:
+                        if j == 1:
+                            file_handler.save_data(file_save_1, np.transpose( data[0, :, :] ), header = header)
+                        else:
+                            file_save_j = file_save_1.split('.csv')[0] + f'_{j}_scans.csv'
+                            file_handler.save_data(file_save_j, np.transpose( data[0, :, :] ), header = header)
 
-                    i += 1
+                    j += 1
+
+                # finish succesfully
+                self.command = 'exit'
+
+            if self.command == 'exit':
+                #general.message(f'Script {p2} finished')
+                
+                temp_end = str( ls335.tc_temperature('B') )
+                if p9 == 1 and p11 == 0:
+                    ##t_res = 1
+                    now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
+                    temp_end = str( ls335.tc_temperature('A') )
+
+                    header = (
+                        f"{'Date:':<{w}} {now}\n"
+                        f"{'Experiment:':<{w}} Time Resolved EPR Spectrum\n"
+                        f"{'Start Field:':<{w}} {START_FIELD} G\n"
+                        f"{'End Field:':<{w}} {END_FIELD} G\n"
+                        f"{'Field Step:':<{w}} {FIELD_STEP} G\n"
+                        f"{'Off-Resonance Field:':<{w}} {OFFRES_FIELD} G\n"
+                        f"{'Off-Resonance Averages:':<{w}} {p6}\n"
+                        f"{'Number of Averages:':<{w}} {p8}\n"
+                        f"{'Number of Scans:':<{w}} {SCANS}\n"
+                        f"{'Temperature Start Exp:':<{w}} {temp_start} K\n"
+                        f"{'Temperature End Exp:':<{w}} {temp_end} K\n"
+                        f"{'Temperature Cernox:':<{w}} {ls335.tc_temperature('B')} K\n"
+                        f"{'Record Length:':<{w}} {real_length} Points\n"
+                        f"{'Time Resolution:':<{w}} {t_res}\n"
+                        f"{'-'*50}\n"
+                        f"2D Data"
+                    )
+
+                    file_handler.save_data(file_save_1, np.transpose( data[0, :, :] ), header = header)
+                elif p9 == 2:
+
+                    now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
+                    temp_end = str( ls335.tc_temperature('A') )
+
+                    header = (
+                        f"{'Date:':<{w}} {now}\n"
+                        f"{'Experiment:':<{w}} Time Resolved EPR Spectrum\n"
+                        f"{'Start Field:':<{w}} {START_FIELD} G\n"
+                        f"{'End Field:':<{w}} {END_FIELD} G\n"
+                        f"{'Field Step:':<{w}} {FIELD_STEP} G\n"
+                        f"{'Off-Resonance Field:':<{w}} {OFFRES_FIELD} G\n"
+                        f"{'Off-Resonance Averages:':<{w}} {p6}\n"
+                        f"{'Number of Averages:':<{w}} {p8}\n"
+                        f"{'Number of Scans:':<{w}} {SCANS}\n"
+                        f"{'Temperature Start Exp:':<{w}} {temp_start} K\n"
+                        f"{'Temperature End Exp:':<{w}} {temp_end} K\n"
+                        f"{'Temperature Cernox:':<{w}} {ls335.tc_temperature('B')} K\n"
+                        f"{'Record Length:':<{w}} {real_length} Points\n"
+                        f"{'Time Resolution:':<{w}} {t_res}\n"
+                        f"{'-'*50}\n"
+                        f"2D Data"
+                    )
+
+                    file_handler.save_data(file_save_1, np.transpose( data[0, :, :] ), header = header)
+                elif p9 == 3:
+
+                    now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
+                    temp_end = str( ls335.tc_temperature('A') )
+
+                    header = (
+                        f"{'Date:':<{w}} {now}\n"
+                        f"{'Experiment:':<{w}} Time Resolved EPR Spectrum\n"
+                        f"{'Start Field:':<{w}} {START_FIELD} G\n"
+                        f"{'End Field:':<{w}} {END_FIELD} G\n"
+                        f"{'Field Step:':<{w}} {FIELD_STEP} G\n"
+                        f"{'Off-Resonance Field:':<{w}} {OFFRES_FIELD} G\n"
+                        f"{'Off-Resonance Averages:':<{w}} {p6}\n"
+                        f"{'Number of Averages:':<{w}} {p8}\n"
+                        f"{'Number of Scans:':<{w}} {SCANS}\n"
+                        f"{'Temperature Start Exp:':<{w}} {temp_start} K\n"
+                        f"{'Temperature End Exp:':<{w}} {temp_end} K\n"
+                        f"{'Temperature Cernox:':<{w}} {ls335.tc_temperature('B')} K\n"
+                        f"{'Record Length:':<{w}} {real_length} Points\n"
+                        f"{'Time Resolution:':<{w}} {t_res}\n"
+                        f"{'-'*50}\n"
+                        f"2D Data"
+                    )
+
+                    file_handler.save_data(file_save_1, np.transpose( data[0, :, :] ), header = header)
+                    file_handler.save_data(file_save_3, np.transpose( data[3, :, :] ), header = header)
 
                 while field > OFFRES_FIELD:
-                    field = bh15.magnet_field( field - initialization_step )
+                    field = bh15.magnet_field( field - initialization_step)
                     field = field - initialization_step
-                    general.wait('30 ms')
-                
                 field = bh15.magnet_field( OFFRES_FIELD )
                 field = OFFRES_FIELD
-                
-                if p9 == 1 and p11 == 1:
-                    if j == 1:
-                        file_handler.save_data(file_save_1, np.transpose( data[0, :, :] ), header = header)
-                    else:
-                        file_save_j = file_save_1.split('.csv')[0] + f'_{j}_scans.csv'
-                        file_handler.save_data(file_save_j, np.transpose( data[0, :, :] ), header = header)
 
-                j += 1
+                conn.send( ('', f'Script {p2} finished') )
+                general.wait('200 ms')
+                conn.close()
 
-            # finish succesfully
-            self.command = 'exit'
+        except BaseException as e:
+            exc_info = f"{type(e)} \n{str(e)} \n{traceback.format_exc()}"
+            conn.send( ('Error', exc_info) )
 
-        if self.command == 'exit':
-            general.message('Script finished')
-            
-            temp_end = str( ls335.tc_temperature('B') )
-            if p9 == 1 and p11 == 0:
-                ##t_res = 1
-                header = 'Date: ' + str(datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")) + '\n' + 'Time Resolved EPR Spectrum\n' + \
-                            'Start Field: ' + str(START_FIELD) + ' G \n' + 'End Field: ' + str(END_FIELD) + ' G \n' + \
-                            'Field Step: ' + str(FIELD_STEP) + ' G \n' + \
-                            'Off Resonance Field: ' + str(OFFRES_FIELD) + ' G \n' + \
-                            'Number of Off Resonance Averages: ' + str(p6) + '\n' + \
-                            'Number of Averages: ' + str(p8) + '\n' + \
-                            'Number of Scans: ' + str(SCANS) + '\n' + \
-                            'Temperature Start Exp: ' + str( temp_start ) + ' K\n' +\
-                            'Temperature End Exp: ' + str( temp_end ) + ' K\n' +\
-                            'Record Length: ' + str(real_length) + ' Points\n' + 'Time Resolution: ' + str(t_res) + ' us\n' + \
-                            'Frequency: ' + str( round( ag53131a.freq_counter_frequency('CH3') / 1000000, 6) ) + ' GHz\n' + '2D Data'
+    def exp_test(self, conn, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12):
+        """
+        function that contains experimental script
+        """
+        # [                  1,                 2,                  3,                    4, ]
+        #self.cur_offres_field, self.cur_exp_name, self.cur_end_field, self.cur_start_field, 
+        # [          5,                   6,              7,           8,                9,               10,             11,       12 ]
+        #self.cur_step, self.cur_ave_offres, self.cur_scan, self.cur_ave, self.cur_num_osc, self.cur_trig_ch, self.save_scan, self.two_side,
 
-                file_handler.save_data(file_save_1, np.transpose( data[0, :, :] ), header = header)
+        # should be inside dig_on() function;
+        # freezing after digitizer restart otherwise
+        import traceback
+
+        sys.argv = ['', 'test']
+
+        try:
+            import datetime
+            import atomize.general_modules.general_functions as general
+            general.test_flag = 'test'
+            import atomize.device_modules.Keysight_3000_Xseries as key
+            #import atomize.device_modules.BH_15 as itc
+            import pyqtgraph as pg
+            import atomize.device_modules.ITC_FC as itc
+            import atomize.device_modules.Lakeshore_335 as ls
+            import atomize.general_modules.csv_opener_saver as openfile
+
+            w = 30
+            file_handler = openfile.Saver_Opener()
+            process = 'None'
+            ls335 = ls.Lakeshore_335()
+            a2012 = key.Keysight_3000_Xseries()
+            #bh15 = itc.BH_15()
+            bh15 = itc.ITC_FC()
+
+            a2012.oscilloscope_trigger_channel(p10)
+            a2012.oscilloscope_acquisition_type('Average')
+            a2012.oscilloscope_run_stop()
+
+            a2012.oscilloscope_record_length( 4000 )
+            try:
+                real_length = a2012.oscilloscope_record_length( )
+            except ZeroDivisionError:
+                general.message('Incorrect Trigger Channel')
+
+            ##t_res = round( a2012.oscilloscope_timebase() / real_length, 7 )    # in us
+            ##t_res_rough = round( t_res, 3 )
+            t_res = a2012.oscilloscope_time_resolution()
+            t_step = float(f"{pg.siEval(t_res):.4g}")
+
+            ##real_length = 4000
+
+            # parameters for initial initialization
+            field = 100
+            START_FIELD = p4
+            END_FIELD = p3
+            FIELD_STEP = p5
+            OFFRES_FIELD = p1
+            initialization_step = 10
+            SCANS = p7
+            points = int( (END_FIELD - START_FIELD) / FIELD_STEP ) + 1
+
+            #bh15.magnet_setup( 100, FIELD_STEP)
+
+            if p9 == 1:
+                data = np.zeros( (2, real_length, points + 1) )
             elif p9 == 2:
+                data = np.zeros( (2, real_length, points + 1) )
+            else:
+                data = np.zeros( (4, real_length, points + 1) )
 
-                header = 'Date: ' + str(datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")) + '\n' + 'Time Resolved EPR Spectrum\n' + \
-                            'Start Field: ' + str(START_FIELD) + ' G \n' + 'End Field: ' + str(END_FIELD) + ' G \n' + \
-                            'Field Step: ' + str(FIELD_STEP) + ' G \n' + \
-                            'Off Resonance Field: ' + str(OFFRES_FIELD) + ' G \n' + \
-                            'Number of Off Resonance Averages: ' + str(p6) + '\n' + \
-                            'Number of Averages: ' + str(p8) + '\n' + \
-                            'Number of Scans: ' + str(SCANS) + '\n' + \
-                            'Temperature Start Exp: ' + str( temp_start ) + ' K\n' +\
-                            'Temperature End Exp: ' + str( temp_end ) + ' K\n' +\
-                            'Record Length: ' + str(real_length) + ' Points\n' + 'Time Resolution: ' + str(t_res) + ' us\n' + \
-                            'Frequency: ' + str( round( ag53131a.freq_counter_frequency('CH3') / 1000000, 6) ) + ' GHz\n' + '2D Data'
+            temp_start = str( ls335.tc_temperature('A') )
 
-                header_2 = 'Date: ' + str(datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")) + '\n' + 'Time Resolved EPR Spectrum\n' + \
-                            'Start Field: ' + str(START_FIELD) + ' G \n' + 'End Field: ' + str(END_FIELD) + ' G \n' + \
-                            'Field Step: ' + str(FIELD_STEP) + ' G \n' + \
-                            'Off Resonance Field: ' + str(OFFRES_FIELD) + ' G \n' + \
-                            'Number of Off Resonance Averages: ' + str(p6) + '\n' + \
-                            'Number of Averages: ' + str(p8) + '\n' + \
-                            'Number of Scans: ' + str(SCANS) + '\n' + \
-                            'Temperature Start Exp: ' + str( temp_start ) + ' K\n' +\
-                            'Temperature End Exp: ' + str( temp_end ) + ' K\n' +\
-                            'Record Length: ' + str(real_length) + ' Points\n' + 'Time Resolution: ' + str(t_res_2) + ' us\n' + \
-                            'Frequency: ' + str( round( ag53131a.freq_counter_frequency('CH3') / 1000000, 6) ) + ' GHz\n' + '2D Data'
+            # Oscilloscopes bugs
+            #a2012.oscilloscope_number_of_averages(2)
 
-                file_handler.save_data(file_save_1, np.transpose( data[0, :, :] ), header = header)
-                file_handler.save_data(file_save_2, np.transpose( data[2, :, :] ), header = header_2)
-            elif p9 == 3:
+            #a2012.oscilloscope_start_acquisition()
 
-                header = 'Date: ' + str(datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")) + '\n' + 'Time Resolved EPR Spectrum\n' + \
-                            'Start Field: ' + str(START_FIELD) + ' G \n' + 'End Field: ' + str(END_FIELD) + ' G \n' + \
-                            'Field Step: ' + str(FIELD_STEP) + ' G \n' + \
-                            'Off Resonance Field: ' + str(OFFRES_FIELD) + ' G \n' + \
-                            'Number of Off Resonance Averages: ' + str(p6) + '\n' + \
-                            'Number of Averages: ' + str(p8) + '\n' + \
-                            'Number of Scans: ' + str(SCANS) + '\n' + \
-                            'Temperature Start Exp: ' + str( temp_start ) + ' K\n' +\
-                            'Temperature End Exp: ' + str( temp_end ) + ' K\n' +\
-                            'Record Length: ' + str(real_length) + ' Points\n' + 'Time Resolution: ' + str(t_res) + ' us\n' + \
-                            'Frequency: ' + str( round( ag53131a.freq_counter_frequency('CH3') / 1000000, 6) ) + ' GHz\n' + '2D Data'
+            #if p9 == 1:
+            #    y = a2012.oscilloscope_get_curve('CH1')
 
-                header_2 = 'Date: ' + str(datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")) + '\n' + 'Time Resolved EPR Spectrum\n' + \
-                            'Start Field: ' + str(START_FIELD) + ' G \n' + 'End Field: ' + str(END_FIELD) + ' G \n' + \
-                            'Field Step: ' + str(FIELD_STEP) + ' G \n' + \
-                            'Off Resonance Field: ' + str(OFFRES_FIELD) + ' G \n' + \
-                            'Number of Off Resonance Averages: ' + str(p6) + '\n' + \
-                            'Number of Averages: ' + str(p8) + '\n' + \
-                            'Number of Scans: ' + str(SCANS) + '\n' + \
-                            'Temperature Start Exp: ' + str( temp_start ) + ' K\n' +\
-                            'Temperature End Exp: ' + str( temp_end ) + ' K\n' +\
-                            'Record Length: ' + str(real_length) + ' Points\n' + 'Time Resolution: ' + str(t_res_2) + ' us\n' + \
-                            'Frequency: ' + str( round( ag53131a.freq_counter_frequency('CH3') / 1000000, 6) ) + ' GHz\n' + '2D Data'
+            #conn.send(('Open', ''))
+            
+            #while True:
+            #    if conn.poll():
+            #        msg = conn.recv()
+            #        if msg.startswith('FL'):
+            #            file_save_1 = msg[2:]
+            #            break
+            #    general.wait('200 ms')
 
-                file_handler.save_data(file_save_1, np.transpose( data[0, :, :] ), header = header)
-                file_handler.save_data(file_save_2, np.transpose( data[2, :, :] ), header = header_2)
-                file_handler.save_data(file_save_3, np.transpose( data[4, :, :] ), header = header)
+            #if p9 == 1:
+            #    pass
+            #elif p9 == 2:
+            #    pass
+            #elif p9 == 3:
+            #    file_save_3 = f"{file_save_1[0:-4]}_pulse.csv"
 
-            while field > OFFRES_FIELD:
-                field = bh15.magnet_field( field - initialization_step )
-                field = field - initialization_step
-            field = bh15.magnet_field( OFFRES_FIELD )
-            field = OFFRES_FIELD
+            # the idea of automatic and dynamic changing is
+            # sending a new value of repetition rate via self.command
+            # in each cycle we will check the current value of self.command
+            # self.command = 'exit' will stop the script
+            while self.command != 'exit':
+                # Start of experiment
+                while field < OFFRES_FIELD:
+                    field = bh15.magnet_field( field + initialization_step)
+                    field = field + initialization_step
+                    general.wait('30 ms')
+
+                # Data saving
+                #j = 1
+                if p9 == 1:
+
+                    now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
+                    temp_end = str( ls335.tc_temperature('A') )
+
+                    header = (
+                        f"{'Date:':<{w}} {now}\n"
+                        f"{'Experiment:':<{w}} Time Resolved EPR Spectrum\n"
+                        f"{'Start Field:':<{w}} {START_FIELD} G\n"
+                        f"{'End Field:':<{w}} {END_FIELD} G\n"
+                        f"{'Field Step:':<{w}} {FIELD_STEP} G\n"
+                        f"{'Off-Resonance Field:':<{w}} {OFFRES_FIELD} G\n"
+                        f"{'Off-Resonance Averages:':<{w}} {p6}\n"
+                        f"{'Number of Averages:':<{w}} {p8}\n"
+                        f"{'Number of Scans:':<{w}} {SCANS}\n"
+                        f"{'Temperature Start Exp:':<{w}} {temp_start} K\n"
+                        f"{'Temperature End Exp:':<{w}} {temp_end} K\n"
+                        f"{'Temperature Cernox:':<{w}} {ls335.tc_temperature('B')} K\n"
+                        f"{'Record Length:':<{w}} {real_length} Points\n"
+                        f"{'Time Resolution:':<{w}} {t_res}\n"
+                        f"{'-'*50}\n"
+                        f"2D Data"
+                    )
+
+                    #file_handler.save_header(file_save_1, header = header, mode = 'w')
+                elif p9 == 2:
+
+                    now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
+                    temp_end = str( ls335.tc_temperature('A') )
+
+                    header = (
+                        f"{'Date:':<{w}} {now}\n"
+                        f"{'Experiment:':<{w}} Time Resolved EPR Spectrum\n"
+                        f"{'Start Field:':<{w}} {START_FIELD} G\n"
+                        f"{'End Field:':<{w}} {END_FIELD} G\n"
+                        f"{'Field Step:':<{w}} {FIELD_STEP} G\n"
+                        f"{'Off-Resonance Field:':<{w}} {OFFRES_FIELD} G\n"
+                        f"{'Off-Resonance Averages:':<{w}} {p6}\n"
+                        f"{'Number of Averages:':<{w}} {p8}\n"
+                        f"{'Number of Scans:':<{w}} {SCANS}\n"
+                        f"{'Temperature Start Exp:':<{w}} {temp_start} K\n"
+                        f"{'Temperature End Exp:':<{w}} {temp_end} K\n"
+                        f"{'Temperature Cernox:':<{w}} {ls335.tc_temperature('B')} K\n"
+                        f"{'Record Length:':<{w}} {real_length} Points\n"
+                        f"{'Time Resolution:':<{w}} {t_res}\n"
+                        f"{'-'*50}\n"
+                        f"2D Data"
+                    )
+
+                    #file_handler.save_header(file_save_1, header = header, mode = 'w')
+
+                elif p9 == 3:
+
+                    now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
+                    temp_end = str( ls335.tc_temperature('A') )
+
+                    header = (
+                        f"{'Date:':<{w}} {now}\n"
+                        f"{'Experiment:':<{w}} Time Resolved EPR Spectrum\n"
+                        f"{'Start Field:':<{w}} {START_FIELD} G\n"
+                        f"{'End Field:':<{w}} {END_FIELD} G\n"
+                        f"{'Field Step:':<{w}} {FIELD_STEP} G\n"
+                        f"{'Off-Resonance Field:':<{w}} {OFFRES_FIELD} G\n"
+                        f"{'Off-Resonance Averages:':<{w}} {p6}\n"
+                        f"{'Number of Averages:':<{w}} {p8}\n"
+                        f"{'Number of Scans:':<{w}} {SCANS}\n"
+                        f"{'Temp Start Exp:':<{w}} {temp_start} K\n"
+                        f"{'Temp End Exp:':<{w}} {temp_end} K\n"
+                        f"{'Temperature Cernox:':<{w}} {ls335.tc_temperature('B')} K\n"
+                        f"{'Record Length:':<{w}} {real_length} Points\n"
+                        f"{'Time Resolution:':<{w}} {t_res}\n"
+                        f"{'-'*50}\n"
+                        f"2D Data"
+                    )
+
+                    #file_handler.save_header(file_save_1, header = header, mode = 'w')
+                    #file_handler.save_header(file_save_3, header = header, mode = 'w')
+
+                for j in general.scans(SCANS):
+                    if self.command == 'exit':
+                        break
+
+                    field = bh15.magnet_field( OFFRES_FIELD )
+                    field = OFFRES_FIELD
+
+                    general.wait('4000 ms')
+
+                    a2012.oscilloscope_number_of_averages(p6)
+
+                    a2012.oscilloscope_start_acquisition()
+
+                    ##ch_time = np.random.randint(250, 500, 1)
+                    if p9 == 1:
+                        y = a2012.oscilloscope_get_curve('CH1')
+                        ##y = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
+                        data[0, :, 0] = ( data[0, :, 0] * (j - 1) + y ) / j
+                        data[1, :, 0] = ( data[0, :, 0] - data[0, :, 0] )
+                        data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
+
+                    elif p9 == 2:
+                        y = a2012.oscilloscope_get_curve('CH1')
+                        ##y = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
+                        data[0, :, 0] = ( data[0, :, 0] * (j - 1) + y ) / j
+                        data[1, :, 0] = ( data[0, :, 0] - data[0, :, 0] )
+                        data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
+
+                    elif p9 == 3:
+                        y = a2012.oscilloscope_get_curve('CH1')
+                        ##y = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
+                        data[0, :, 0] = ( data[0, :, 0] * (j - 1) + y ) / j
+                        data[1, :, 0] = ( data[0, :, 0] - data[0, :, 0] )
+                        data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
+
+                        y3 = a2012.oscilloscope_get_curve('CH2')
+                        ##y3 = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
+                        data[2, :, 0] = ( data[2, :, 0] * (j - 1) + y3 ) / j
+
+                    while field < START_FIELD:
+                        field = bh15.magnet_field( field + initialization_step)
+                        general.wait('30 ms')
+                        field = field + initialization_step
+
+                    field = bh15.magnet_field( START_FIELD )
+                    field = START_FIELD
+
+                    general.wait('4000 ms')
+
+                    a2012.oscilloscope_number_of_averages(p8)
+
+                    i = 0
+
+                    if p12 == 0:
+                        j = j
+                    elif p12 == 1:
+                        j = 2*j - 1
+
+                    while field <= END_FIELD:
+                        
+                        if self.command == 'exit':
+                            break
+
+                        general.wait('80 ms')
+
+                        a2012.oscilloscope_start_acquisition()
+
+
+                        ##ch_time = np.random.randint(250, 500, 1)
+                        if p9 == 1:
+                            y = a2012.oscilloscope_get_curve('CH1')
+                            ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
+
+                            data[0, :, i+1] = ( data[0, :, i+1] * (j - 1) + y ) / j
+                            data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
+                            data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
+
+                        elif p9 == 2:
+                            y = a2012.oscilloscope_get_curve('CH1')
+                            ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
+
+                            data[0, :, i+1] = ( data[0, :, i+1] * (j - 1) + y ) / j
+                            data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
+                            data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
+
+                        elif p9 == 3:
+                            y = a2012.oscilloscope_get_curve('CH1')
+                            ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
+                            y3 = a2012.oscilloscope_get_curve('CH2')
+                            ##y3 = 1 + 100*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
+
+                            data[0, :, i+1] = ( data[0, :, i+1] * (j - 1) + y ) / j
+                            data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
+                            data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
+                            data[3, :, i+1] = ( data[3, :, i+1] * (j - 1) + y3 ) / j
+
+                        #start_time = time.time()
+
+                        #if p12 == 0:
+                        #    conn.send( ('Status', int( 100 * ((j - 1) * points + i + 1) / points / SCANS)) )
+                        #elif p12 == 1:
+                        #    conn.send( ('Status', int( 100 * ((j - 1) * points + i + 1) / points / SCANS / 2)) )
+
+
+                        process = general.plot_2d( p2, data[:,:,1:points+1],  xname='Time', start_step=( (0, t_step), (START_FIELD, FIELD_STEP) ), xscale='s', yname='Field', yscale='G', zname='Intensity', zscale='V', pr = process, text = 'S / F: ' + str(j) + ' / ' + str(field))
+
+                        #general.message( str( time.time() - start_time ) )
+
+                        field = round( (FIELD_STEP + field), 3 )
+                        bh15.magnet_field(field)
+
+                        # check our polling data
+                        if self.command[0:2] == 'SC':
+                            SCANS = int( self.command[2:] )
+                            self.command = 'start'
+                        elif self.command == 'exit':
+                            break
+                        
+                        if conn.poll() == True:
+                            self.command = conn.recv()
+
+                        i += 1
+
+                    if p12 == 1:
+
+                        while field > START_FIELD:
+                            
+                            if self.command == 'exit':
+                                break
+
+                            i -= 1
+                            general.wait('80 ms')
+
+                            field = round( (-FIELD_STEP + field), 3 )
+                            bh15.magnet_field(field)
+
+                            a2012.oscilloscope_start_acquisition()
+
+                            ##ch_time = np.random.randint(250, 500, 1)
+                            if p9 == 1:
+                                y = a2012.oscilloscope_get_curve('CH1')
+                                ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
+
+                                data[0, :, i+1] = ( data[0, :, i+1] * j + y ) / ( j + 1 )
+                                data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
+                                data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
+
+                            elif p9 == 2:
+                                y = a2012.oscilloscope_get_curve('CH1')
+                                ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
+
+                                data[0, :, i+1] = ( data[0, :, i+1] * j + y ) / ( j + 1 )
+                                data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
+                                data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
+
+                            elif p9 == 3:
+                                y = a2012.oscilloscope_get_curve('CH1')
+                                ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
+                                y3 = a2012.oscilloscope_get_curve('CH2')
+                                ##y3 = 1 + 100*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
+
+                                data[0, :, i+1] = ( data[0, :, i+1] * j + y ) / ( j + 1 )
+                                data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
+                                data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
+                                data[3, :, i+1] = ( data[3, :, i+1] * j + y3 ) / ( j + 1 )
+
+                            #start_time = time.time()
+                            #conn.send( ('Status', int( 100 * (( j ) * points - i + points) / points / SCANS / 2)) )
+
+                            process = general.plot_2d( p2, data[:,:,1:points+1],  xname='Time', start_step=( (0, t_step), (START_FIELD, FIELD_STEP) ), xscale='s', yname='Field', yscale='G', zname='Intensity', zscale='V', pr = process, text = 'S / F: ' + str(j) + ' / ' + str(field))
+
+                            #general.message( str( time.time() - start_time ) )
+
+                            # check our polling data
+                            if self.command[0:2] == 'SC':
+                                SCANS = int( self.command[2:] )
+                                self.command = 'start'
+                            elif self.command == 'exit':
+                                break
+                            
+                            if conn.poll() == True:
+                                self.command = conn.recv()
+
+
+                    if j != SCANS:
+                        while field > OFFRES_FIELD:
+                            field = bh15.magnet_field( field - initialization_step)
+                            field = field - initialization_step
+                            general.wait('30 ms')
+                    
+                        field = bh15.magnet_field( OFFRES_FIELD )
+                        field = OFFRES_FIELD
+                    
+                    #if p9 == 1 and p11 == 1 and p12 == 0:
+                        #if j == 1:
+                            #file_handler.save_data(file_save_1, np.transpose( data[0, :, :] ), header = header)
+                        #else:
+                            #file_save_j = file_save_1.split('.csv')[0] + f'_{j}_scans.csv'
+                            #file_handler.save_data(file_save_j, np.transpose( data[0, :, :] ), header = header)
+
+                    #j += 1
+
+                # finish succesfully
+                self.command = 'exit'
+
+            if self.command == 'exit':
+                #general.message(f'Script {p2} finished')
+                
+                temp_end = str( ls335.tc_temperature('B') )
+                if p9 == 1 and p11 == 0:
+                    ##t_res = 1
+                    now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
+                    temp_end = str( ls335.tc_temperature('A') )
+
+                    header = (
+                        f"{'Date:':<{w}} {now}\n"
+                        f"{'Experiment:':<{w}} Time Resolved EPR Spectrum\n"
+                        f"{'Start Field:':<{w}} {START_FIELD} G\n"
+                        f"{'End Field:':<{w}} {END_FIELD} G\n"
+                        f"{'Field Step:':<{w}} {FIELD_STEP} G\n"
+                        f"{'Off-Resonance Field:':<{w}} {OFFRES_FIELD} G\n"
+                        f"{'Off-Resonance Averages:':<{w}} {p6}\n"
+                        f"{'Number of Averages:':<{w}} {p8}\n"
+                        f"{'Number of Scans:':<{w}} {SCANS}\n"
+                        f"{'Temperature Start Exp:':<{w}} {temp_start} K\n"
+                        f"{'Temperature End Exp:':<{w}} {temp_end} K\n"
+                        f"{'Temperature Cernox:':<{w}} {ls335.tc_temperature('B')} K\n"
+                        f"{'Record Length:':<{w}} {real_length} Points\n"
+                        f"{'Time Resolution:':<{w}} {t_res}\n"
+                        f"{'-'*50}\n"
+                        f"2D Data"
+                    )
+
+                    #file_handler.save_data(file_save_1, np.transpose( data[0, :, :] ), header = header)
+                elif p9 == 2:
+
+                    now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
+                    temp_end = str( ls335.tc_temperature('A') )
+
+                    header = (
+                        f"{'Date:':<{w}} {now}\n"
+                        f"{'Experiment:':<{w}} Time Resolved EPR Spectrum\n"
+                        f"{'Start Field:':<{w}} {START_FIELD} G\n"
+                        f"{'End Field:':<{w}} {END_FIELD} G\n"
+                        f"{'Field Step:':<{w}} {FIELD_STEP} G\n"
+                        f"{'Off-Resonance Field:':<{w}} {OFFRES_FIELD} G\n"
+                        f"{'Off-Resonance Averages:':<{w}} {p6}\n"
+                        f"{'Number of Averages:':<{w}} {p8}\n"
+                        f"{'Number of Scans:':<{w}} {SCANS}\n"
+                        f"{'Temperature Start Exp:':<{w}} {temp_start} K\n"
+                        f"{'Temperature End Exp:':<{w}} {temp_end} K\n"
+                        f"{'Temperature Cernox:':<{w}} {ls335.tc_temperature('B')} K\n"
+                        f"{'Record Length:':<{w}} {real_length} Points\n"
+                        f"{'Time Resolution:':<{w}} {t_res}\n"
+                        f"{'-'*50}\n"
+                        f"2D Data"
+                    )
+
+                    #file_handler.save_data(file_save_1, np.transpose( data[0, :, :] ), header = header)
+                elif p9 == 3:
+
+                    now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
+                    temp_end = str( ls335.tc_temperature('A') )
+
+                    header = (
+                        f"{'Date:':<{w}} {now}\n"
+                        f"{'Experiment:':<{w}} Time Resolved EPR Spectrum\n"
+                        f"{'Start Field:':<{w}} {START_FIELD} G\n"
+                        f"{'End Field:':<{w}} {END_FIELD} G\n"
+                        f"{'Field Step:':<{w}} {FIELD_STEP} G\n"
+                        f"{'Off-Resonance Field:':<{w}} {OFFRES_FIELD} G\n"
+                        f"{'Off-Resonance Averages:':<{w}} {p6}\n"
+                        f"{'Number of Averages:':<{w}} {p8}\n"
+                        f"{'Number of Scans:':<{w}} {SCANS}\n"
+                        f"{'Temperature Start Exp:':<{w}} {temp_start} K\n"
+                        f"{'Temperature End Exp:':<{w}} {temp_end} K\n"
+                        f"{'Temperature Cernox:':<{w}} {ls335.tc_temperature('B')} K\n"
+                        f"{'Record Length:':<{w}} {real_length} Points\n"
+                        f"{'Time Resolution:':<{w}} {t_res}\n"
+                        f"{'-'*50}\n"
+                        f"2D Data"
+                    )
+
+                    #file_handler.save_data(file_save_1, np.transpose( data[0, :, :] ), header = header)
+                    #file_handler.save_data(file_save_3, np.transpose( data[3, :, :] ), header = header)
+
+                while field > OFFRES_FIELD:
+                    field = bh15.magnet_field( field - initialization_step)
+                    field = field - initialization_step
+                field = bh15.magnet_field( OFFRES_FIELD )
+                field = OFFRES_FIELD
+
+                conn.send( ('test', f'Script {p2} finished') )
+                conn.close()
+
+        except BaseException as e:
+            exc_info = f"{type(e)} \n{str(e)} \n{traceback.format_exc()}"
+            conn.send( ('Error', exc_info) )
 
 def main():
     """
     A function to run the main window of the programm.
     """
-    app = QtWidgets.QApplication(sys.argv)
+    app = QApplication(sys.argv)
+    from atomize.general_modules.gui_style import apply_app_style
+    apply_app_style(app, app_id='Atomize.ITC.TRControl')
     main = MainWindow()
     main.show()
     sys.exit(app.exec())
