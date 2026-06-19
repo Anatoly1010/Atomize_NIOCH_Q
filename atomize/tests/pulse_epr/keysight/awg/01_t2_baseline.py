@@ -10,7 +10,7 @@ import atomize.device_modules.Spectrum_M4I_6631_X8 as spectrum
 import atomize.device_modules.Mikran_Q_band_MW_bridge as mwBridge
 ##import atomize.device_modules.Lakeshore_335 as ls
 ##import atomize.device_modules.BH_15 as bh
-import atomize.general_modules.csv_opener_saver_tk_kinter as openfile
+import atomize.general_modules.csv_opener_saver as openfile
 
 ### Experimental parameters
 POINTS = 21

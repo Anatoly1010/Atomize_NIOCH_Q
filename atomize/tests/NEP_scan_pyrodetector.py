@@ -5,7 +5,7 @@ from datetime import datetime
 import atomize.general_modules.general_functions as general
 import atomize.device_modules.Keysight_3000_Xseries as key
 import atomize.device_modules.SR_860 as sr
-import atomize.general_modules.csv_opener_saver_tk_kinter as openfile
+import atomize.general_modules.csv_opener_saver as openfile
 
 sr860 = sr.SR_860()
 t3034 = key.Keysight_3000_Xseries()

@@ -1,7 +1,7 @@
 import datetime
 import numpy as np
 import atomize.general_modules.general_functions as general
-import atomize.general_modules.csv_opener_saver_tk_kinter as openfile
+import atomize.general_modules.csv_opener_saver as openfile
 import inversion as inv
 
 file_handler = openfile.Saver_Opener()

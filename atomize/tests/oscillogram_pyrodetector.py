@@ -1,7 +1,7 @@
 import numpy as np
 import atomize.general_modules.general_functions as general
 import atomize.device_modules.Keysight_2000_Xseries as key
-import atomize.general_modules.csv_opener_saver_tk_kinter as openfile
+import atomize.general_modules.csv_opener_saver as openfile
 
 a2012 = key.Keysight_2000_Xseries()
 file_handler = openfile.Saver_Opener()

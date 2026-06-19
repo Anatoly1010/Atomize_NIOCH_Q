@@ -9,7 +9,7 @@ import atomize.device_modules.Keysight_2000_Xseries as key
 import atomize.device_modules.Mikran_X_band_MW_bridge_v2 as mwBridge
 import atomize.device_modules.ITC_FC as itc
 import atomize.device_modules.Lakeshore_335 as ls
-import atomize.general_modules.csv_opener_saver_tk_kinter as openfile
+import atomize.general_modules.csv_opener_saver as openfile
 
 ### Experimental parameters
 POINTS = 40

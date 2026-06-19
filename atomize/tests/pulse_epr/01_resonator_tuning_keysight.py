@@ -5,7 +5,7 @@ import atomize.general_modules.general_functions as general
 import atomize.device_modules.Keysight_3000_Xseries as t3034
 import atomize.device_modules.Mikran_Q_band_MW_bridge as mwBridge
 import atomize.device_modules.PB_Micran as pb_pro
-#import atomize.general_modules.csv_opener_saver_tk_kinter as openfile
+#import atomize.general_modules.csv_opener_saver as openfile
 
 t3034 = t3034.Keysight_3000_Xseries()
 pb = pb_pro.PB_Micran()

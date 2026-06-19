@@ -1,7 +1,7 @@
 import time
 import numpy as np
 import atomize.general_modules.general_functions as general
-import atomize.general_modules.csv_opener_saver_tk_kinter as openfile
+import atomize.general_modules.csv_opener_saver as openfile
 
 #start_time = time.time()
 #open1d = openfile.Saver_Opener()

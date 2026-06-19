@@ -328,7 +328,7 @@ class Worker(QWidget):
         #import atomize.device_modules.Spectrum_M4I_4450_X8 as spectrum
         ###import atomize.device_modules.ITC_FC as itc
         ###import atomize.device_modules.Lakeshore_335 as ls
-        import atomize.general_modules.csv_opener_saver_tk_kinter as openfile
+        import atomize.general_modules.csv_opener_saver as openfile
 
         file_handler = openfile.Saver_Opener()
         ###ls335 = ls.Lakeshore_335()
