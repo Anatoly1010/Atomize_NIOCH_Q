@@ -5,10 +5,9 @@ import os
 import sys
 import math
 from copy import deepcopy
-from operator import iconcat
-from functools import reduce
 from itertools import groupby, chain
 import numpy as np
+import atomize.main.local_config as lconf
 import atomize.device_modules.config.config_utils as cutil
 import atomize.general_modules.general_functions as general
 import atomize.general_modules.spinapi as spinapi
@@ -27,8 +26,8 @@ class PB_ESR_500_Pro:
 
         #### Inizialization
         # setting path to *.ini file
-        self.path_current_directory = os.path.dirname(__file__)
-        self.path_config_file = os.path.join(self.path_current_directory, 'config','PB_ESR_500_pro_config.ini')
+        self.path_current_directory = lconf.load_config_device()
+        self.path_config_file = os.path.join(self.path_current_directory, 'PB_ESR_500_pro_config.ini')
 
         # configuration data
         #config = cutil.read_conf_util(self.path_config_file)
@@ -38,7 +37,7 @@ class PB_ESR_500_Pro:
         # only awg regime with automatic awg_trigger?
 
         # Channel assignments
-        self.ch0 = self.specific_parameters['ch0'] # TRIGGER
+        self.ch0 = self.specific_parameters['ch0'] # DETECTION
         self.ch1 = self.specific_parameters['ch1'] # AMP_ON
         self.ch2 = self.specific_parameters['ch2'] # LNA_PROTECT
         self.ch3 = self.specific_parameters['ch3'] # MW
@@ -47,7 +46,6 @@ class PB_ESR_500_Pro:
         self.ch6 = self.specific_parameters['ch6'] # TRIGGER_AWG
         self.ch7 = self.specific_parameters['ch7'] # AWG
         self.ch8 = self.specific_parameters['ch8'] # LASER
-        self.ch9 = self.specific_parameters['ch9'] # SYNT2
 
         # AWG pulse will be substitued by a shifted RECT_AWG pulse and AMP_ON pulse
         # TRIGGER_AWG is used to trigger AWG card
@@ -55,8 +53,11 @@ class PB_ESR_500_Pro:
         self.timebase_dict = {'s': 1000000000, 'ms': 1000000, 'us': 1000, 'ns': 1, }
         # -Y for Mikran bridge is simutaneously turned on -X; +Y
         # that is why there is no -Y channel instead we add both -X and +Y pulses
-        self.channel_dict = {self.ch0: 0, self.ch1: 1, self.ch2: 2, self.ch3: 3, self.ch4: 4, self.ch5: 5, \
-                        self.ch6: 6, self.ch7: 7, self.ch8: 8, self.ch9: 9, 'CH10': 10, 'CH11': 11,\
+        # 'DETECTION' shares the physical digitizer-trigger line (ch0) but, unlike
+        # the plain 'TRIGGER' channel, it carries the acquisition phase_list used
+        # by pulser_acquisition_cycle() (mirrors Insys_FPGA's DETECTION channel).
+        self.channel_dict = {self.ch0: 0, 'DETECTION': 0, self.ch1: 1, self.ch2: 2, self.ch3: 3, self.ch4: 4, self.ch5: 5, \
+                        self.ch6: 6, self.ch7: 7, self.ch8: 8, 'CH9': 9, 'CH10': 10, 'CH11': 11,\
                         'CH12': 12, 'CH13': 13, 'CH14': 14, 'CH15': 15, 'CH16': 16, 'CH17': 17,\
                         'CH18': 18, 'CH19': 19, 'CH20': 20, 'CH21': 21, }
 
@@ -74,7 +75,7 @@ class PB_ESR_500_Pro:
 
         # a constant that use to overcome short instruction for our diagonal amp_on and mw pulses
         # see also add_amp_on_pulses() function; looking for pulses with +-overlap_amp_lna_mw overlap
-        self.overlap_amp_lna_mw = 5 # in clock ### it was 5; 06.03.2023
+        self.overlap_amp_lna_mw = 5 # in clock ### it was 6; 06.10.2021
 
         # after all manupulations with diagonal amp_on pulses there is a variant
         # when we use several mw pulses with app. 40 ns distance and with the phase different from
@@ -122,6 +123,7 @@ class PB_ESR_500_Pro:
             #pb_core_clock(self.clock)
             self.pulse_array = []
             self.phase_array_length = []
+            self.detection_phase_list = []
             self.pulse_name_array = []
             self.pulse_array_init = []
             self.rep_rate = (self.repetition_rate, )
@@ -132,17 +134,13 @@ class PB_ESR_500_Pro:
             self.current_phase_index = 0
             self.awg_pulses = 0
             self.phase_pulses = 0
-            self.instr_from_file = 0
-            self.iterator_of_updates = 0
-            # Default synt for AWG channel
-            self.synt_number = 2
 
         elif self.test_flag == 'test':
-            open('instructions.out', 'w').close()
             self.test_rep_rate = '2 Hz'
             
             self.pulse_array = []
             self.phase_array_length = []
+            self.detection_phase_list = []
             self.pulse_name_array = []
             self.pulse_array_init = []
             self.rep_rate = (self.repetition_rate, )
@@ -153,16 +151,13 @@ class PB_ESR_500_Pro:
             self.current_phase_index = 0
             self.awg_pulses = 0
             self.phase_pulses = 0
-            self.instr_from_file = 0
-            # Default synt for AWG channel
-            self.synt_number = 2
 
     # Module functions
     def pulser_name(self):
         answer = 'PB ESR 500 Pro'
         return answer
 
-    def pulser_pulse(self, name = 'P0', channel = 'TRIGGER', start = '0 ns', length = '100 ns', \
+    def pulser_pulse(self, name = 'P0', channel = 'DETECTION', start = '0 ns', length = '100 ns', \
         delta_start = '0 ns', length_increment = '0 ns', phase_list = []):
         """
         A function that added a new pulse at specified channel. The possible arguments:
@@ -181,6 +176,9 @@ class PB_ESR_500_Pro:
             # for correcting AMP_ON (PB restriction in 10 ns minimal instruction) according to phase pulses
             if channel == 'MW':
                 self.phase_array_length.append(len(list(phase_list)))
+            elif channel == 'DETECTION':
+                # acquisition phase cycle declared on the detection pulse
+                self.detection_phase_list = list(phase_list)
 
         elif self.test_flag == 'test':
 
@@ -190,8 +188,11 @@ class PB_ESR_500_Pro:
             # phase_list's length
             if channel == 'MW':
                 self.phase_array_length.append(len(list(phase_list)))
-            elif channel == 'TRIGGER':
-                assert( len(list(phase_list)) ) == 0, 'TRIGGER pulse should not have phase'
+            elif channel == 'DETECTION':
+                # acquisition phase cycle declared on the detection pulse; its
+                # length must match the MW phase cycle (checked in next_phase).
+                self.detection_phase_list = list(phase_list)
+                self.phase_array_length.append(len(self.detection_phase_list))
 
             # Checks
             # two equal names
@@ -210,7 +211,7 @@ class PB_ESR_500_Pro:
                 assert(p_length >= self.min_pulse_length), 'Pulse is shorter than minimum available length (' + str(self.min_pulse_length) +' ns)'
                 assert(p_length < self.max_pulse_length), 'Pulse is longer than maximum available length (' + str(self.max_pulse_length) +' ns)'
             else:
-                assert( 1 == 2 ), 'Incorrect time dimension (s, ms, us, ns)'
+                assert( 1 == 2 ), 'Incorrect time; time: int + [" ms", " us", " ns"]'
 
             temp_start = start.split(" ")
             if temp_start[1] in self.timebase_dict:
@@ -219,7 +220,7 @@ class PB_ESR_500_Pro:
                 assert(p_start % 2 == 0), 'Pulse start should be divisible by 2'
                 assert(p_start >= 0), 'Pulse start is a negative number'
             else:
-                assert( 1 == 2 ), 'Incorrect time dimension (s, ms, us, ns)'
+                assert( 1 == 2 ), 'Incorrect time; time: int + [" ms", " us", " ns"]'
 
             temp_delta_start = delta_start.split(" ")
             if temp_delta_start[1] in self.timebase_dict:
@@ -228,7 +229,7 @@ class PB_ESR_500_Pro:
                 assert(p_delta_start % 2 == 0), 'Pulse delta start should be divisible by 2'
                 assert(p_delta_start >= 0), 'Pulse delta start is a negative number'
             else:
-                assert( 1 == 2 ), 'Incorrect time dimension (s, ms, us, ns)'
+                assert( 1 == 2 ), 'Incorrect time; time: int + [" ms", " us", " ns"]'
 
             temp_length_increment = length_increment.split(" ")
             if temp_length_increment[1] in self.timebase_dict:
@@ -236,9 +237,9 @@ class PB_ESR_500_Pro:
                 p_length_increment = coef*float(temp_length_increment[0])
                 assert(p_length_increment % 2 == 0), 'Pulse length increment should be divisible by 2'
                 assert (p_length_increment >= 0 and p_length_increment < self.max_pulse_length), \
-                'Pulse length increment is longer than maximum available length or negative'
+                    'Pulse length increment is longer than maximum available length or negative'
             else:
-                assert( 1 == 2 ), 'Incorrect time dimension (s, ms, us, ns)'
+                assert( 1 == 2 ), 'Incorrect time; time: int + [" ms", " us", " ns"]'
 
             if channel in self.channel_dict:
                 if self.auto_defense == 'False':
@@ -255,9 +256,10 @@ class PB_ESR_500_Pro:
                         # deepcopy helps to create a TRULY NEW array and not a link to the object
                         self.pulse_array_init = deepcopy(self.pulse_array)
                 else:
-                    assert(1 == 2), 'Incorrect auto_defense setting'
+                    assert(1 == 2), 'Incorrect auto_defense setting; auto_defense: ["True", "False"]'
+
             else:
-                assert (1 == 2), 'Incorrect channel name'
+                assert (1 == 2), f'Incorrect channel; channel: {list(self.channel_dict.keys())}'
 
     def pulser_redefine_start(self, *, name, start):
         """
@@ -267,6 +269,11 @@ class PB_ESR_500_Pro:
 
         def func(*, name1, name2): defines a function without default values of key arguments
         """
+        # accept parallel lists of names/values (delegates to the single-pulse path)
+        if not isinstance(name, str):
+            for nm, val in zip(name, start):
+                self.pulser_redefine_start(name=nm, start=val)
+            return
 
         if self.test_flag != 'test':
             i = 0
@@ -282,7 +289,7 @@ class PB_ESR_500_Pro:
 
         elif self.test_flag == 'test':
             i = 0
-            assert( name in self.pulse_name_array ), 'Pulse with the specified name is not defined'
+            assert( name in self.pulse_name_array ), f'Pulse with the specified name {self.pulse_name_array} is not defined'
 
             while i < len( self.pulse_array ):
                 if name == self.pulse_array[i]['name']:
@@ -295,7 +302,7 @@ class PB_ESR_500_Pro:
                         assert(p_start % 2 == 0), 'Pulse start should be divisible by 2'
                         assert(p_start >= 0), 'Pulse start is a negative number'
                     else:
-                        assert( 1 == 2 ), 'Incorrect time dimension (s, ms, us, ns)'
+                        assert( 1 == 2 ), 'Incorrect time; time: int + [" ms", " us", " ns"]'
 
                     self.pulse_array[i]['start'] = str(start)
                     self.shift_count = 1
@@ -312,6 +319,11 @@ class PB_ESR_500_Pro:
 
         def func(*, name1, name2): defines a function without default values of key arguments
         """
+        # accept parallel lists of names/values (delegates to the single-pulse path)
+        if not isinstance(name, str):
+            for nm, val in zip(name, delta_start):
+                self.pulser_redefine_delta_start(name=nm, delta_start=val)
+            return
 
         if self.test_flag != 'test':
             i = 0
@@ -327,7 +339,7 @@ class PB_ESR_500_Pro:
 
         elif self.test_flag == 'test':
             i = 0
-            assert( name in self.pulse_name_array ), 'Pulse with the specified name is not defined'
+            assert( name in self.pulse_name_array ), f'Pulse with the specified name {self.pulse_name_array} is not defined'
 
             while i < len( self.pulse_array ):
                 if name == self.pulse_array[i]['name']:
@@ -340,7 +352,7 @@ class PB_ESR_500_Pro:
                         assert(p_delta_start % 2 == 0), 'Pulse delta start should be divisible by 2'
                         assert(p_delta_start >= 0), 'Pulse delta start is a negative number'
                     else:
-                        assert( 1 == 2 ), 'Incorrect time dimension (s, ms, us, ns)'
+                        assert( 1 == 2 ), 'Incorrect time; time: int + [" ms", " us", " ns"]'
 
                     self.pulse_array[i]['delta_start'] = str(delta_start)
                     self.shift_count = 1
@@ -357,6 +369,11 @@ class PB_ESR_500_Pro:
 
         def func(*, name1, name2): defines a function without default values of key arguments
         """
+        # accept parallel lists of names/values (delegates to the single-pulse path)
+        if not isinstance(name, str):
+            for nm, val in zip(name, length_increment):
+                self.pulser_redefine_length_increment(name=nm, length_increment=val)
+            return
 
         if self.test_flag != 'test':
             i = 0
@@ -373,7 +390,7 @@ class PB_ESR_500_Pro:
         elif self.test_flag == 'test':
             i = 0
 
-            assert( name in self.pulse_name_array ), 'Pulse with the specified name is not defined'
+            assert( name in self.pulse_name_array ), f'Pulse with the specified name {self.pulse_name_array} is not defined'
 
             while i < len( self.pulse_array ):
                 if name == self.pulse_array[i]['name']:
@@ -384,9 +401,9 @@ class PB_ESR_500_Pro:
                         p_length_increment = coef*float(temp_length_increment[0])
                         assert(p_length_increment % 2 == 0), 'Pulse length increment should be divisible by 2'
                         assert (p_length_increment >= 0 and p_length_increment < self.max_pulse_length), \
-                        'Pulse length increment is longer than maximum available length or negative'
+                            'Pulse length increment is longer than maximum available length or negative'
                     else:
-                        assert( 1 == 2 ), 'Incorrect time dimension (s, ms, us, ns)'
+                        assert( 1 == 2 ), 'Incorrect time; time: int + [" ms", " us", " ns"]'
 
                     self.pulse_array[i]['length_increment'] = str(length_increment)
                     self.increment_count = 1
@@ -422,7 +439,7 @@ class PB_ESR_500_Pro:
             self.phase_pulses = 0
             # adding phase switch pulses
             for index, element in enumerate(self.pulse_array):
-                if len(list(element['phase_list'])) != 0:
+                if (len(list(element['phase_list'])) != 0) and (element['channel'] != 'DETECTION'):
                     if element['phase_list'][self.current_phase_index] == '+x':
                         #pass
                         # 21-08-2021; Correction of non updating case for ['-x', '+x']
@@ -497,7 +514,7 @@ class PB_ESR_500_Pro:
 
             self.phase_pulses = 0
             for index, element in enumerate(self.pulse_array):
-                if len(list(element['phase_list'])) != 0:
+                if (len(list(element['phase_list'])) != 0) and (element['channel'] != 'DETECTION'):
                     if element['phase_list'][self.current_phase_index] == '+x':
                         #pass
                         # 21-08-2021; Correction of non updating case for ['-x', '+x']
@@ -547,7 +564,7 @@ class PB_ESR_500_Pro:
                         self.phase_pulses += 2
 
                     else:
-                        assert( 1 == 2 ), 'Incorrect phase name (+x, -x, +y, -y)'
+                        assert( 1 == 2 ), 'Incorrect phase; phase: ["+x", "-x", "+y", "-y"]'
                 else:
                     pass
             
@@ -588,11 +605,7 @@ class PB_ESR_500_Pro:
                 #temp, visualizer = self.convert_to_bit_pulse( self.pulse_array )
                 
                 #to_spinapi = self.instruction_pulse( temp, rep_time )
-                if self.instr_from_file == 0:
-                    to_spinapi = self.split_into_parts( self.pulse_array, rep_time )
-                elif self.instr_from_file == 1:
-                    raw_data = np.fromstring( self.raw_instructions[self.iterator_of_updates], dtype = int, sep = ',' )
-                    to_spinapi = raw_data.reshape( ( int(len(raw_data)/3), 3 ) ).tolist()
+                to_spinapi = self.split_into_parts( self.pulse_array, rep_time )
 
                 ##for element in to_spinapi:
                 ##    if element[2] < 10: # it was 12; 06.10.2021
@@ -655,8 +668,6 @@ class PB_ESR_500_Pro:
                 self.shift_count = 0
                 self.increment_count = 0
                 self.rep_rate_count = 0
-
-                self.iterator_of_updates += 1
             else:
                 pass
 
@@ -670,22 +681,15 @@ class PB_ESR_500_Pro:
             elif rep_rate[-3:] == 'MHz':
                 rep_time = int(1000/float(rep_rate[:-4]))
             else:
-                assert(1 == 2), "Incorrect repetition rate dimension (Hz, kHz, MHz)"
+                assert(1 == 2), "Incorrect repetition rate; rep_rate: int + [' Hz', ' kHz', ' MHz']"
 
             if self.reset_count == 0 or self.shift_count == 1 or self.increment_count == 1:
                 # using a special functions for convertion to instructions
                 #to_spinapi = self.instruction_pulse( self.convert_to_bit_pulse( self.pulse_array ) )
                 to_spinapi = self.split_into_parts( self.pulse_array, rep_time )
-                
-                # instructions from file:
-                if self.instr_from_file == 1:
-                    with open("instructions.out", "a") as f:
-                        np.savetxt(f, [reduce(iconcat, to_spinapi, [])], delimiter = ',', fmt = '%u') 
-                
-                    f.close()
 
                 for element in to_spinapi:
-                    if element[2] < 12:  # it was 12; 06.10.2021
+                    if element[2] < 10:  # it was 12; 06.10.2021
                         assert( 1 == 2 ), 'Incorrect instruction are found. Probably Trigger pulses are overlap with other'
 
                 self.reset_count = 1
@@ -724,21 +728,21 @@ class PB_ESR_500_Pro:
             if len(pulses) == 0:
                 i = 0
                 while i < len( self.pulse_array ):
-                    if int( self.pulse_array[i]['delta_start'][:-3] ) == 0:
+                    if int( float( self.pulse_array[i]['delta_start'][:-3] ) ) == 0:
                         pass
                     else:
                         # convertion to ns
                         temp = self.pulse_array[i]['delta_start'].split(' ')
                         if temp[1] in self.timebase_dict:
                             flag = self.timebase_dict[temp[1]]
-                            d_start = int((temp[0]))*flag
+                            d_start = int(float(temp[0]))*flag
                         else:
                             pass
 
                         temp2 = self.pulse_array[i]['start'].split(' ')
                         if temp2[1] in self.timebase_dict:
                             flag2 = self.timebase_dict[temp2[1]]
-                            st = int((temp2[0]))*flag2
+                            st = int(float(temp2[0]))*flag2
                         else:
                             pass
                                 
@@ -755,21 +759,21 @@ class PB_ESR_500_Pro:
                     if element in self.pulse_name_array:
                         pulse_index = self.pulse_name_array.index(element)
 
-                        if int( self.pulse_array[pulse_index]['delta_start'][:-3] ) == 0:
+                        if int( float( self.pulse_array[pulse_index]['delta_start'][:-3] ) ) == 0:
                             pass
                         else:
                             # convertion to ns
                             temp = self.pulse_array[pulse_index]['delta_start'].split(' ')
                             if temp[1] in self.timebase_dict:
                                 flag = self.timebase_dict[temp[1]]
-                                d_start = int((temp[0]))*flag
+                                d_start = int(float(temp[0]))*flag
                             else:
                                 pass
 
                             temp2 = self.pulse_array[pulse_index]['start'].split(' ')
                             if temp2[1] in self.timebase_dict:
                                 flag2 = self.timebase_dict[temp2[1]]
-                                st = int((temp2[0]))*flag2
+                                st = int(float(temp2[0]))*flag2
                             else:
                                 pass
                                     
@@ -782,23 +786,23 @@ class PB_ESR_500_Pro:
             if len(pulses) == 0:
                 i = 0
                 while i < len( self.pulse_array ):
-                    if int( self.pulse_array[i]['delta_start'][:-3] ) == 0:
+                    if int( float( self.pulse_array[i]['delta_start'][:-3] ) ) == 0:
                         pass
                     else:
                         # convertion to ns
                         temp = self.pulse_array[i]['delta_start'].split(' ')
                         if temp[1] in self.timebase_dict:
                             flag = self.timebase_dict[temp[1]]
-                            d_start = int((temp[0]))*flag
+                            d_start = int(float(temp[0]))*flag
                         else:
-                            assert(1 == 2), "Incorrect time dimension (ns, us, ms, s)"
+                            assert(1 == 2), 'Incorrect time; time: int + [" ms", " us", " ns"]'
 
                         temp2 = self.pulse_array[i]['start'].split(' ')
                         if temp2[1] in self.timebase_dict:
                             flag2 = self.timebase_dict[temp2[1]]
-                            st = int((temp2[0]))*flag2
+                            st = int(float(temp2[0]))*flag2
                         else:
-                            assert(1 == 2), "Incorrect time dimension (ns, us, ms, s)"
+                            assert(1 == 2), 'Incorrect time; time: int + [" ms", " us", " ns"]'
                                 
                         self.pulse_array[i]['start'] = str( st + d_start ) + ' ns'
 
@@ -813,23 +817,23 @@ class PB_ESR_500_Pro:
                     if element in self.pulse_name_array:
 
                         pulse_index = self.pulse_name_array.index(element)
-                        if int( self.pulse_array[pulse_index]['delta_start'][:-3] ) == 0:
+                        if int( float( self.pulse_array[pulse_index]['delta_start'][:-3] ) ) == 0:
                             pass
                         else:
                             # convertion to ns
                             temp = self.pulse_array[pulse_index]['delta_start'].split(' ')
                             if temp[1] in self.timebase_dict:
                                 flag = self.timebase_dict[temp[1]]
-                                d_start = int((temp[0]))*flag
+                                d_start = int(float(temp[0]))*flag
                             else:
-                                assert(1 == 2), "Incorrect time dimension (ns, us, ms, s)"
+                                assert(1 == 2), 'Incorrect time; time: int + [" ms", " us", " ns"]'
 
                             temp2 = self.pulse_array[pulse_index]['start'].split(' ')
                             if temp2[1] in self.timebase_dict:
                                 flag2 = self.timebase_dict[temp2[1]]
-                                st = int((temp2[0]))*flag2
+                                st = int(float(temp2[0]))*flag2
                             else:
-                                assert(1 == 2), "Incorrect time dimension (ns, us, ms, s)"
+                                assert(1 == 2), 'Incorrect time; time: int + [" ms", " us", " ns"]'
                                     
                             self.pulse_array[pulse_index]['start'] = str( st + d_start ) + ' ns'
 
@@ -848,7 +852,7 @@ class PB_ESR_500_Pro:
             if len(pulses) == 0:
                 i = 0
                 while i < len( self.pulse_array ):
-                    if int( self.pulse_array[i]['length_increment'][:-3] ) == 0:
+                    if int( float( self.pulse_array[i]['length_increment'][:-3] ) ) == 0:
                         pass
                     else:
                         # convertion to ns
@@ -879,7 +883,7 @@ class PB_ESR_500_Pro:
                     if element in self.pulse_name_array:
                         pulse_index = self.pulse_name_array.index(element)
 
-                        if int( self.pulse_array[pulse_index]['length_increment'][:-3] ) == 0:
+                        if int( float( self.pulse_array[pulse_index]['length_increment'][:-3] ) ) == 0:
                             pass
                         else:
                             # convertion to ns
@@ -906,7 +910,7 @@ class PB_ESR_500_Pro:
             if len(pulses) == 0:
                 i = 0
                 while i < len( self.pulse_array ):
-                    if int( self.pulse_array[i]['length_increment'][:-3] ) == 0:
+                    if int( float( self.pulse_array[i]['length_increment'][:-3] ) ) == 0:
                         pass
                     else:
                         # convertion to ns
@@ -915,19 +919,19 @@ class PB_ESR_500_Pro:
                             flag = self.timebase_dict[temp[1]]
                             d_length = int(float(temp[0]))*flag
                         else:
-                            assert(1 == 2), "Incorrect time dimension (ns, us, ms, s)"
+                            assert(1 == 2), 'Incorrect time; time: int + [" ms", " us", " ns"]'
 
                         temp2 = self.pulse_array[i]['length'].split(' ')
                         if temp2[1] in self.timebase_dict:
                             flag2 = self.timebase_dict[temp2[1]]
                             leng = int(float(temp2[0]))*flag2
                         else:
-                            assert(1 == 2), "Incorrect time dimension (ns, us, ms, s)"
+                            assert(1 == 2), 'Incorrect time; time: int + [" ms", " us", " ns"]'
                         
                         if ( leng + d_length ) <= self.max_pulse_length:
                             self.pulse_array[i]['length'] = str( leng + d_length ) + ' ns'
                         else:
-                            assert(1 == 2), 'Exceeded maximum pulse length (1900 ns) when increment the pulse'
+                            assert(1 == 2), 'Exceeded the maximum pulse length (1900 ns) when incrementing the pulse'
 
                     i += 1
 
@@ -940,7 +944,7 @@ class PB_ESR_500_Pro:
                     if element in self.pulse_name_array:
 
                         pulse_index = self.pulse_name_array.index(element)
-                        if int( self.pulse_array[pulse_index]['length_increment'][:-3] ) == 0:
+                        if int( float( self.pulse_array[pulse_index]['length_increment'][:-3] ) ) == 0:
                             pass
                         else:
                             # convertion to ns
@@ -949,19 +953,19 @@ class PB_ESR_500_Pro:
                                 flag = self.timebase_dict[temp[1]]
                                 d_length = int(float(temp[0]))*flag
                             else:
-                                assert(1 == 2), "Incorrect time dimension (ns, us, ms, s)"
+                                assert(1 == 2), 'Incorrect time; time: int + [" ms", " us", " ns"]'
 
                             temp2 = self.pulse_array[pulse_index]['length'].split(' ')
                             if temp2[1] in self.timebase_dict:
                                 flag2 = self.timebase_dict[temp2[1]]
                                 leng = int(float(temp2[0]))*flag2
                             else:
-                                assert(1 == 2), "Incorrect time dimension (ns, us, ms, s)"
+                                assert(1 == 2), 'Incorrect time; time: int + [" ms", " us", " ns"]'
                                     
                             if ( leng + d_length ) <= self.max_pulse_length:
                                 self.pulse_array[pulse_index]['length'] = str( leng + d_length ) + ' ns'
                             else:
-                                assert(1 == 2), 'Exceeded maximum pulse length (1900 ns) when increment the pulse'
+                                assert(1 == 2), 'Exceeded the maximum pulse length (1900 ns) when incrementing the pulse'
 
                         self.increment_count = 1
                         self.current_phase_index = 0
@@ -969,14 +973,13 @@ class PB_ESR_500_Pro:
                     else:
                         assert(1 == 2), "There is no pulse with the specified name"
 
-    #UNDOCUMENTED
     def pulser_phase_reset(self):
         """
         Reset phase index to zero in order to start phase cycling once again
         """
         self.current_phase_index = 0
 
-    def pulser_reset(self, interal_cycle = 'False'):
+    def pulser_reset(self):
         """
         Reset all pulses to the initial state it was in at the start of the experiment.
         It includes the complete functionality of pulser_pulse_reset(), but also immediately
@@ -997,17 +1000,7 @@ class PB_ESR_500_Pro:
             # using a special functions for convertion to instructions
             # we get two return arrays because of pulser_visualizer. It is not the case for test flag.
             #temp, visualizer = self.convert_to_bit_pulse( self.pulse_array )
-            if interal_cycle == 'False':
-                self.iterator_of_updates = 0
-            elif interal_cycle == 'True':
-                pass
-
-            if self.instr_from_file == 0:
-                to_spinapi = self.split_into_parts( self.pulse_array, rep_time )
-            elif self.instr_from_file == 1:
-                #self.iterator_of_updates = 0
-                raw_data = np.fromstring( self.raw_instructions[self.iterator_of_updates], dtype = int, sep = ',' )
-                to_spinapi = raw_data.reshape( (int(len(raw_data)/3), 3 ) ).tolist()
+            to_spinapi = self.split_into_parts( self.pulse_array, rep_time )
 
             #general.message( to_spinapi )
 
@@ -1058,8 +1051,6 @@ class PB_ESR_500_Pro:
             self.shift_count = 0
             self.current_phase_index = 0
 
-            self.iterator_of_updates += 1
-
         elif self.test_flag == 'test':
             # get repetition rate
             rep_rate = self.rep_rate[0]
@@ -1070,7 +1061,7 @@ class PB_ESR_500_Pro:
             elif rep_rate[-3:] == 'MHz':
                 rep_time = int(1000/float(rep_rate[:-4]))
             else:
-                assert( 1 == 2 ), 'Incorrect dimension of repetition rate (Hz, kHz, MHz)'
+                assert( 1 == 2 ), "Incorrect repetition rate; rep_rate: int + [' Hz', ' kHz', ' MHz']"
 
             # reset the pulses; deepcopy helps to create a TRULY NEW array
             self.pulse_array = deepcopy( self.pulse_array_init )
@@ -1083,10 +1074,10 @@ class PB_ESR_500_Pro:
             self.shift_count = 0
             self.current_phase_index = 0
 
-    def pulser_pulse_reset(self, *pulses, interal_cycle = 'False'):
+    def pulser_pulse_reset(self, *pulses):
         """
         Reset all pulses to the initial state it was in at the start of the experiment.
-        It does not update the pulser, if you want to reset all pulses and and also update 
+        It does not update the pulser, if you want to reset all pulses and and also update
         the pulser use the function pulser_reset() instead.
         """
         if self.test_flag != 'test':
@@ -1096,10 +1087,6 @@ class PB_ESR_500_Pro:
                 self.increment_count = 0
                 self.shift_count = 0
                 self.current_phase_index = 0
-                if interal_cycle == 'False':
-                    self.iterator_of_updates = 0
-                elif interal_cycle == 'True':
-                    pass
 
             else:
                 set_from_list = set(pulses)
@@ -1114,8 +1101,6 @@ class PB_ESR_500_Pro:
                         self.increment_count = 0
                         self.shift_count = 0
                         self.current_phase_index = 0
-
-                        #self.iterator_of_updates = 0
 
         elif self.test_flag == 'test':
             if len(pulses) == 0:
@@ -1237,6 +1222,7 @@ class PB_ESR_500_Pro:
         """
         self.pulse_array = []
         self.phase_array_length = []
+        self.detection_phase_list = []
         self.pulse_name_array = []
         self.pulse_array_init = []
         self.rep_rate = (self.repetition_rate, )
@@ -1255,7 +1241,13 @@ class PB_ESR_500_Pro:
         """
         self.test_flag = flag
 
-    def pulser_acquisition_cycle(self, data1, data2, acq_cycle = []):
+    def pulser_acquisition_cycle(self, data1, data2, acq_cycle = None):
+        # Insys_FPGA-style: when no explicit acq_cycle is supplied, use the phase
+        # cycle declared on the DETECTION pulse (self.detection_phase_list). An
+        # explicit acq_cycle argument still overrides it (backward compatible).
+        if acq_cycle is None or len(acq_cycle) == 0:
+            acq_cycle = self.detection_phase_list
+
         if self.test_flag != 'test':
             answer = np.zeros( data1.shape ) + 1j*np.zeros( data2.shape )
 
@@ -1273,8 +1265,8 @@ class PB_ESR_500_Pro:
 
         elif self.test_flag == 'test':
 
-            assert( len(acq_cycle) == len(data1) ), 'Acquisition cycle and Data 1 have incompatible size'
-            assert( len(acq_cycle) == len(data2) ), 'Acquisition cycle and Data 2 have incompatible size'
+            assert( len(acq_cycle) == len(data1) ), 'Number of phases of acquisition cycle and Data 1 have incompatible size'
+            assert( len(acq_cycle) == len(data2) ), 'Number of phases of acquisition cycle and Data 2 have incompatible size'
 
             answer = np.zeros( data1.shape ) + 1j*np.zeros( data2.shape )
 
@@ -1291,37 +1283,24 @@ class PB_ESR_500_Pro:
             ##        assert (1 == 2), 'Incorrect operation in the acquisition cycle'
 
             return (answer.real / len(acq_cycle))[0], (answer.imag / len(acq_cycle))[0]
-    
-    #UNDOCUMENTED
-    def pulser_instruction_from_file(self, flag, filename = 'instructions.out'):
-        """
-        Special function to read instructions from the .txt file
-        """
-        if self.test_flag != 'test':
-            if flag == 1:
-                self.instr_from_file = 1
-                f = open(filename)
-                self.raw_instructions = f.read().splitlines()
-                f.close()
-            elif flag == 0:
-                self.instr_from_file = 0
-
-        elif self.test_flag == 'test':
-            if flag == 1:
-                self.instr_from_file = 1
-            elif flag == 0:
-                self.instr_from_file = 0
-
-    def pulser_default_synt(self, num):
-        """
-        Function to change synthetizer for AWG channel of the ITC microwave bridge
-        """
-        if self.test_flag != 'test':
-            self.synt_number = num
-        elif self.test_flag == 'test':
-            assert(num == 1 or num == 2), 'Incorrect synthetizer number'
 
     # Auxilary functions
+    def time_to_ticks(self, time_str):
+        """
+        Convert a '<float> <unit>' time string to pulser clock ticks.
+        The unit is taken from the last two characters ('ns' / 'us' / 'ms'),
+        replicating the historical suffix parsing of convertion_to_numpy()
+        """
+        unit = time_str[-2:]
+        if unit == 'ns':
+            return int(float(time_str[:-3])/self.timebase)
+        elif unit == 'us':
+            return int(float(time_str[:-3])*1000/self.timebase)
+        elif unit == 'ms':
+            return int(float(time_str[:-3])*1000000/self.timebase)
+        elif unit == 's':
+            return int(float(time_str[:-3])*1000000000/self.timebase)
+
     def convertion_to_numpy(self, p_array):
         """
         Convertion of the pulse_array into numpy array in the form of
@@ -1351,14 +1330,7 @@ class PB_ESR_500_Pro:
                     st = self.change_pulse_settings(p_array[i]['start'], -self.rect_awg_switch_delay)
                     self.awg_pulses = 1
 
-                if st[-2:] == 'ns':
-                    st_time = int(float(st[:-3])/self.timebase)
-                elif st[-2:] == 'us':
-                    st_time = int(float(st[:-3])*1000/self.timebase)
-                elif st[-2:] == 'ms':
-                    st_time = int(float(st[:-3])*1000000/self.timebase)
-                elif st[-2:] == 's':
-                    st_time = int(float(st[:-3])*1000000000/self.timebase)
+                st_time = self.time_to_ticks(st)
                 
                 # get length
                 if ch != 'AWG':
@@ -1368,36 +1340,12 @@ class PB_ESR_500_Pro:
                     leng = self.change_pulse_settings(p_array[i]['length'], self.rect_awg_switch_delay + self.rect_awg_delay)
                     self.awg_pulses = 1
 
-                if leng[-2:] == 'ns':
-                    leng_time = int(float(leng[:-3])/self.timebase)
-                elif leng[-2:] == 'us':
-                    leng_time = int(float(leng[:-3])*1000/self.timebase)
-                elif leng[-2:] == 'ms':
-                    leng_time = int(float(leng[:-3])*1000000/self.timebase)
-                elif leng[-2:] == 's':
-                    leng_time = int(float(leng[:-3])*1000000000/self.timebase)
+                leng_time = self.time_to_ticks(leng)
 
-                # get delta start
-                del_st = p_array[i]['delta_start']
-                if del_st[-2:] == 'ns':
-                    delta_start = int(float(del_st[:-3])/self.timebase)
-                elif del_st[-2:] == 'us':
-                    delta_start = int(float(del_st[:-3])*1000/self.timebase)
-                elif del_st[-2:] == 'ms':
-                    delta_start = int(float(del_st[:-3])*1000000/self.timebase)
-                elif del_st[-2:] == 's':
-                    delta_start = int(float(del_st[:-3])*1000000000/self.timebase)
-
-                # get length_increment
-                len_in = p_array[i]['length_increment']
-                if len_in[-2:] == 'ns':
-                    length_increment = int(float(len_in[:-3])/self.timebase)
-                elif len_in[-2:] == 'us':
-                    length_increment = int(float(len_in[:-3])*1000/self.timebase)
-                elif len_in[-2:] == 'ms':
-                    length_increment = int(float(len_in[:-3])*1000000/self.timebase)
-                elif len_in[-2:] == 's':
-                    length_increment = int(float(len_in[:-3])*1000000000/self.timebase)
+                # delta_start and length_increment are not part of the
+                # [channel, start, end] rows built below, so they are
+                # intentionally not parsed here (they used to be parsed
+                # and discarded)
 
                 # creating converted array
                 # in terms of bits the number of channel is 2**(ch_num - 1)
@@ -1426,14 +1374,7 @@ class PB_ESR_500_Pro:
                     st = self.change_pulse_settings(p_array[i]['start'], -self.rect_awg_switch_delay)
                     self.awg_pulses = 1
 
-                if st[-2:] == 'ns':
-                    st_time = int(float(st[:-3])/self.timebase)
-                elif st[-2:] == 'us':
-                    st_time = int(float(st[:-3])*1000/self.timebase)
-                elif st[-2:] == 'ms':
-                    st_time = int(float(st[:-3])*1000000/self.timebase)
-                elif st[-2:] == 's':
-                    st_time = int(float(st[:-3])*1000000000/self.timebase)
+                st_time = self.time_to_ticks(st)
 
                 # get length
                 if ch != 'AWG':
@@ -1443,36 +1384,12 @@ class PB_ESR_500_Pro:
                     leng = self.change_pulse_settings(p_array[i]['length'], self.rect_awg_switch_delay + self.rect_awg_delay)
                     self.awg_pulses = 1
                 
-                if leng[-2:] == 'ns':
-                    leng_time = int(float(leng[:-3])/self.timebase)
-                elif leng[-2:] == 'us':
-                    leng_time = int(float(leng[:-3])*1000/self.timebase)
-                elif leng[-2:] == 'ms':
-                    leng_time = int(float(leng[:-3])*1000000/self.timebase)
-                elif leng[-2:] == 's':
-                    leng_time = int(float(leng[:-3])*1000000000/self.timebase)
+                leng_time = self.time_to_ticks(leng)
 
-                # get delta start
-                del_st = p_array[i]['delta_start']
-                if del_st[-2:] == 'ns':
-                    delta_start = int(float(del_st[:-3])/self.timebase)
-                elif del_st[-2:] == 'us':
-                    delta_start = int(float(del_st[:-3])*1000/self.timebase)
-                elif del_st[-2:] == 'ms':
-                    delta_start = int(float(del_st[:-3])*1000000/self.timebase)
-                elif del_st[-2:] == 's':
-                    delta_start = int(float(del_st[:-3])*1000000000/self.timebase)
-
-                # get length_increment
-                len_in = p_array[i]['length_increment']
-                if len_in[-2:] == 'ns':
-                    length_increment = int(float(len_in[:-3])/self.timebase)
-                elif len_in[-2:] == 'us':
-                    length_increment = int(float(len_in[:-3])*1000/self.timebase)
-                elif len_in[-2:] == 'ms':
-                    length_increment = int(float(len_in[:-3])*1000000/self.timebase)
-                elif len_in[-2:] == 's':
-                    length_increment = int(float(len_in[:-3])*1000000000/self.timebase)
+                # delta_start and length_increment are not part of the
+                # [channel, start, end] rows built below, so they are
+                # intentionally not parsed here (they used to be parsed
+                # and discarded)
 
                 # creating converted array
                 # in terms of bits the number of channel is 2**(ch_num - 1)
@@ -1681,6 +1598,165 @@ class PB_ESR_500_Pro:
             
             return np.asarray(list(chain(*answer)))
 
+    def process_and_merge_rect_awg(self, data_list, target_channel = 2**7, gap_threshold = 75):
+        """
+        Merge nearby RECT_AWG gating pulses into a single one.
+
+        Ported from Insys_FPGA.process_and_merge_rect_awg(). When two AWG
+        pulses sit close to each other their (already extended) RECT_AWG
+        gating pulses would form two separate rectangles separated by a tiny
+        off-interval, which makes the RECT_AWG switch toggle rapidly. Here we
+        join RECT_AWG rows whose gap (next.start - current.end) is smaller
+        than gap_threshold (in pulser ticks) into one continuous gate.
+
+        Only rows on target_channel are merged; every other channel
+        (MW, AMP_ON, LNA_PROTECT, ...) is passed through untouched.
+        target_channel is the bit value of the AWG/RECT_AWG channel
+        (2**channel_dict['AWG'] == 128 here). The call sites pass
+        gap_threshold = int(240/self.timebase), i.e. a 240 ns physical gap
+        (75 ticks at Insys_FPGA's 3.2 ns timebase) normalized to this
+        pulser's timebase.
+        """
+        if data_list is None or len(data_list) == 0:
+            return []
+
+        all_data = np.array(data_list)
+
+        target_mask = all_data[:, 0] == target_channel
+        target_rows = all_data[target_mask]
+        other_rows = all_data[~target_mask]
+
+        if len(target_rows) == 0:
+            return all_data[all_data[:, 0].argsort()]
+
+        target_rows = target_rows[target_rows[:, 1].argsort()]
+
+        merged_target = []
+        current = target_rows[0].copy()
+
+        for i in range(1, len(target_rows)):
+            next_row = target_rows[i]
+
+            gap = next_row[1] - current[2]
+
+            if gap < gap_threshold:
+                current[2] = max(current[2], next_row[2])
+            else:
+                merged_target.append(current.copy())
+                current = next_row.copy()
+
+        merged_target.append(current.copy())
+        merged_target_arr = np.array(merged_target)
+
+        if len(other_rows) == 0:
+            final_result = merged_target_arr
+        else:
+            final_result = np.vstack([other_rows, merged_target_arr])
+
+        final_result = final_result[final_result[:, 0].argsort()]
+
+        # After the merge a RECT_AWG gate can end within the 10 ns SpinCore
+        # minimum-instruction window of a (fixed) TRIGGER_AWG edge; snap the
+        # movable gate/trigger edges so no sub-10 ns instruction is produced.
+        return self.snap_short_instructions(final_result)
+
+    def snap_short_instructions(self, data_list):
+        """
+        Remove sub-min_pulse_length (10 ns) instructions created when an AWG
+        card trigger (TRIGGER_AWG) or an AWG gating pulse (RECT_AWG / AMP_ON /
+        LNA_PROTECT) edge falls within the SpinCore 10 ns minimum-instruction
+        window of another edge.
+
+        This typically happens right after process_and_merge_rect_awg() extends
+        a merged RECT_AWG gate to the end of the later of two overlapping AWG
+        pulses, which can push the gate's falling edge to within a few ns of a
+        fixed TRIGGER_AWG edge. split_into_parts() would then emit a <10 ns
+        instruction and assert ('Incorrect instruction ... Trigger pulses ...').
+
+        Only the AWG "gate cluster" channels are moved (RECT_AWG, AMP_ON,
+        LNA_PROTECT and the TRIGGER_AWG end), and only in the growing direction
+        (gate / trigger ENDs are pushed later, gate STARTs are pulled earlier),
+        so the AWG output stays gated and the amplifier-protection window never
+        shrinks. Every other edge - MW, phase, DETECTION and, crucially, the
+        TRIGGER_AWG / DETECTION rising edges - is treated as a fixed anchor and
+        is never moved. The pass is a no-op when all edges are already >= 10 ns
+        apart, so it cannot disturb sequences that already program cleanly.
+
+        Works on rows of [channel_bit, start, end] in pulser ticks (the same
+        format process_and_merge_rect_awg() returns) and returns the same.
+        """
+        rows = np.asarray(data_list, dtype = np.int64)
+        if len(rows) == 0:
+            return rows
+        rows = rows.tolist()
+
+        # 10 ns SpinCore minimum expressed in pulser ticks: instructions_from_part()
+        # multiplies tick lengths by timebase, so a segment is illegal when its
+        # tick length is below min_pulse_length/timebase ticks (5 ticks @ 2 ns)
+        min_gap = int(math.ceil(self.min_pulse_length / self.timebase))
+
+        awg = 2**self.channel_dict['AWG']
+        amp = 2**self.channel_dict['AMP_ON']
+        lna = 2**self.channel_dict['LNA_PROTECT']
+        trg = 2**self.channel_dict['TRIGGER_AWG']
+        # ENDs we may push later (extend a gate / the trigger) and STARTs we may
+        # pull earlier (extend a gate); the TRIGGER_AWG start is hardware-fixed
+        # and DETECTION/MW edges belong to no cluster, so they stay put.
+        end_movable   = (awg, amp, lna, trg)
+        start_movable = (awg, amp, lna)
+
+        # iteratively close the first sub-min gap until none remain; the bound
+        # is a safety net against pathological cascades (then we leave the rest
+        # for the downstream check to report rather than loop forever)
+        for _ in range(8 * len(rows) + 16):
+            bounds = sorted(set([r[1] for r in rows] + [r[2] for r in rows]))
+            gap = None
+            for i in range(len(bounds) - 1):
+                if 0 < bounds[i + 1] - bounds[i] < min_gap:
+                    gap = (bounds[i], bounds[i + 1])
+                    break
+            if gap is None:
+                break
+
+            a, b = gap                       # a < b and b - a < min_gap
+            changed = False
+
+            # (1) a movable gate/trigger END sits at the left edge a -> grow it
+            #     up to b so the [a, b] sliver collapses (falling edge later)
+            for r in rows:
+                if r[0] in end_movable and r[2] == a:
+                    r[2] = b
+                    changed = True
+            # (2) a movable gate START sits at the right edge b -> grow it down
+            #     to a (rising edge earlier)
+            if not changed:
+                for r in rows:
+                    if r[0] in start_movable and r[1] == b:
+                        r[1] = a
+                        changed = True
+            # (3) the sliver is bounded by a fixed anchor on one side; push the
+            #     movable edge on the other side away by min_gap
+            if not changed:
+                for r in rows:
+                    # movable END at b, anchor at a -> push the end past a + min_gap
+                    if r[0] in end_movable and r[2] == b and r[1] <= a:
+                        r[2] = a + min_gap
+                        changed = True
+            if not changed:
+                for r in rows:
+                    # movable START at a, anchor at b -> pull the start before b - min_gap
+                    if r[0] in start_movable and r[1] == a and r[2] >= b:
+                        r[1] = b - min_gap
+                        changed = True
+
+            if not changed:
+                # collision between two fixed anchors (e.g. MW-MW); not ours to
+                # fix -> stop and let split_into_parts()/check_problem_pulses()
+                # surface it
+                break
+
+        return np.asarray(rows, dtype = np.int64)
+
     def check_problem_pulses(self, np_array):
         """
         A function for checking whether there is a two
@@ -1708,13 +1784,30 @@ class PB_ESR_500_Pro:
         elif self.test_flag == 'test':
             sorted_np_array = np.asarray(sorted(np_array, key = lambda x: int(x[1])), dtype = np.int64)
 
-            # compare the end time with the start time for each couple of pulses
-            for index, element in enumerate(sorted_np_array[:-1]):
-                # minimal_distance is 40 ns now
-                if sorted_np_array[index + 1][1] - element[2] < self.min_pulse_length:
-                    assert(1 == 2), 'Overlapping pulses or two pulses with less than ' + str(self.min_pulse_length*2) + ' ns distance'
-                else:
-                    pass
+            # Overlapping RECT_AWG gates of nearby AWG pulses are allowed: they are
+            # merged into one continuous gate by process_and_merge_rect_awg() in the
+            # real run. So in the test run we merge them here (and warn once) instead
+            # of asserting, mirroring Insys_FPGA. Genuinely-too-close pulses on any
+            # other channel (MW-MW, MW-AWG, ...) remain a hard error.
+            awg_bit = 2**self.channel_dict['AWG']
+            index = 0
+            awg_overlap_warned = False
+            while index < len(sorted_np_array) - 1:
+                element = sorted_np_array[index]
+                next_element = sorted_np_array[index + 1]
+                # compare the end time with the start time for each couple of pulses
+                if next_element[1] - element[2] < self.min_pulse_length:
+                    if element[0] == awg_bit and next_element[0] == awg_bit:
+                        sorted_np_array[index][2] = max(element[2], next_element[2])
+                        sorted_np_array = np.delete(sorted_np_array, index + 1, 0)
+                        if not awg_overlap_warned:
+                            general.message_test('Overlapping AWG pulses are merged into one RECT_AWG gate')
+                            awg_overlap_warned = True
+                        index = 0
+                        continue
+                    else:
+                        assert(1 == 2), 'Overlapping pulses or two pulses with less than ' + str(self.min_pulse_length*2) + ' ns distance'
+                index += 1
 
             return sorted_np_array
 
@@ -1762,13 +1855,13 @@ class PB_ESR_500_Pro:
         It is used when we deal with AMP_ON and LNA_PROTECT pulses
         with less than 12 ns distance
         """
-        if self.test_flag != 'test':
-            no_duplicate_array = np.unique(np_array, axis = 0)
-            return no_duplicate_array
-
-        elif self.test_flag == 'test':
-            no_duplicate_array = np.unique(np_array, axis = 0)
-            return no_duplicate_array
+        rows = np.asarray(np_array)
+        if len(rows) == 0:
+            return np.unique(rows, axis = 0)
+        # np.unique(..., axis = 0) sorts rows lexicographically; for the
+        # small arrays used here a Python set + sort is much faster and
+        # gives the identical result
+        return np.asarray(sorted(set(map(tuple, rows.tolist()))), dtype = np.int64)
 
     def preparing_to_bit_pulse(self, np_array):
         """
@@ -1840,8 +1933,8 @@ class PB_ESR_500_Pro:
                             self.check_problem_pulses(shifted_back_awg_mw)
 
                         # add AMP_ON and LNA_PROTECT
-                        amp_on_pulses = self.add_amp_on_pulses(element)
-                        lna_pulses = self.add_lna_protect_pulses(element)
+                        amp_on_pulses = self.add_amp_on_pulses(element, split_pulse_array = split_pulse_array)
+                        lna_pulses = self.add_lna_protect_pulses(element, split_pulse_array = split_pulse_array)
                         # check AMP_ON, LNA_PROTECT pulses on < 12 ns distance
                         cor_pulses_amp, prob_pulses_amp = self.check_problem_pulses_amp_lna(amp_on_pulses)
                         cor_pulses_lna, prob_pulses_lna = self.check_problem_pulses_amp_lna(lna_pulses)
@@ -1856,22 +1949,18 @@ class PB_ESR_500_Pro:
                             cor_pulses_amp_final = cor_pulses_amp
                         elif cor_pulses_amp[0][0] == 0:
                             # nothing to concatenate
-                            cor_pulses_amp_final = self.instruction_pulse_short_lna_amp(self.convert_to_bit_pulse_amp_lna(prob_pulses_amp, \
-                                self.channel_dict['AMP_ON']))                   
+                            cor_pulses_amp_final = self.instructions_amp_lna_joined(prob_pulses_amp, self.channel_dict['AMP_ON'])                   
                         else:
-                            cor_pulses_amp_final = np.concatenate((cor_pulses_amp, self.instruction_pulse_short_lna_amp(self.convert_to_bit_pulse_amp_lna(prob_pulses_amp, \
-                                self.channel_dict['AMP_ON']))), axis = 0)
+                            cor_pulses_amp_final = np.concatenate((cor_pulses_amp, self.instructions_amp_lna_joined(prob_pulses_amp, self.channel_dict['AMP_ON'])), axis = 0)
 
                         # combining short distance LNA_PROTECT pulses
                         if prob_pulses_lna[0][0] == 0:
                             cor_pulses_lna_final = cor_pulses_lna
                         elif cor_pulses_lna[0][0] == 0:
                             # nothing to concatenate
-                            cor_pulses_lna_final =  self.instruction_pulse_short_lna_amp(self.convert_to_bit_pulse_amp_lna(prob_pulses_lna, \
-                                self.channel_dict['LNA_PROTECT']))
+                            cor_pulses_lna_final =  self.instructions_amp_lna_joined(prob_pulses_lna, self.channel_dict['LNA_PROTECT'])
                         else:
-                            cor_pulses_lna_final =  np.concatenate((cor_pulses_lna, self.instruction_pulse_short_lna_amp(self.convert_to_bit_pulse_amp_lna(prob_pulses_lna, \
-                                self.channel_dict['LNA_PROTECT']))), axis = 0)
+                            cor_pulses_lna_final =  np.concatenate((cor_pulses_lna, self.instructions_amp_lna_joined(prob_pulses_lna, self.channel_dict['LNA_PROTECT'])), axis = 0)
 
                     elif element[0, 0] == 2**self.channel_dict['-X'] or element[0, 0] == 2**self.channel_dict['+Y']:
                         pass
@@ -1885,17 +1974,17 @@ class PB_ESR_500_Pro:
                         # get assertion error if the distance < 40 ns
 
                 # combine all pulses
-                #np.concatenate( (self.convertion_to_numpy( self.pulse_array ), cor_pulses_amp_final, cor_pulses_lna_final), axis = None)
+                # split_pulse_array already contains the extended RECT_AWG
+                # pulses (see splitting_acc_to_channel()); flattening it is
+                # equivalent to self.extending_rect_awg( self.pulse_array )
+                # but avoids re-parsing the whole pulse array
                 try:
-                    #return np.row_stack( (self.convertion_to_numpy( self.pulse_array ), cor_pulses_amp_final, cor_pulses_lna_final))
-                    # self.extending_rect_awg( self.pulse_array ) is for extendind RECT_AWG pulses
-                    # see self.extending_rect_awg()
-                    return np.row_stack( (self.extending_rect_awg( self.pulse_array ), cor_pulses_amp_final, cor_pulses_lna_final))
+                    raw = np.row_stack( (np.asarray(list(chain(*split_pulse_array))), cor_pulses_amp_final, cor_pulses_lna_final))
+                    return self.process_and_merge_rect_awg(raw, target_channel = 2**self.channel_dict['AWG'], gap_threshold = int(240/self.timebase))
 
                 # when we do not MW pulses at all
                 except UnboundLocalError:
-                    #return self.convertion_to_numpy( self.pulse_array )
-                    return self.extending_rect_awg( self.pulse_array )
+                    return np.asarray(list(chain(*split_pulse_array)))
 
         elif self.test_flag == 'test':
             if self.auto_defense == 'False':
@@ -1955,8 +2044,8 @@ class PB_ESR_500_Pro:
                             
                             ##f.close()
 
-                        amp_on_pulses = self.add_amp_on_pulses(element)
-                        lna_pulses = self.add_lna_protect_pulses(element)
+                        amp_on_pulses = self.add_amp_on_pulses(element, split_pulse_array = split_pulse_array)
+                        lna_pulses = self.add_lna_protect_pulses(element, split_pulse_array = split_pulse_array)
 
                         # check AMP_ON, LNA_PROTECT pulses
                         cor_pulses_amp, prob_pulses_amp = self.check_problem_pulses_amp_lna(amp_on_pulses)
@@ -1966,21 +2055,17 @@ class PB_ESR_500_Pro:
                         if prob_pulses_amp[0][0] == 0:
                             cor_pulses_amp_final = cor_pulses_amp
                         elif cor_pulses_amp[0][0] == 0:
-                            cor_pulses_amp_final = self.instruction_pulse_short_lna_amp(self.convert_to_bit_pulse_amp_lna(prob_pulses_amp, \
-                                self.channel_dict['AMP_ON']))
+                            cor_pulses_amp_final = self.instructions_amp_lna_joined(prob_pulses_amp, self.channel_dict['AMP_ON'])
                         else:
-                            cor_pulses_amp_final = np.concatenate((cor_pulses_amp, self.instruction_pulse_short_lna_amp(self.convert_to_bit_pulse_amp_lna(prob_pulses_amp, \
-                                self.channel_dict['AMP_ON']))), axis = 0)
+                            cor_pulses_amp_final = np.concatenate((cor_pulses_amp, self.instructions_amp_lna_joined(prob_pulses_amp, self.channel_dict['AMP_ON'])), axis = 0)
 
                         # combining short distance LNA_PROTECT pulses
                         if prob_pulses_lna[0][0] == 0:
                             cor_pulses_lna_final = cor_pulses_lna
                         elif cor_pulses_lna[0][0] == 0:
-                            cor_pulses_lna_final = self.instruction_pulse_short_lna_amp(self.convert_to_bit_pulse_amp_lna(prob_pulses_lna, \
-                                self.channel_dict['LNA_PROTECT']))
+                            cor_pulses_lna_final = self.instructions_amp_lna_joined(prob_pulses_lna, self.channel_dict['LNA_PROTECT'])
                         else:
-                            cor_pulses_lna_final =  np.concatenate((cor_pulses_lna, self.instruction_pulse_short_lna_amp(self.convert_to_bit_pulse_amp_lna(prob_pulses_lna, \
-                                self.channel_dict['LNA_PROTECT']))), axis = 0)
+                            cor_pulses_lna_final =  np.concatenate((cor_pulses_lna, self.instructions_amp_lna_joined(prob_pulses_lna, self.channel_dict['LNA_PROTECT'])), axis = 0)
                     
                     elif element[0, 0] == 2**self.channel_dict['-X'] or element[0, 0] == 2**self.channel_dict['+Y']:
                         # for phases pulses just check 10 ns distance
@@ -1992,7 +2077,8 @@ class PB_ESR_500_Pro:
                 # combine all pulses
                 #np.concatenate( (self.convertion_to_numpy( self.pulse_array ), cor_pulses_amp_final, cor_pulses_lna_final), axis = None) 
                 try:
-                    return np.row_stack( (self.extending_rect_awg( self.pulse_array ), cor_pulses_amp_final, cor_pulses_lna_final))
+                    raw = np.row_stack( (self.extending_rect_awg( self.pulse_array ), cor_pulses_amp_final, cor_pulses_lna_final))
+                    return self.process_and_merge_rect_awg(raw, target_channel = 2**self.channel_dict['AWG'], gap_threshold = int(240/self.timebase))
                 except UnboundLocalError:
                     return self.extending_rect_awg( self.pulse_array )
 
@@ -2012,7 +2098,7 @@ class PB_ESR_500_Pro:
             min_list = []
             pulses = self.preparing_to_bit_pulse(np_array)
 
-            sorted_pulses_start = np.asarray(sorted(pulses, key = lambda x: int(x[1])), dtype = np.int64)
+            sorted_pulses_start = sorted(np.asarray(pulses).tolist(), key = lambda x: x[1])
 
             #LASER HERE
             #general.message( sorted_pulses_start )
@@ -2020,12 +2106,18 @@ class PB_ESR_500_Pro:
 
 
             # self.max_pulse_length is 2000 ns now
-            index_jump = np.where(np.diff(sorted_pulses_start[:,1], axis = 0) > self.max_pulse_length )[0]
-            sorted_arrays_parts = np.split(sorted_pulses_start, index_jump + 1)
+            # split where the distance between the starts of two
+            # consecutive pulses exceeds max_pulse_length
+            sorted_arrays_parts = [ [sorted_pulses_start[0]] ]
+            for row in sorted_pulses_start[1:]:
+                if row[1] - sorted_arrays_parts[-1][-1][1] > self.max_pulse_length:
+                    sorted_arrays_parts.append([row])
+                else:
+                    sorted_arrays_parts[-1].append(row)
 
             for index, element in enumerate(sorted_arrays_parts):
-                temp, min_value = self.convert_to_bit_pulse(element)
-                answer.append(self.instruction_pulse(temp))
+                instructions, min_value = self.instructions_from_part(element)
+                answer.append(instructions)
                 # keep them all for further shifting
                 min_list.append(min_value)
             # at this point we have different array for different interval:
@@ -2070,22 +2162,27 @@ class PB_ESR_500_Pro:
                 return one_array
             else:
                 general.message('Pulse sequence is longer than one period of the repetition rate')
-                sys.exit()
 
         elif self.test_flag == 'test':
             answer = []
             min_list = []
             pulses = self.preparing_to_bit_pulse(np_array)
 
-            sorted_pulses_start = np.asarray(sorted(pulses, key = lambda x: int(x[1])), dtype = np.int64)
+            sorted_pulses_start = sorted(np.asarray(pulses).tolist(), key = lambda x: x[1])
             # self.max_pulse_length is 2000 ns now
-            index_jump = np.where(np.diff(sorted_pulses_start[:,1], axis = 0) > self.max_pulse_length/self.timebase )[0]
-            sorted_arrays_parts = np.split(sorted_pulses_start, index_jump + 1)
+            # split where the distance between the starts of two
+            # consecutive pulses exceeds max_pulse_length (in clock ticks)
+            sorted_arrays_parts = [ [sorted_pulses_start[0]] ]
+            for row in sorted_pulses_start[1:]:
+                if row[1] - sorted_arrays_parts[-1][-1][1] > self.max_pulse_length/self.timebase:
+                    sorted_arrays_parts.append([row])
+                else:
+                    sorted_arrays_parts[-1].append(row)
 
 
             for index, element in enumerate(sorted_arrays_parts):
-                temp, min_value = self.convert_to_bit_pulse(element)
-                answer.append(self.instruction_pulse(temp))
+                instructions, min_value = self.instructions_from_part(element)
+                answer.append(instructions)
                 # keep them all for further shifting
                 min_list.append(min_value)
 
@@ -2122,6 +2219,104 @@ class PB_ESR_500_Pro:
             else:
                 assert(1 == 2), 'Pulse sequence is longer than one period of the repetition rate'            
 
+    def instructions_from_part(self, np_array):
+        """
+        Event-based replacement for the convert_to_bit_pulse() /
+        instruction_pulse() pair, producing exactly the same instruction
+        list without materializing the per-clock-tick bit array.
+
+        The output word in every time interval is the sum of 2**ch over
+        all pulses covering that interval; instructions are the maximal
+        intervals of constant output word, including zero-word gaps.
+        Returns (final_pulse_array, min_pulse) where final_pulse_array is
+        a list of [output_word, start_ns, length_ns] instructions and
+        min_pulse is the start of the part in clock ticks (used for
+        shifting the parts inside split_into_parts())
+        """
+        # plain Python is faster than numpy for the small (a few tens of
+        # pulses) arrays handled here
+        part = np_array if isinstance(np_array, list) else np_array.tolist()
+        starts = [p[1] for p in part]
+        ends = [p[2] for p in part]
+        max_pulse = max(ends)
+        # we get rid of constant shift in the first pulse, since
+        # it is useless in terms of pulse blaster instructions
+        # the first pulse in sequence will start at 50 ns all other shifted accordingly
+        # this value can be adjusted by add_shift parameter (multiplied by self.timebase)
+        min_pulse = min(starts) - self.add_shift
+
+        # boundaries of the intervals on which the output word is constant;
+        # the last boundary is always max_pulse (the largest pulse end)
+        boundaries = [min_pulse] + sorted(set(starts).union(ends))
+
+        # output word on [boundaries[k], boundaries[k+1]): sum of channel
+        # bits of all pulses covering the left edge
+        words = []
+        for k in range(len(boundaries) - 1):
+            left_edge = boundaries[k]
+            word = 0
+            for p in part:
+                if p[1] <= left_edge < p[2]:
+                    word += p[0]
+            words.append(word)
+
+        # merge adjacent intervals with equal output word and convert
+        # to [output_word, start_ns, length_ns] instructions
+        timebase = self.timebase
+        final_pulse_array = []
+        seg_start = min_pulse
+        prev_word = words[0]
+        for k in range(1, len(words)):
+            if words[k] != prev_word:
+                final_pulse_array.append( [prev_word, timebase*(seg_start - min_pulse), timebase*(boundaries[k] - seg_start)] )
+                seg_start = boundaries[k]
+                prev_word = words[k]
+        final_pulse_array.append( [prev_word, timebase*(seg_start - min_pulse), timebase*(max_pulse - seg_start)] )
+
+        return final_pulse_array, min_pulse
+
+    def instructions_amp_lna_joined(self, p_list, channel):
+        """
+        Interval-based replacement for the convert_to_bit_pulse_amp_lna() /
+        check_short_pulses() / joining_pulses() /
+        instruction_pulse_short_lna_amp() pipeline, producing exactly the
+        same result without materializing the per-clock-tick bit array.
+
+        AMP_ON / LNA_PROTECT pulses are united (overlapping or touching
+        pulses are combined); if any two of the united pulses are closer
+        than the minimal allowed distance, all pulses closer than
+        (min_pulse_length + 1) ticks are joined into one, exactly as
+        check_short_pulses() + joining_pulses() do on the bit array.
+        Returns a list of [2**channel, start, end] rows in clock ticks
+        """
+        intervals = sorted([int(row[1]), int(row[2])] for row in np.asarray(p_list))
+        united = []
+        for start, end in intervals:
+            if end <= start:
+                continue
+            if united and start <= united[-1][1]:
+                if end > united[-1][1]:
+                    united[-1][1] = end
+            else:
+                united.append([start, end])
+
+        # check_short_pulses() triggers the joining when two pulses are
+        # separated by 1 .. (min_pulse_length - 1) ticks ...
+        if any( 1 <= united[k + 1][0] - united[k][1] <= self.min_pulse_length - 1 \
+                for k in range(len(united) - 1) ):
+            # ... and joining_pulses() then joins every pair separated by
+            # up to (min_pulse_length + 1) ticks
+            joined = [united[0]]
+            for start, end in united[1:]:
+                if start - joined[-1][1] <= self.min_pulse_length + 1:
+                    joined[-1][1] = end
+                else:
+                    joined.append([start, end])
+            united = joined
+
+        channel_bits = 2**channel
+        return [ [channel_bits, start, end] for start, end in united ]
+
     def convert_to_bit_pulse(self, np_array):
         """
         A function to calculate in which time interval
@@ -2148,7 +2343,6 @@ class PB_ESR_500_Pro:
 
             bit_array = np.zeros( max_pulse - min_pulse, dtype = np.int64 )
 
-
             i = 0
             while i < len(pulses):
                 # convert each pulse in an array of 0 and 1,
@@ -2159,15 +2353,6 @@ class PB_ESR_500_Pro:
                 
                 # summing arrays for each pulse into the finalbit_array
                 bit_array = bit_array + translation_array
-
-                # ITC bridge with two syntetizer
-                # AWG channel uses synt2 as default
-                # we need to add a pulse
-                # RECT/AWG pulse: pulses[i, 0] == 2**7
-                if self.synt_number == 1 and pulses[i, 0] == 2**7:
-                    bit_array = bit_array + 2**self.channel_dict[self.ch9]*np.concatenate( (np.zeros( pulses[i, 1] - min_pulse, dtype = np.int64), \
-                        np.ones(pulses[i, 2] - pulses[i, 1], dtype = np.int64), \
-                        np.zeros(max_pulse - pulses[i, 2], dtype = np.int64)), axis = None)
 
                 i += 1
 
@@ -2192,15 +2377,6 @@ class PB_ESR_500_Pro:
                 
                 # summing arrays for each pulse into the finalbit_array
                 bit_array = bit_array + translation_array
-
-                # ITC bridge with two syntetizer
-                # AWG channel uses synt2 as default
-                # we need to add a pulse
-                # RECT/AWG pulse: pulses[i, 0] == 2**7
-                if self.synt_number == 1 and pulses[i, 0] == 2**7:
-                    bit_array = bit_array + 2**self.channel_dict[self.ch9]*np.concatenate( (np.zeros( pulses[i, 1] - min_pulse, dtype = np.int64), \
-                        np.ones(pulses[i, 2] - pulses[i, 1], dtype = np.int64), \
-                        np.zeros(max_pulse - pulses[i, 2], dtype = np.int64)), axis = None)
 
                 i += 1
 
@@ -2243,17 +2419,6 @@ class PB_ESR_500_Pro:
                     # appending each pulses individually
                     bit_array_pulses.append(translation_array)
 
-                    # ITC bridge with two syntetizer
-                    # AWG channel uses synt2 as default
-                    # we need to add a pulse
-                    # RECT/AWG pulse: pulses[i, 0] == 2**7
-                    if self.synt_number == 1 and pulses[i, 0] == 2**7:
-
-                        translation_array = 2**self.channel_dict[self.ch9]*np.concatenate( (np.zeros( 2*(pulses[i, 1] - min_pulse), dtype = np.int64), \
-                            np.ones(2*(pulses[i, 2] - pulses[i, 1]), dtype = np.int64), \
-                            np.zeros(2*(max_pulse - pulses[i, 2]), dtype = np.int64)), axis = None)
-                        bit_array_pulses.append(translation_array)
-
                 i += 1
 
             return bit_array_pulses
@@ -2279,19 +2444,8 @@ class PB_ESR_500_Pro:
                         np.ones(pulses[i, 2] - pulses[i, 1], dtype = np.int64), \
                         np.zeros(max_pulse - pulses[i, 2], dtype = np.int64)), axis = None)
                 
-                    # summing arrays for each pulse into the finalbit_array
+                # summing arrays for each pulse into the finalbit_array
                     bit_array_pulses.append(translation_array)
-
-                    # ITC bridge with two syntetizer
-                    # AWG channel uses synt2 as default
-                    # we need to add a pulse
-                    # RECT/AWG pulse: pulses[i, 0] == 2**7
-                    if self.synt_number == 1 and pulses[i, 0] == 2**7:
-                        
-                        translation_array = 2**self.channel_dict[self.ch9]*np.concatenate( (np.zeros( 2*(pulses[i, 1] - min_pulse), dtype = np.int64), \
-                            np.ones(2*(pulses[i, 2] - pulses[i, 1]), dtype = np.int64), \
-                            np.zeros(2*(max_pulse - pulses[i, 2]), dtype = np.int64)), axis = None)
-                        bit_array_pulses.append(translation_array)
 
                 i += 1
 
@@ -2414,7 +2568,7 @@ class PB_ESR_500_Pro:
 
             return final_pulse_array
 
-    def add_amp_on_pulses(self, p_list):
+    def add_amp_on_pulses(self, p_list, split_pulse_array = None):
         """
         A function that automatically add AMP_ON pulses with corresponding delays
         specified by switch_delay and amp_delay
@@ -2426,14 +2580,18 @@ class PB_ESR_500_Pro:
                 amp_on_list = []
                 # for dealing with overlap of RECT_AWG pulse with MW; RECT_AWG should behaves the same as AMP_ON
                 awg_list = []
+                # plain Python ints are much faster in the comparison
+                # loops below than numpy scalars; element_row keeps the
+                # original numpy row where in-place mutation must propagate
+                p_rows = p_list.tolist()
 
-                for index, element in enumerate(p_list):
+                for element_row, element in zip(p_list, p_rows):
                     if element[0] == 2**(self.channel_dict['MW']):
                         amp_on_list.append( [2**(self.channel_dict['AMP_ON']), element[1] - self.switch_delay, element[2] + self.amp_delay] )
                     # AMP_ON and RECT_AWG coincide now
                     elif element[0] == 2**(self.channel_dict['AWG']):
                         amp_on_list.append( [2**(self.channel_dict['AMP_ON']), element[1] - 0*self.switch_delay, element[2] + 0*self.amp_delay] )
-                        awg_list.append(element)
+                        awg_list.append(element_row)
                     else:
                         pass
 
@@ -2442,7 +2600,7 @@ class PB_ESR_500_Pro:
                 # in this case there can be nasty short overpal of amp_on pulse 2
                 # and mw pulse 1 and so on
                 for element in amp_on_list:
-                    for element_mw in p_list:
+                    for element_mw in p_rows:
                         if (element_mw[1] - element[1] <= self.overlap_amp_lna_mw) and (element_mw[1] - element[1] > 0):
                             element[1] = element[1] - self.overlap_amp_lna_mw
                         elif (element_mw[1] - element[1] >= -self.overlap_amp_lna_mw) and (element_mw[1] - element[1] < 0):
@@ -2474,7 +2632,8 @@ class PB_ESR_500_Pro:
                 # additional checking for phase and amp_on pulses after
                 # overlap correction
                 if len(self.phase_array_length) > 0:
-                    split_pulse_array = self.splitting_acc_to_channel( self.convertion_to_numpy( self.pulse_array ) )
+                    if split_pulse_array is None:
+                        split_pulse_array = self.splitting_acc_to_channel( self.convertion_to_numpy( self.pulse_array ) )
                     # iterate over all pulses at different channels and taking phase pulses
                     for index, element in enumerate(split_pulse_array):
                         if ( element[0, 0] == 2**self.channel_dict['-X'] ) or ( element[0, 0] == 2**self.channel_dict['+Y'] ):
@@ -2501,27 +2660,31 @@ class PB_ESR_500_Pro:
             elif self.auto_defense == 'True':
                 amp_on_list = []
                 awg_list = []
+                # plain Python ints are much faster in the comparison
+                # loops below than numpy scalars; element_row keeps the
+                # original numpy row where in-place mutation must propagate
+                p_rows = p_list.tolist()
 
-                for index, element in enumerate(p_list):
+                for element_row, element in zip(p_list, p_rows):
                     if element[0] == 2**(self.channel_dict['MW']):
                         if (element[2] + self.amp_delay) - (element[1] - self.switch_delay) <= self.max_pulse_length/2:
                             amp_on_list.append( [2**(self.channel_dict['AMP_ON']), element[1] - self.switch_delay, element[2] + self.amp_delay] )
                             
                         else:
-                            assert(1 == 2), 'Maximum available length (1900 ns) for AMP_ON pulse is reached'
+                            assert(1 == 2), 'Maximum available length of 1900 ns for AMP_ON pulse is reached'
                     # AMP_ON and RECT_AWG coincide now
                     elif element[0] == 2**(self.channel_dict['AWG']):
                         if element[2] - element[1]  <= self.max_pulse_length/2:
                             amp_on_list.append( [2**(self.channel_dict['AMP_ON']), element[1], element[2]] )
-                            awg_list.append(element)
+                            awg_list.append(element_row)
                         else:
-                            assert(1 == 2), 'Maximum available length (1900 ns) for AMP_ON pulse is reached'
+                            assert(1 == 2), 'Maximum available length of 1900 ns for AMP_ON pulse is reached'
 
                     else:
                         pass
 
                 for element in amp_on_list:
-                    for element_mw in p_list:
+                    for element_mw in p_rows:
                         if (element_mw[1] - element[1] <= self.overlap_amp_lna_mw) and (element_mw[1] - element[1] > 0):
                             element[1] = element[1] - self.overlap_amp_lna_mw
                         elif (element_mw[1] - element[1] >= -self.overlap_amp_lna_mw) and (element_mw[1] - element[1] < 0):
@@ -2548,7 +2711,8 @@ class PB_ESR_500_Pro:
                             element[1] = element_mw[2]
 
                 if len(self.phase_array_length) > 0:
-                    split_pulse_array = self.splitting_acc_to_channel( self.convertion_to_numpy( self.pulse_array ) )
+                    if split_pulse_array is None:
+                        split_pulse_array = self.splitting_acc_to_channel( self.convertion_to_numpy( self.pulse_array ) )
                     # iterate over all pulses at different channels and taking phase pulses
                     for index, element in enumerate(split_pulse_array):
                         if ( element[0, 0] == 2**self.channel_dict['-X'] ) or ( element[0, 0] == 2**self.channel_dict['+Y'] ):
@@ -2604,7 +2768,7 @@ class PB_ESR_500_Pro:
 
                 return np.asarray(amp_on_list)
 
-    def add_lna_protect_pulses(self, p_list):
+    def add_lna_protect_pulses(self, p_list, split_pulse_array = None):
         """
         A function that automatically add LNA_PROTECT pulses with corresponding delays
         specified by switch_delay and protect_delay
@@ -2614,7 +2778,10 @@ class PB_ESR_500_Pro:
                 pass
             elif self.auto_defense == 'True':
                 lna_protect_list = []
-                for index, element in enumerate(p_list):
+                # plain Python ints are much faster in the comparison
+                # loops below than numpy scalars
+                p_rows = p_list.tolist()
+                for element in p_rows:
                     if element[0] == 2**(self.channel_dict['MW']):
                         lna_protect_list.append( [2**(self.channel_dict['LNA_PROTECT']), element[1] - self.switch_delay, element[2] + self.protect_delay] )
                     # LNA_PROTECT and RECT_AWG coincide in the start position but LNA is longer at protect_delay
@@ -2628,7 +2795,7 @@ class PB_ESR_500_Pro:
                 # in this case there can be nasty short overpal of lna_protect pulse 2
                 # and mw pulse 1 and so on
                 for element in lna_protect_list:
-                    for element_mw in p_list:
+                    for element_mw in p_rows:
                         if (element_mw[1] - element[1] <= self.overlap_amp_lna_mw) and (element_mw[1] - element[1] > 0):
                             element[1] = element[1] - self.overlap_amp_lna_mw
                         elif (element_mw[1] - element[1] >= -self.overlap_amp_lna_mw) and (element_mw[1] - element[1] < 0):
@@ -2659,7 +2826,8 @@ class PB_ESR_500_Pro:
                 # additional checking for phase and lna_protect pulses after
                 # overlap correction
                 if len(self.phase_array_length) > 0:
-                    split_pulse_array = self.splitting_acc_to_channel( self.convertion_to_numpy( self.pulse_array ) )
+                    if split_pulse_array is None:
+                        split_pulse_array = self.splitting_acc_to_channel( self.convertion_to_numpy( self.pulse_array ) )
                     # iterate over all pulses at different channels and taking phase pulses
                     for index, element in enumerate(split_pulse_array):
                         if ( element[0, 0] == 2**self.channel_dict['-X'] ) or ( element[0, 0] == 2**self.channel_dict['+Y'] ):
@@ -2685,7 +2853,10 @@ class PB_ESR_500_Pro:
                 pass
             elif self.auto_defense == 'True':
                 lna_protect_list = []
-                for index, element in enumerate(p_list):
+                # plain Python ints are much faster in the comparison
+                # loops below than numpy scalars
+                p_rows = p_list.tolist()
+                for element in p_rows:
                     if element[0] == 2**(self.channel_dict['MW']):
                         lna_protect_list.append( [2**(self.channel_dict['LNA_PROTECT']), element[1] - self.switch_delay, element[2] + self.protect_delay] )
                     # LNA_PROTECT and RECT_AWG coincide in the start position but LNA is longer at protect_delay
@@ -2695,7 +2866,7 @@ class PB_ESR_500_Pro:
                         pass
 
                 for element in lna_protect_list:
-                    for element_mw in p_list:
+                    for element_mw in p_rows:
                         if (element_mw[1] - element[1] <= self.overlap_amp_lna_mw) and (element_mw[1] - element[1] > 0):
                             element[1] = element[1] - self.overlap_amp_lna_mw
                         elif (element_mw[1] - element[1] >= -self.overlap_amp_lna_mw) and (element_mw[1] - element[1] < 0):
@@ -2722,7 +2893,8 @@ class PB_ESR_500_Pro:
                             element[1] = element_mw[2]
 
                 if len(self.phase_array_length) > 0:
-                    split_pulse_array = self.splitting_acc_to_channel( self.convertion_to_numpy( self.pulse_array ) )
+                    if split_pulse_array is None:
+                        split_pulse_array = self.splitting_acc_to_channel( self.convertion_to_numpy( self.pulse_array ) )
                     # iterate over all pulses at different channels and taking phase pulses
                     for index, element in enumerate(split_pulse_array):
                         if ( element[0, 0] == 2**self.channel_dict['-X'] ) or ( element[0, 0] == 2**self.channel_dict['+Y'] ):
@@ -2751,68 +2923,36 @@ class PB_ESR_500_Pro:
         Returns both specified parts for further convertion in shich problematic part
         are joined using check_short_pulses() and joining_pulses()
         """
-        if self.test_flag != 'test':
-            if self.auto_defense == 'False':
-                pass
-            elif self.auto_defense == 'True':
-                problem_list = []
-                # memorize index of problem elements
-                problem_index = []
-                # numpy arrays don't support element deletion
-                no_problem_list = deepcopy(p_list.tolist())
+        if self.auto_defense == 'False':
+            pass
+        elif self.auto_defense == 'True':
+            rows = p_list.tolist()
+            problem_list = []
+            # memorize index of problem elements
+            problem_index = set()
 
-                # there STILL can be errors
-                # now compare two consequnce pulses (end and start + 1)
-                for index, element in enumerate(p_list[:-1]):
+            # there STILL can be errors
+            # now compare two consequnce pulses (end and start + 1)
+            for index in range(len(rows) - 1):
+                # minimal_distance_amp_lna is 12 ns now
+                if rows[index + 1][1] - rows[index][2] < self.minimal_distance_amp_lna:
+                    problem_list.append(rows[index])
+                    problem_list.append(rows[index + 1])
+                    # memorize indexes of the problem pulses
+                    problem_index.add(index)
+                    problem_index.add(index + 1)
 
-                    # minimal_distance_amp_lna is 12 ns now
-                    if p_list[index + 1][1] - element[2] < self.minimal_distance_amp_lna:
-                        problem_list.append(element)
-                        problem_list.append(p_list[index + 1])
-                        # memorize indexes of the problem pulses
-                        problem_index.append(index)
-                        problem_index.append(index + 1)
+            # delete problem pulses from no_problem_list
+            no_problem_list = [row for index, row in enumerate(rows) if index not in problem_index]
 
-                # delete duplicates in the index list: list(dict.fromkeys(problem_index)) )
-                # delete problem pulses from no_problem_list
-                # np.delete( no_problem_list, list(dict.fromkeys(problem_index)), axis = 0 ).tolist() )
-                no_problem_list = np.delete( no_problem_list, list(dict.fromkeys(problem_index)), axis = 0 ).tolist()
-
-                # for not returning an empty list
-                # the same conditions are used in preparing_to_bit_pulse()
-                if len(problem_list) == 0:
-                    return self.delete_duplicates(np.asarray(no_problem_list)), np.array([[0]])
-                elif len(no_problem_list) == 0:
-                    return np.array([[0]]), self.delete_duplicates(np.asarray(problem_list))
-                else:
-                    return self.delete_duplicates(np.asarray(no_problem_list)), self.delete_duplicates(np.asarray(problem_list))
-
-        elif self.test_flag == 'test':
-            if self.auto_defense == 'False':
-                pass
-            elif self.auto_defense == 'True':            
-                problem_list = []
-                problem_index = []
-                # numpy arrays don't support element deletion
-                no_problem_list = deepcopy(p_list.tolist())
-
-                for index, element in enumerate(p_list[:-1]):
-                    # minimal_distance_amp_lna is 12 ns now
-                    if p_list[index + 1][1] - element[2] < (self.minimal_distance_amp_lna):
-                        problem_list.append(element)
-                        problem_list.append(p_list[index + 1])
-                        # memorize indexes of the problem pulses
-                        problem_index.append(index)
-                        problem_index.append(index + 1)
-
-                no_problem_list = np.delete( no_problem_list, list(dict.fromkeys(problem_index)), axis = 0 ).tolist()
-
-                if len(problem_list) == 0:
-                    return self.delete_duplicates(np.asarray(no_problem_list)), np.array([[0]])
-                elif len(no_problem_list) == 0:
-                    return np.array([[0]]), self.delete_duplicates(np.asarray(problem_list))
-                else:
-                    return self.delete_duplicates(np.asarray(no_problem_list)), self.delete_duplicates(np.asarray(problem_list))
+            # for not returning an empty list
+            # the same conditions are used in preparing_to_bit_pulse()
+            if len(problem_list) == 0:
+                return self.delete_duplicates(np.asarray(no_problem_list)), np.array([[0]])
+            elif len(no_problem_list) == 0:
+                return np.array([[0]]), self.delete_duplicates(np.asarray(problem_list))
+            else:
+                return self.delete_duplicates(np.asarray(no_problem_list)), self.delete_duplicates(np.asarray(problem_list))
 
     def convert_to_bit_pulse_amp_lna(self, p_list, channel):
         """
@@ -3032,7 +3172,7 @@ class PB_ESR_500_Pro:
             temp = parameter.split(' ')
             if temp[1] in self.timebase_dict:
                 flag = self.timebase_dict[temp[1]]
-                par_st = int(int((temp[0]))*flag + delay)
+                par_st = int(float(temp[0])*flag + delay)
                 new_parameter = str( par_st ) + ' ns'
 
             return new_parameter
@@ -3041,10 +3181,10 @@ class PB_ESR_500_Pro:
             temp = parameter.split(' ')
             if temp[1] in self.timebase_dict:
                 flag = self.timebase_dict[temp[1]]
-                par_st = int(int((temp[0]))*flag + delay)
+                par_st = int(float(temp[0])*flag + delay)
                 new_parameter = str( par_st ) + ' ns'
             else:
-                assert(1 == 2), 'Incorrect time dimension (ns, us, ms, s)'
+                assert(1 == 2), 'Incorrect time; time: int + [" ms", " us", " ns"]'
 
             return new_parameter
 

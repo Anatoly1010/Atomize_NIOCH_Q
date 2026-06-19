@@ -9,6 +9,7 @@ import time
 import tempfile
 import traceback
 import numpy as np
+import pyqtgraph as pg
 from multiprocessing import Process, Pipe
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QLabel, QDoubleSpinBox, QSpinBox, QComboBox, QPushButton, QTextEdit, QGridLayout, QFrame, QCheckBox, QFileDialog, QVBoxLayout, QTabWidget, QScrollArea, QHBoxLayout, QPlainTextEdit, QProgressBar,  QTreeView, QHeaderView, QSizeGrip, QLineEdit, QFileIconProvider
 from PyQt6.QtGui import QIcon, QColor, QAction, QTextCursor
@@ -3118,7 +3119,7 @@ class Worker():
             y = t3104.oscilloscope_get_curve('CH1')
 
             real_length = t3104.oscilloscope_record_length( )
-            t_res = round( t3104.oscilloscope_timebase() / real_length, 5 )    # in us
+            t_res = round( pg.siEval( t3104.oscilloscope_time_resolution() ) * 1e6, 5 )    # in us
 
             t3104.oscilloscope_number_of_averages( n_averages )
 
@@ -3147,7 +3148,7 @@ class Worker():
                     t3104.oscilloscope_timebase( str(points_value) + ' ns' )
                     t3104.oscilloscope_run_stop()
                     real_length = t3104.oscilloscope_record_length( )
-                    t_res = round( t3104.oscilloscope_timebase() / real_length, 5 )
+                    t_res = round( pg.siEval( t3104.oscilloscope_time_resolution() ) * 1e6, 5 )
                     WIN_ADC = int( real_length )
                     x_axis = np.linspace(0, real_length * t_res, num = real_length, endpoint = False)
                     cycle_data_x = np.zeros( ( PHASES, WIN_ADC ) )
@@ -3462,7 +3463,7 @@ class Worker():
             y = t3104.oscilloscope_get_curve('CH1')
 
             real_length = t3104.oscilloscope_record_length( )
-            t_res = round( t3104.oscilloscope_timebase() / real_length, 5 )    # in us
+            t_res = round( pg.siEval( t3104.oscilloscope_time_resolution() ) * 1e6, 5 )    # in us
 
             t3104.oscilloscope_number_of_averages( AVERAGES )
 
@@ -3805,7 +3806,7 @@ class Worker():
             y = t3104.oscilloscope_get_curve('CH1')
 
             real_length = t3104.oscilloscope_record_length( )
-            t_res = round( t3104.oscilloscope_timebase() / real_length, 5 )    # in us
+            t_res = round( pg.siEval( t3104.oscilloscope_time_resolution() ) * 1e6, 5 )    # in us
 
             t3104.oscilloscope_number_of_averages( AVERAGES )
 
@@ -4141,7 +4142,7 @@ class Worker():
             y = t3104.oscilloscope_get_curve('CH1')
 
             real_length = t3104.oscilloscope_record_length( )
-            t_res = round( t3104.oscilloscope_timebase() / real_length, 5 )    # in us
+            t_res = round( pg.siEval( t3104.oscilloscope_time_resolution() ) * 1e6, 5 )    # in us
 
             t3104.oscilloscope_number_of_averages( AVERAGES )
 
@@ -4469,7 +4470,7 @@ class Worker():
             y = t3104.oscilloscope_get_curve('CH1')
 
             real_length = t3104.oscilloscope_record_length( )
-            t_res = round( t3104.oscilloscope_timebase() / real_length, 5 )    # in us
+            t_res = round( pg.siEval( t3104.oscilloscope_time_resolution() ) * 1e6, 5 )    # in us
 
             t3104.oscilloscope_number_of_averages( AVERAGES )
 
