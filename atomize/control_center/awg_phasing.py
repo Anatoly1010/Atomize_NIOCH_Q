@@ -4096,6 +4096,9 @@ class Worker():
 
                 data_x, data_y = pb.pulser_acquisition_cycle( cycle_data_x, cycle_data_y, acq_cycle = rect1[3] )
 
+                if iq_cor == 1:
+                    data_x, data_y = t3104.oscilloscope_iq(data_x, data_y, iq_freq, zero_order, first_order, second_order)
+
                 if script_test:
                     general.plot_1d('Dig', x_axis, ( data_x, data_y ),
                         xscale = 'us', yscale = 'V', label = 'ch',
