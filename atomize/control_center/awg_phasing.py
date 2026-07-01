@@ -4302,6 +4302,7 @@ class Worker():
             awg.awg_clock_mode('External')
             awg.awg_reference_clock(100)
             awg.awg_sample_rate(1000)
+            awg.awg_trigger_delay('0 ns')
             awg.awg_amplitude('CH0', str(ch0_ampl), 'CH1', str(ch1_ampl) )
 
             # Master AWG-card trigger: one TRIGGER_AWG for the whole sequence;
@@ -4849,6 +4850,7 @@ class Worker():
             awg.awg_clock_mode('External')
             awg.awg_reference_clock(100)
             awg.awg_sample_rate(1000)
+            awg.awg_trigger_delay('0 ns')
             awg.awg_amplitude('CH0', str(ch0_ampl), 'CH1', str(ch1_ampl) )
 
             # Master AWG-card trigger: one TRIGGER_AWG for the whole sequence;
@@ -5485,6 +5487,7 @@ class Worker():
             awg.awg_clock_mode('External')
             awg.awg_reference_clock(100)
             awg.awg_sample_rate(1000)
+            awg.awg_trigger_delay('0 ns')
             awg.awg_amplitude('CH0', str(ch0_ampl), 'CH1', str(ch1_ampl) )
 
             # Master AWG-card trigger: one TRIGGER_AWG for the whole sequence;
@@ -5963,6 +5966,7 @@ class Worker():
             awg.awg_clock_mode('External')
             awg.awg_reference_clock(100)
             awg.awg_sample_rate(1000)
+            awg.awg_trigger_delay('0 ns')
             awg.awg_amplitude('CH0', str(ch0_ampl), 'CH1', str(ch1_ampl) )
 
             # Master AWG-card trigger: one TRIGGER_AWG for the whole sequence;
@@ -6514,6 +6518,7 @@ class Worker():
             awg.awg_clock_mode('External')
             awg.awg_reference_clock(100)
             awg.awg_sample_rate(1000)
+            awg.awg_trigger_delay('0 ns')
             awg.awg_amplitude('CH0', str(ch0_ampl), 'CH1', str(ch1_ampl) )
 
             # Master AWG-card trigger: one TRIGGER_AWG for the whole sequence;
