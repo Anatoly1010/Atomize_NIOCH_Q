@@ -3781,6 +3781,9 @@ class Worker():
             import atomize.general_modules.general_functions as general
             if script_test:
                 general.test_flag = 'test'
+            # Route this scan's plot_1d / plot_2d through the non-blocking
+            # coalescing worker so the acquisition loop isn't paced by the GUI.
+            general.set_plotting_async(True)
             import atomize.device_modules.Keysight_3000_Xseries as key
             import atomize.device_modules.Spectrum_M4I_6631_X8 as spectrum_awg
             import atomize.device_modules.PB_Micran as pb_pro
@@ -4177,6 +4180,9 @@ class Worker():
             import atomize.general_modules.general_functions as general
             if script_test:
                 general.test_flag = 'test'
+            # Route this scan's plot_1d / plot_2d through the non-blocking
+            # coalescing worker so the acquisition loop isn't paced by the GUI.
+            general.set_plotting_async(True)
             import atomize.device_modules.Keysight_3000_Xseries as key
             import atomize.device_modules.Spectrum_M4I_6631_X8 as spectrum_awg
             import atomize.device_modules.PB_Micran as pb_pro
@@ -4725,6 +4731,9 @@ class Worker():
             import atomize.general_modules.general_functions as general
             if script_test:
                 general.test_flag = 'test'
+            # Route this scan's plot_1d / plot_2d through the non-blocking
+            # coalescing worker so the acquisition loop isn't paced by the GUI.
+            general.set_plotting_async(True)
             import atomize.device_modules.Keysight_3000_Xseries as key
             import atomize.device_modules.Spectrum_M4I_6631_X8 as spectrum_awg
             import atomize.device_modules.PB_Micran as pb_pro
@@ -5401,6 +5410,9 @@ class Worker():
             import atomize.general_modules.general_functions as general
             if script_test:
                 general.test_flag = 'test'
+            # Route this scan's plot_1d / plot_2d through the non-blocking
+            # coalescing worker so the acquisition loop isn't paced by the GUI.
+            general.set_plotting_async(True)
             import atomize.device_modules.Keysight_3000_Xseries as key
             import atomize.device_modules.Spectrum_M4I_6631_X8 as spectrum_awg
             import atomize.device_modules.PB_Micran as pb_pro
@@ -5868,6 +5880,9 @@ class Worker():
             import atomize.general_modules.general_functions as general
             if script_test:
                 general.test_flag = 'test'
+            # Route this scan's plot_1d / plot_2d through the non-blocking
+            # coalescing worker so the acquisition loop isn't paced by the GUI.
+            general.set_plotting_async(True)
             import atomize.device_modules.Keysight_3000_Xseries as key
             import atomize.device_modules.Spectrum_M4I_6631_X8 as spectrum_awg
             import atomize.device_modules.PB_Micran as pb_pro
@@ -6435,6 +6450,9 @@ class Worker():
             import atomize.general_modules.general_functions as general
             if script_test:
                 general.test_flag = 'test'
+            # Route this scan's plot_1d / plot_2d through the non-blocking
+            # coalescing worker so the acquisition loop isn't paced by the GUI.
+            general.set_plotting_async(True)
             import atomize.device_modules.Keysight_3000_Xseries as key
             import atomize.device_modules.Spectrum_M4I_6631_X8 as spectrum_awg
             import atomize.device_modules.PB_Micran as pb_pro
