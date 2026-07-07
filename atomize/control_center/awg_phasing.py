@@ -4079,17 +4079,18 @@ class Worker():
                         )
 
                 if fft_flag == 1:
-                    # The 'Dig' and 'FFT' plot_1d calls fire back-to-back through the
-                    # async shared-memory plotter; without a gap the second payload can
-                    # race the first's transfer and corrupt both curves (wrong x-axis on
-                    # 'ch', garbled 'ch_1') and the FFT. A short wait lets the 'Dig' send
-                    # complete before the 'FFT' payload reuses the channel.
-                    general.wait('1 ms')
+                    # The 'Dig' and 'FFT' plot_1d calls fire back-to-back; a short
+                    # wait immediately before the 'FFT' send throttles the pair so
+                    # the 'Dig' frame is fully handed off first (otherwise the two
+                    # frames pile into the socket and can desync -> wrong x-axis on
+                    # 'ch', garbled 'ch_1', broken FFT). Placed right before plot_1d
+                    # because that is the only spot that gates the actual send.
 
                     if quad == 0:
                         freq_axis, abs_values = fft.fft(x_axis, data_x, data_y, t_res * 1000)
                         m_val = round( np.amax( abs_values ), 2 )
                         # fft.fft returns MHz; the axis auto-SI-prefixes, so pass Hz
+                        general.wait('1 ms')
                         general.plot_1d('FFT', freq_axis * 1e6, abs_values,
                             xname = 'Freq Offset', label = 'FFT', xscale = 'Hz',
                             yscale = 'Arb. U.', text = 'Max ' + str(m_val)
@@ -4102,6 +4103,7 @@ class Worker():
                         freq, fft_x, fft_y = fft.fft( x_axis[p_to_drop:], data_x[p_to_drop:], data_y[p_to_drop:], t_res * 1000, re = 'True' )
                         data_fft = fft.ph_correction( freq, fft_x, fft_y, zero_order, first_order, second_order )
                         # ph_correction uses freq in MHz; the axis auto-SI-prefixes, so plot Hz
+                        general.wait('1 ms')
                         general.plot_1d('FFT', freq * 1e6, ( data_fft[0], data_fft[1] ),
                             xname = 'Freq Offset', xscale = 'Hz',
                             yscale = 'Arb. U.', label = 'FFT'
