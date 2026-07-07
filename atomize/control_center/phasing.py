@@ -2418,6 +2418,17 @@ class MainWindow(QMainWindow):
         self.dig_stop()
         self.dig_start()
 
+    def _write_run_status(self, running):
+        """Cross-process 'hardware busy' flag (libs/status), read by the main
+        GUI to refuse launching an experiment while a live preview/experiment is
+        active here. Best-effort; never raise into the run path."""
+        try:
+            path_file = os.path.join( os.path.abspath( os.getcwd() ), 'status' )
+            with open(path_file, 'w') as f:
+                f.write('Status:  ' + ('On' if running else 'Off') + '\n')
+        except Exception:
+            pass
+
     def dig_stop(self):
         """
         A function to stop digitizer
@@ -2442,6 +2453,11 @@ class MainWindow(QMainWindow):
         file_to_read.write('CH1 Offset: ' + str( 0 ) +'\n')
         file_to_read.write('Window Left: ' + str( int(self.cur_win_left) ) +'\n')
         file_to_read.write('Window Right: ' + str( int(self.cur_win_right) ) +'\n')
+        # phase corrections (worker units: rad, rad/s, rad/s^2) so acquisition
+        # scripts pick them up via oscilloscope_read_settings() without a preset
+        file_to_read.write('Zero order: ' + str( getattr(self, 'zero_order', 0.0) ) +'\n')
+        file_to_read.write('First order: ' + str( getattr(self, 'first_order', 0.0) ) +'\n')
+        file_to_read.write('Second order: ' + str( getattr(self, 'second_order', 0.0) ) +'\n')
         file_to_read.close()
 
         if self.opened == 0:
@@ -2561,6 +2577,7 @@ class MainWindow(QMainWindow):
         self.button_start_exp.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(193, 202, 227); border-style: outset; color: rgb(63, 63, 97); font-weight: bold; } QPushButton:pressed {background-color: rgb(211, 194, 78); border-style: inset; font-weight: bold; }")
 
         self.digitizer_process.start()
+        self._write_run_status(True)
         # send a command in a different thread about the current state
         self.parent_conn_dig.send('start')
         ###
@@ -2620,6 +2637,7 @@ class MainWindow(QMainWindow):
         #self.progress_bar.setValue(0)
 
         self.digitizer_process.start()
+        self._write_run_status(True)
         # send a command in a different thread about the current state
         self.parent_conn_dig.send('start')
         ###
@@ -2776,8 +2794,10 @@ class MainWindow(QMainWindow):
                         self.is_experiment = False
                     self.last_error = False
                     field_param.clear_lock()
+                    self._write_run_status(False)
             else:
                 field_param.clear_lock()
+                self._write_run_status(False)
 
     def check_process_status(self):
         if self.digitizer_process.is_alive():
@@ -2799,6 +2819,7 @@ class MainWindow(QMainWindow):
         #self.timer.stop()
         self.is_experiment = False
         field_param.clear_lock()
+        self._write_run_status(False)
 
         if self.exit_clicked == 1:
             sys.exit()
@@ -2830,6 +2851,7 @@ class MainWindow(QMainWindow):
         self.button_update.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(211, 194, 78); border-style: outset; color: rgb(63, 63, 97); font-weight: bold; } QPushButton:pressed {background-color: rgb(211, 194, 78); border-style: inset; font-weight: bold; }") 
 
         self.digitizer_process.start()
+        self._write_run_status(True)
         self.parent_conn_dig.send('start')
         self.timer.start(200)
 
@@ -2896,6 +2918,7 @@ class MainWindow(QMainWindow):
         self.button_start_exp.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(211, 194, 78); border-style: outset; color: rgb(63, 63, 97); font-weight: bold; } QPushButton:pressed {background-color: rgb(211, 194, 78); border-style: inset; font-weight: bold; }") 
 
         self.digitizer_process.start()
+        self._write_run_status(True)
         self.parent_conn_dig.send('start')
         self.timer.start(200)
 
