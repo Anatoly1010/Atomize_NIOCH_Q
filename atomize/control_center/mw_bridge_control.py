@@ -26,7 +26,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Load the UI Page
         path_to_main = os.path.dirname(os.path.abspath(__file__))
         gui_path = os.path.join(path_to_main,'gui/mw_main_window.ui')
-        icon_path = os.path.join(path_to_main, 'gui/icon_mw.png')
+        icon_path = os.path.join(path_to_main, 'gui/icon_mw.ico')
         self.setWindowIcon( QIcon(icon_path) )
 
         uic.loadUi(gui_path, self)                        # Design file
