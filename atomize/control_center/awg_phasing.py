@@ -4190,7 +4190,8 @@ class MainWindow(QMainWindow):
 
         if file_data:
             if file_data != 'None':
-                self.save_file(file_data.rsplit('.', 1)[0])
+                base, ext = os.path.splitext(file_data)
+                self.save_file(base if ext.lower() in ('.csv', '.h5') else file_data)
             self.parent_conn_dig.send( 'FL' + str( file_data ) )
         else:
             self.parent_conn_dig.send( 'FL' + '' )
@@ -5480,10 +5481,11 @@ class Worker():
                         general.wait('200 ms')
 
                     axes_2d = ( np.arange(points_window) * dec_calc, x_axis_plot )
+                    base_data = os.path.splitext(file_data)[0]
 
                     if iq_cor == 0:
                         file_handler.save_data(
-                            file_data.replace(".csv", ".h5") if self.save_hdf5 == 1 else file_data,
+                            file_data,
                             data,
                             header = header,
                             mode = 'w',
@@ -5498,7 +5500,7 @@ class Worker():
                             mode = 'w'
                             )
                         if save2d == 1:
-                            file_data2 = file_data.replace(".csv", "_2d.h5" if self.save_hdf5 == 1 else "_2d.csv")
+                            file_data2 = f"{base_data}_2d.h5" if self.save_hdf5 == 1 else f"{base_data}_2d.csv"
 
                             file_handler.save_data(
                                 file_data2,
@@ -6170,10 +6172,11 @@ class Worker():
                         general.wait('200 ms')
 
                     axes_2d = ( np.arange(points_window) * dec_calc, x_axis_plot )
+                    base_data = os.path.splitext(file_data)[0]
 
                     if iq_cor == 0:
                         file_handler.save_data(
-                            file_data.replace(".csv", ".h5") if self.save_hdf5 == 1 else file_data,
+                            file_data,
                             data,
                             header = header,
                             mode = 'w',
@@ -6188,7 +6191,7 @@ class Worker():
                             mode = 'w'
                             )
                         if save2d == 1:
-                            file_data2 = file_data.replace(".csv", "_2d.h5" if self.save_hdf5 == 1 else "_2d.csv")
+                            file_data2 = f"{base_data}_2d.h5" if self.save_hdf5 == 1 else f"{base_data}_2d.csv"
 
                             file_handler.save_data(
                                 file_data2,
@@ -6214,10 +6217,10 @@ class Worker():
                             else:
                                 cdat = (idx + 1) * Mc - idx * cycle_snapshots[idx - 1]
                             if iq_cor == 0:
-                                cpath = file_data.replace(".csv", f"_cycle{idx}.h5" if self.save_hdf5 == 1 else f"_cycle{idx}.csv")
+                                cpath = f"{base_data}_cycle{idx}{os.path.splitext(file_data)[1]}"
                                 file_handler.save_data(cpath, cdat, header = header, mode = 'w', axes = axes_2d)
                             elif iq_cor == 1:
-                                cpath = file_data.replace(".csv", f"_cycle{idx}.csv")
+                                cpath = f"{base_data}_cycle{idx}.csv"
                                 cdx, cdy = t3104.oscilloscope_demodulate(cdat[0], cdat[1], iq_freq, zp, first_order, sec_order, integral = True)
                                 file_handler.save_data(cpath, np.c_[x_axis_plot, cdx, cdy], header = header2, mode = 'w')
 
@@ -6665,10 +6668,11 @@ class Worker():
                         general.wait('200 ms')
 
                     axes_2d = ( np.arange(points_window) * dec_calc, x_axis )
+                    base_data = os.path.splitext(file_data)[0]
 
                     if iq_cor == 0:
                         file_handler.save_data(
-                            file_data.replace(".csv", ".h5") if self.save_hdf5 == 1 else file_data,
+                            file_data,
                             data,
                             header = header,
                             mode = 'w',
@@ -6684,7 +6688,7 @@ class Worker():
                             )
 
                         if save2d == 1:
-                            file_data2 = file_data.replace(".csv", "_2d.h5" if self.save_hdf5 == 1 else "_2d.csv")
+                            file_data2 = f"{base_data}_2d.h5" if self.save_hdf5 == 1 else f"{base_data}_2d.csv"
 
                             file_handler.save_data(
                                 file_data2,
@@ -7241,10 +7245,11 @@ class Worker():
                         general.wait('200 ms')
 
                     axes_2d = ( np.arange(points_window) * dec_calc, x_axis_plot )
+                    base_data = os.path.splitext(file_data)[0]
 
                     if iq_cor == 0:
                         file_handler.save_data(
-                            file_data.replace(".csv", ".h5") if self.save_hdf5 == 1 else file_data,
+                            file_data,
                             data,
                             header = header,
                             mode = 'w',
@@ -7260,7 +7265,7 @@ class Worker():
                             )
 
                         if save2d == 1:
-                            file_data2 = file_data.replace(".csv", "_2d.h5" if self.save_hdf5 == 1 else "_2d.csv")
+                            file_data2 = f"{base_data}_2d.h5" if self.save_hdf5 == 1 else f"{base_data}_2d.csv"
                             file_handler.save_data(
                                 file_data2,
                                 data,
@@ -7776,10 +7781,11 @@ class Worker():
                         general.wait('200 ms')
 
                     axes_2d = ( np.arange(points_window) * dec_calc, x_axis_plot )
+                    base_data = os.path.splitext(file_data)[0]
 
                     if iq_cor == 0:
                         file_handler.save_data(
-                            file_data.replace(".csv", ".h5") if self.save_hdf5 == 1 else file_data,
+                            file_data,
                             data,
                             header = header,
                             mode = 'w',
@@ -7794,7 +7800,7 @@ class Worker():
                             mode = 'w'
                             )
                         if save2d == 1:
-                            file_data2 = file_data.replace(".csv", "_2d.h5" if self.save_hdf5 == 1 else "_2d.csv")
+                            file_data2 = f"{base_data}_2d.h5" if self.save_hdf5 == 1 else f"{base_data}_2d.csv"
 
                             file_handler.save_data(
                                 file_data2,
