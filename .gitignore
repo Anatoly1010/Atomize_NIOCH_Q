@@ -25,3 +25,4 @@ libs/phase_lastdir.txt
 libs/phase_awg_lastdir.txt
 libs/status
 libs/*.param
+.venv/
