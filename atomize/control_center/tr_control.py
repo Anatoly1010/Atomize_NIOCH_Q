@@ -1175,7 +1175,7 @@ class Worker():
         try:
             import datetime
             import atomize.general_modules.general_functions as general
-            import atomize.device_modules.Keysight_3000_Xseries as key
+            import atomize.device_modules.Keysight_2000_Xseries as key
             #import atomize.device_modules.BH_15 as itc
             import pyqtgraph as pg
             import atomize.device_modules.ITC_FC as itc
@@ -1186,11 +1186,11 @@ class Worker():
             file_handler = openfile.Saver_Opener()
             process = 'None'
             ls335 = ls.Lakeshore_335()
-            a2012 = key.Keysight_3000_Xseries()
+            a2012 = key.Keysight_2000_Xseries()
             #bh15 = itc.BH_15()
             bh15 = itc.ITC_FC()
 
-            a2012.oscilloscope_trigger_channel(p10)
+            a2012.oscilloscope_trigger_channel(p10)#(p10)
             a2012.oscilloscope_acquisition_type('Average')
             a2012.oscilloscope_run_stop()
 
@@ -1268,10 +1268,10 @@ class Worker():
             # self.command = 'exit' will stop the script
             while self.command != 'exit':
                 # Start of experiment
-                while field < OFFRES_FIELD:
-                    field = bh15.magnet_field( field + initialization_step)
-                    field = field + initialization_step
-                    general.wait('30 ms')
+                #while field < OFFRES_FIELD:
+                #    field = bh15.magnet_field( field + initialization_step)
+                #    field = field + initialization_step
+                #    general.wait('30 ms')
 
                 # Data saving
                 j = 1
@@ -1392,10 +1392,10 @@ class Worker():
                         ##y3 = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
                         data[2, :, 0] = ( data[2, :, 0] * (j - 1) + y3 ) / j
 
-                    while field < START_FIELD:
-                        field = bh15.magnet_field( field + initialization_step)
-                        general.wait('30 ms')
-                        field = field + initialization_step
+                    #while field < START_FIELD:
+                    #    field = bh15.magnet_field( field + initialization_step)
+                    #    general.wait('30 ms')
+                    #    field = field + initialization_step
 
                     field = bh15.magnet_field( START_FIELD )
                     field = START_FIELD
@@ -1538,10 +1538,10 @@ class Worker():
 
 
                     if j != SCANS:
-                        while field > OFFRES_FIELD:
-                            field = bh15.magnet_field( field - initialization_step)
-                            field = field - initialization_step
-                            general.wait('30 ms')
+                        #while field > OFFRES_FIELD:
+                        #    field = bh15.magnet_field( field - initialization_step)
+                        #    field = field - initialization_step
+                        #    general.wait('30 ms')
                     
                         field = bh15.magnet_field( OFFRES_FIELD )
                         field = OFFRES_FIELD
@@ -1645,9 +1645,9 @@ class Worker():
                     file_handler.save_data(file_save_1, np.transpose( data[0, :, :] ), header = header, axes = axes_2d, axes_units = axes_units_2d)
                     file_handler.save_data(file_save_3, np.transpose( data[3, :, :] ), header = header, axes = axes_2d, axes_units = axes_units_2d)
 
-                while field > OFFRES_FIELD:
-                    field = bh15.magnet_field( field - initialization_step)
-                    field = field - initialization_step
+                #while field > OFFRES_FIELD:
+                #    field = bh15.magnet_field( field - initialization_step)
+                #    field = field - initialization_step
                 field = bh15.magnet_field( OFFRES_FIELD )
                 field = OFFRES_FIELD
 
@@ -1678,7 +1678,7 @@ class Worker():
             import datetime
             import atomize.general_modules.general_functions as general
             general.test_flag = 'test'
-            import atomize.device_modules.Keysight_3000_Xseries as key
+            import atomize.device_modules.Keysight_2000_Xseries as key
             #import atomize.device_modules.BH_15 as itc
             import pyqtgraph as pg
             import atomize.device_modules.ITC_FC as itc
@@ -1689,7 +1689,7 @@ class Worker():
             file_handler = openfile.Saver_Opener()
             process = 'None'
             ls335 = ls.Lakeshore_335()
-            a2012 = key.Keysight_3000_Xseries()
+            a2012 = key.Keysight_2000_Xseries()
             #bh15 = itc.BH_15()
             bh15 = itc.ITC_FC()
 
@@ -1762,10 +1762,10 @@ class Worker():
             # self.command = 'exit' will stop the script
             while self.command != 'exit':
                 # Start of experiment
-                while field < OFFRES_FIELD:
-                    field = bh15.magnet_field( field + initialization_step)
-                    field = field + initialization_step
-                    general.wait('30 ms')
+                #while field < OFFRES_FIELD:
+                #    field = bh15.magnet_field( field + initialization_step)
+                #    field = field + initialization_step
+                #    general.wait('30 ms')
 
                 # Data saving
                 #j = 1
@@ -1886,10 +1886,10 @@ class Worker():
                         ##y3 = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
                         data[2, :, 0] = ( data[2, :, 0] * (j - 1) + y3 ) / j
 
-                    while field < START_FIELD:
-                        field = bh15.magnet_field( field + initialization_step)
-                        general.wait('30 ms')
-                        field = field + initialization_step
+                    #while field < START_FIELD:
+                    #    field = bh15.magnet_field( field + initialization_step)
+                    #    general.wait('30 ms')
+                    #    field = field + initialization_step
 
                     field = bh15.magnet_field( START_FIELD )
                     field = START_FIELD
@@ -2032,10 +2032,10 @@ class Worker():
 
 
                     if j != SCANS:
-                        while field > OFFRES_FIELD:
-                            field = bh15.magnet_field( field - initialization_step)
-                            field = field - initialization_step
-                            general.wait('30 ms')
+                        #while field > OFFRES_FIELD:
+                        #    field = bh15.magnet_field( field - initialization_step)
+                        #    field = field - initialization_step
+                        #    general.wait('30 ms')
                     
                         field = bh15.magnet_field( OFFRES_FIELD )
                         field = OFFRES_FIELD
@@ -2133,9 +2133,9 @@ class Worker():
                     #file_handler.save_data(file_save_1, np.transpose( data[0, :, :] ), header = header)
                     #file_handler.save_data(file_save_3, np.transpose( data[3, :, :] ), header = header)
 
-                while field > OFFRES_FIELD:
-                    field = bh15.magnet_field( field - initialization_step)
-                    field = field - initialization_step
+                #while field > OFFRES_FIELD:
+                #    field = bh15.magnet_field( field - initialization_step)
+                #    field = field - initialization_step
                 field = bh15.magnet_field( OFFRES_FIELD )
                 field = OFFRES_FIELD
 
