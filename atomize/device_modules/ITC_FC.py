@@ -144,7 +144,7 @@ class ITC_FC:
                 answer = self.field
                 return answer
             else:
-                send.message("Invalid argument")
+                general.message("Invalid argument")
                 sys.exit()
 
         elif self.test_flag == 'test':
