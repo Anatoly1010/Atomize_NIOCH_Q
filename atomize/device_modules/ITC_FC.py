@@ -5,7 +5,6 @@ import os
 import gc
 import sys
 import pyvisa
-import numpy as np
 from pyvisa.constants import StopBits, Parity
 import atomize.main.local_config as lconf
 import atomize.device_modules.config.config_utils as cutil
@@ -17,12 +16,8 @@ class ITC_FC:
 
         #### Inizialization
         # setting path to *.ini file
-        self.path_current_directory = os.path.dirname(__file__)
-        self.path_current_directory_local = lconf.load_config_device()
-        self.path_config_file = os.path.join(self.path_current_directory_local, 'ITC_FC_config.ini')
-        self.path_calib_file = os.path.join(self.path_current_directory, 'config', 'Calibration_curve_08_2024_Sibir_magnet.csv')
-        self._cs = None
-
+        self.path_current_directory = lconf.load_config_device()
+        self.path_config_file = os.path.join(self.path_current_directory, 'ITC_FC_config.ini')
 
         # configuration data
         self.config = cutil.read_conf_util(self.path_config_file)
@@ -30,7 +25,7 @@ class ITC_FC:
 
         # Ramges and limits
         self.min_field = -50
-        self.max_field = 9000
+        self.max_field = 17000
 
         # Test run parameters
         # These values are returned by the modules in the test run 
@@ -55,33 +50,24 @@ class ITC_FC:
                     try:
                         # test should be here
                         self.status_flag = 1
-                    except (pyvisa.VisaIOError, BrokenPipeError):
+                    except pyvisa.VisaIOError:
                         self.status_flag = 0
-                        general.message(f"No connection {self.__class__.__name__}")
+                        general.message("No connection")
                         sys.exit()
-                except (pyvisa.VisaIOError, BrokenPipeError):
-                        general.message(f"No connection {self.__class__.__name__}")
+                    except BrokenPipeError:
+                        general.message("No connection")
+                        self.status_flag = 0
                         sys.exit()
+                except pyvisa.VisaIOError:
+                        general.message("No connection")
+                        sys.exit()
+                except BrokenPipeError:
+                    general.message("No connection")
+                    self.status_flag = 0
+                    sys.exit()
 
         elif self.test_flag == 'test':
             self.test_field = 3500
-
-    @property
-    def cs(self):
-        """
-        Calibration curve of the magnet, built on first use. Only magnet_field()
-        with calibration = 'True' evaluates it, while scipy.interpolate costs
-        0.25 s of start up for every script that opens the field controller.
-        """
-        if self._cs is None:
-            from scipy.interpolate import CubicSpline
-            temp = np.genfromtxt(self.path_calib_file, dtype = float, delimiter = ',',
-                                 skip_header = 1, comments = '#')
-            calibration_data = np.transpose(temp)
-            self._cs = CubicSpline(calibration_data[0],
-                                   calibration_data[1] / calibration_data[0] / 0.999826,
-                                   bc_type = 'natural')
-        return self._cs
 
     def close_connection(self):
         if self.test_flag != 'test':
@@ -97,7 +83,7 @@ class ITC_FC:
             self.device.write(command)
         else:
             self.status_flag = 0
-            general.message(f"No connection {self.__class__.__name__}")
+            general.message("No Connection")
             sys.exit()
 
     #### device specific functions
@@ -115,95 +101,49 @@ class ITC_FC:
                 self.field = start_field
                 self.field_step = field_step
                 self.magnet_field(self.field)
-
+            else:
+                general.message('Incorrect field range')
+                sys.exit()
         elif self.test_flag == 'test':
-            assert(start_field <= self.max_field and start_field >= self.min_field),\
-                f'Incorrect field range. The available range is from {self.min_field} to {self.max_field}'
+            assert(start_field <= self.max_field and start_field >= self.min_field), 'Incorrect field range'
             self.field = start_field
             self.field_step = field_step
             self.magnet_field(self.field)
 
-    def magnet_field(self, *field, calibration = 'False'):
+    def magnet_field(self, *field):
         if self.test_flag != 'test':
             if len(field) == 1:
-                
-                    field = round( field[0], 3 )
-                    if field <= self.max_field and field >= self.min_field:
-                        if calibration == 'False':
-                            self.device_write(f'CF {field} #13 #10')
-                            self.field = field
-                        elif calibration == 'True':
-                            if field < 300:
-                                self.device_write(f'CF {round(field / self.cs(301) , 3)} #13 #10')
-                                self.field = round(field / self.cs(301), 3)
-                            elif field > 7800:
-                                self.device_write(f'CF {round(field / self.cs(7799) , 3)} #13 #10')
-                                self.field = round(field / self.cs(7799), 3)
-                            else:
-                                self.device_write(f'CF {round(field / self.cs(field) , 3)} #13 #10')
-                                self.field = round(field / self.cs(field), 3)
-                                #general.message(self.field)
-                            
-                        # it takes a lot to process the command
-                        #general.wait('70 ms')
-                        
-                        return self.field
+                field = round( field[0], 3 )
+                if field <= self.max_field and field >= self.min_field:
+                    #self.device_write(f'CF {field} #13 #10')
+                    self.device_write(f'field {field}')
+                    self.field = field
 
+                    # it takes a lot to process the command
+                    general.wait('200 ms')
+                    
+                    return self.field
+                else:
+                    general.message('Incorrect field range')
+                    sys.exit()
             elif len(field) == 0:
-                    answer = self.field
-                    return answer
+                answer = self.field
+                return answer
+            else:
+                send.message("Invalid argument")
+                sys.exit()
 
         elif self.test_flag == 'test':
             if len(field) == 1:
                 field = field[0]
-                assert(field <= self.max_field and field >= self.min_field),\
-                    f'Incorrect field range. The available range is from {self.min_field} to {self.max_field}'
-                if calibration == 'False':
-                    self.field = field
-                elif calibration == 'True':
-                    if field < 300:
-                        self.field = round(field / self.cs(301), 3)
-                    elif field > 7800:
-                        self.field = round(field / self.cs(7799), 3)
-                    else:
-                        self.field = round(field / self.cs(field), 3)
+                assert(field <= self.max_field and field >= self.min_field), 'Incorrect field range'
+                self.field = field
                 return self.field
             elif len(field) == 0:
                 answer = self.test_field
                 return answer
             else:
-                assert(1 == 2), 'Invalid argument; field: float'
-
-    ##### UNDOCUMENTED; FOR TEST ONLY
-    def magnet_pid(self, p = 3.5, i = 0.01, d = 8.0):
-        if self.test_flag != 'test':
-            p_coef = round(p, 3)
-            i_coef = round(i, 3)
-            d_coef = round(d, 3)
-            self.device_write(f'KP {p}') ##13 #10
-            self.device_write(f'KI {i}')
-            self.device_write(f'KD {d}')
-
-        elif self.test_flag == 'test':
-            pass
-
-    def magnet_pid_state(self, state):
-        if self.test_flag != 'test':
-            p = int(state)
-
-            self.device_write(f'pid {p}')
-        elif self.test_flag == 'test':
-            p = int(state)
-            assert(p == 0 or p == 1), 'Incorrect PID state; state: [0, 1]'
-
-    def magnet_shim(self, level):
-        if self.test_flag != 'test':
-            p = int(level)
-            self.device_write(f'pwn {p}')
-
-        elif self.test_flag == 'test':
-            p = int(level)
-            assert(p <= 100 and p >= 0), 'Incorrect shim value. The available range is from 0 to 100'
+                assert(1 == 2), 'Invalid argument'
 
     def magnet_command(self, command):
         if self.test_flag != 'test':
