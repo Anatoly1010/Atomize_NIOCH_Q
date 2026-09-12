@@ -3,6 +3,7 @@
 
 import os
 import sys
+from atomize.general_modules.gui_style import REFINED_STYLES, style_file_dialog, apply_app_style
 import configparser
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt, QObject
@@ -33,7 +34,7 @@ class MainWindow(QMainWindow):
 
         self.setObjectName("MainWindow")
         self.setWindowTitle("Temperature Control")
-        self.setStyleSheet("background-color: rgb(42,42,64);")
+        self.setStyleSheet(REFINED_STYLES['WINDOW_STYLE'])
 
         path_to_main = os.path.dirname(os.path.abspath(__file__))
         icon_path = os.path.join(path_to_main, 'gui/icon_temp.ico')
@@ -56,7 +57,7 @@ class MainWindow(QMainWindow):
             lbl = QLabel(name)
             lbl.setFixedSize(190, 26)
             setattr(self, attr_name, lbl)
-            lbl.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
+            lbl.setStyleSheet(REFINED_STYLES['LABEL_STYLE'])
 
 
         # ---- Boxes ----
@@ -67,10 +68,10 @@ class MainWindow(QMainWindow):
             spin_box = widget_class()
             if isinstance(spin_box, QDoubleSpinBox):
                 spin_box.setRange(v_min, v_max)
-                spin_box.setStyleSheet("QDoubleSpinBox { color : rgb(193, 202, 227); selection-background-color: rgb(211, 194, 78); selection-color: rgb(63, 63, 97);}")                
+                spin_box.setStyleSheet(REFINED_STYLES['COMPACT_FIELD_STYLE'])
             else:
                 spin_box.setRange(int(v_min), int(v_max))
-                spin_box.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); selection-background-color: rgb(211, 194, 78); selection-color: rgb(63, 63, 97);}")                
+                spin_box.setStyleSheet(REFINED_STYLES['COMPACT_FIELD_STYLE'])
             spin_box.setSingleStep(v_step)
             spin_box.blockSignals(True)
             spin_box.setValue(cur_val)
@@ -109,14 +110,7 @@ class MainWindow(QMainWindow):
             combo.setCurrentText(cur_text)
             combo.blockSignals(False)
             combo.setFixedSize(130, 26)
-            combo.setStyleSheet("""
-                QComboBox 
-                { color : rgb(193, 202, 227); 
-                selection-color: rgb(211, 194, 78); 
-                selection-background-color: rgb(63, 63, 97);
-                outline: none;
-                }
-                """)
+            combo.setStyleSheet(REFINED_STYLES['COMBO_STYLE'])
 
 
         # ---- Buttons ----
@@ -126,7 +120,7 @@ class MainWindow(QMainWindow):
             btn = QPushButton(name)
             btn.setFixedSize(140, 40)
             btn.clicked.connect(func)
-            btn.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(63, 63, 97); border-style: outset; color: rgb(193, 202, 227); font-weight: bold; } QPushButton:pressed {background-color: rgb(211, 194, 78); border-style: inset; font-weight: bold; }")
+            btn.setStyleSheet(REFINED_STYLES['BUTTON_STYLE'])
             setattr(self, attr_name, btn)
 
         # ---- Separators ----

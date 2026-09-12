@@ -3,6 +3,7 @@
 
 import os
 import sys
+from atomize.general_modules.gui_style import REFINED_STYLES, style_file_dialog, apply_app_style
 from math import exp, sqrt
 import datetime
 from threading import Thread
@@ -30,56 +31,51 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowIcon( QIcon(icon_path) )
 
         uic.loadUi(gui_path, self)                        # Design file
+        self.setStyleSheet(REFINED_STYLES['WINDOW_STYLE'])
 
         # configuration data
         self.mw = mwBridge.Micran_Q_band_MW_bridge()
 
         # Connection of different action to different Menus and Buttons
         self.button_initialize.clicked.connect(self.reset_flags)
-        self.button_initialize.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(63, 63, 97);\
-         border-style: outset; color: rgb(193, 202, 227); font-weight: bold; }\
-          QPushButton:pressed {background-color: rgb(211, 194, 78); ; border-style: inset}")
+        self.button_initialize.setStyleSheet(REFINED_STYLES['BUTTON_STYLE'])
         self.button_off.clicked.connect(self.turn_off)
-        self.button_off.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(63, 63, 97);\
-         border-style: outset; color: rgb(193, 202, 227); font-weight: bold; }\
-          QPushButton:pressed {background-color: rgb(211, 194, 78); ; border-style: inset}")
+        self.button_off.setStyleSheet(REFINED_STYLES['BUTTON_STYLE'])
         self.button_telemetry.clicked.connect(self.telemetry)
-        self.button_telemetry.setStyleSheet("QPushButton {border-radius: 4px; background-color: rgb(63, 63, 97);\
-         border-style: outset; color: rgb(193, 202, 227); font-weight: bold; }\
-          QPushButton:pressed {background-color: rgb(211, 194, 78); ; border-style: inset}")
+        self.button_telemetry.setStyleSheet(REFINED_STYLES['BUTTON_STYLE'])
 
         # text labels
-        self.label.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_2.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_5.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_6.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_7.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_8.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
-        self.label_9.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
+        self.label.setStyleSheet(REFINED_STYLES['LABEL_STYLE'])
+        self.label_2.setStyleSheet(REFINED_STYLES['LABEL_STYLE'])
+        self.label_5.setStyleSheet(REFINED_STYLES['LABEL_STYLE'])
+        self.label_6.setStyleSheet(REFINED_STYLES['LABEL_STYLE'])
+        self.label_7.setStyleSheet(REFINED_STYLES['LABEL_STYLE'])
+        self.label_8.setStyleSheet(REFINED_STYLES['LABEL_STYLE'])
+        self.label_9.setStyleSheet(REFINED_STYLES['LABEL_STYLE'])
 
-        self.telemetry_text.setStyleSheet("QPlainTextEdit { color : rgb(211, 194, 78); }") # rgb(193, 202, 227)
+        self.telemetry_text.setStyleSheet(REFINED_STYLES['COMPACT_TEXT_STYLE']) # rgb(193, 202, 227)
         
         # Spinboxes
         self.Att1_prd.valueChanged.connect(self.att1_prd)
         self.Att1_prd.lineEdit().setReadOnly( True )   # block input from keyboard
-        self.Att1_prd.setStyleSheet("QDoubleSpinBox { color : rgb(193, 202, 227); }")
+        self.Att1_prd.setStyleSheet(REFINED_STYLES['COMPACT_FIELD_STYLE'])
         self.Att2_pin.valueChanged.connect(self.att2_pin)
         #self.Att2_pin.lineEdit().setReadOnly( True )
-        self.Att2_pin.setStyleSheet("QDoubleSpinBox { color : rgb(193, 202, 227); }")
+        self.Att2_pin.setStyleSheet(REFINED_STYLES['COMPACT_FIELD_STYLE'])
         self.Att1_prm.valueChanged.connect(self.att1_prm)
         self.Att1_prm.lineEdit().setReadOnly( True )
-        self.Att1_prm.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); }")
+        self.Att1_prm.setStyleSheet(REFINED_STYLES['COMPACT_FIELD_STYLE'])
         self.Att2_prm.valueChanged.connect(self.att2_prm)
         self.Att2_prm.lineEdit().setReadOnly( True )
-        self.Att2_prm.setStyleSheet("QDoubleSpinBox { color : rgb(193, 202, 227); }")
+        self.Att2_prm.setStyleSheet(REFINED_STYLES['COMPACT_FIELD_STYLE'])
         self.Synt.valueChanged.connect(self.synt)
-        self.Synt.setStyleSheet("QSpinBox { color : rgb(193, 202, 227); }")
+        self.Synt.setStyleSheet(REFINED_STYLES['COMPACT_FIELD_STYLE'])
 
         self.Rot_vane.valueChanged.connect(self.rot_vane)
         #self.Rot_vane.lineEdit().setReadOnly( True )
-        self.Rot_vane.setStyleSheet("QDoubleSpinBox { color : rgb(193, 202, 227); }")
+        self.Rot_vane.setStyleSheet(REFINED_STYLES['COMPACT_FIELD_STYLE'])
 
-        self.Cuttoff_box.setStyleSheet("QComboBox { color : rgb(193, 202, 227); selection-color: rgb(211, 194, 78); }")
+        self.Cuttoff_box.setStyleSheet(REFINED_STYLES['COMBO_STYLE'])
         self.Cuttoff_box.currentIndexChanged.connect(self.cutoff_changed)
 
         self.curr_dB = 60
@@ -188,7 +184,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def pause_and_label(self, time):
         self.label_9.setStyleSheet("QLabel { color : rgb(255, 0, 0); font-weight: bold; }")
         general.wait( time )
-        self.label_9.setStyleSheet("QLabel { color : rgb(193, 202, 227); font-weight: bold; }")
+        self.label_9.setStyleSheet(REFINED_STYLES['LABEL_STYLE'])
     
     def pause_and_label_exit(self, time):
         general.wait( time )
@@ -296,6 +292,7 @@ def main():
     A function to run the main window of the programm.
     """
     app = QtWidgets.QApplication(sys.argv)
+    apply_app_style(app)
     main = MainWindow()
     main.show()
     sys.exit(app.exec())
