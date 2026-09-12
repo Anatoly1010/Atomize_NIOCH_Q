@@ -191,6 +191,7 @@ class MainWindow(QMainWindow):
 
         self.is_experiment = False
         self.exit_clicked = 0
+        self.stop_requested = False
         self.timer = QTimer()
         self.timer.timeout.connect(self.check_messages)
         self.monitor_timer = QTimer()
@@ -3174,6 +3175,7 @@ class MainWindow(QMainWindow):
         """
         A function to stop digitizer
         """
+        self.stop_requested = True
         if self.cur_win_right < self.cur_win_left:
             self.cur_win_left, self.cur_win_right = self.cur_win_right, self.cur_win_left
         if self.cur_win_right == self.cur_win_left:
@@ -3218,7 +3220,7 @@ class MainWindow(QMainWindow):
                     self.check_process_status()
                 else:
                     self.monitor_timer.start(200)
-            except AttributeError:
+            except (AttributeError, BrokenPipeError, OSError):
                 if self.exit_clicked == 1:
                     sys.exit()
 
@@ -3275,6 +3277,7 @@ class MainWindow(QMainWindow):
         except AttributeError:
             pass
 
+        self.stop_requested = False
         self.parent_conn_dig, self.child_conn_dig = Pipe()
         # a process for running function script 
         # sending parameters for initial initialization
@@ -3433,6 +3436,7 @@ class MainWindow(QMainWindow):
         except AttributeError:
             pass
         
+        self.stop_requested = False
         self.parent_conn_dig, self.child_conn_dig = Pipe()
         # a process for running function script 
         # sending parameters for initial initialization
@@ -3469,6 +3473,7 @@ class MainWindow(QMainWindow):
         A function to turn off a programm.
         """
         self.exit_clicked = 1
+        self.stop_requested = True
         self.dig_stop()
 
     def message(self, *text):
@@ -3578,7 +3583,14 @@ class MainWindow(QMainWindow):
                 # sys.exit, a hang we just joined) last_error is still False but
                 # exitcode != 0 -- surface that instead of silently starting the
                 # real run, which would die the same way.
-                if (not self.last_error) and (exit_code in (0, None)):
+                if self.stop_requested or self.exit_clicked:
+                    self.progress_bar.setValue(0)
+                    self.button_blue()
+                    self.is_experiment = False
+                    self.last_error = False
+                    field_param.clear_lock()
+                    self._write_run_status(False)
+                elif (not self.last_error) and (exit_code in (0, None)):
                     self.last_error = False
                     time.sleep(0.2)
                     if self.is_experiment == False:
