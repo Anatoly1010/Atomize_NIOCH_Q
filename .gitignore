@@ -23,6 +23,7 @@ libs/script_lastdir.txt
 libs/data_lastdir.txt
 libs/phase_lastdir.txt
 libs/phase_awg_lastdir.txt
+libs/tr_lastdir.txt
 libs/status
 libs/*.param
 .venv/

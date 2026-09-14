@@ -15,6 +15,8 @@ import atomize.general_modules.last_dir as ldir
 import atomize.control_center.field_param as field_param
 from atomize.general_modules.gui_style import CHECKBOX_STYLE
 
+NUM_OSC_VALUES = {'No 2 scope': 1, '2 scope + THz option': 3}
+
 class MainWindow(QMainWindow):
     """
     A main window class
@@ -113,13 +115,13 @@ class MainWindow(QMainWindow):
 
 
         # ---- Combo boxes----
-        combo_boxes = [("1", "combo_num_osc", "cur_num_osc", self.num_osc, 
+        combo_boxes = [("No 2 scope", "combo_num_osc", "cur_num_osc", self.num_osc, 
                         [
-                        "1", "2", "2 + THz Pulse"
+                        "No 2 scope", "2 scope + THz option"
                         ]),
-                      ("CH2", "combo_trig_ch", "cur_trig_ch", self.trig_ch, 
+                      ("CH3", "combo_trig_ch", "cur_trig_ch", self.trig_ch, 
                         [
-                        "CH2", "Ext"
+                        "CH3", "Ext"
                         ])
                       ]
 
@@ -133,10 +135,8 @@ class MainWindow(QMainWindow):
             combo.setFixedSize(130, 26)
             combo.setStyleSheet(REFINED_STYLES['COMBO_STYLE'])
 
-            if par_name == 'cur_num_osc' and len( str( self.cur_num_osc ) ) > 1:
-                self.cur_num_osc = 3
-            elif par_name == 'cur_num_osc':
-                self.cur_num_osc = int( self.cur_num_osc )
+            if par_name == 'cur_num_osc':
+                self.cur_num_osc = NUM_OSC_VALUES[ combo.currentText() ]
 
         # ---- Text Edits ----
         text_edit = [("TR", "text_edit_exp_name", "cur_exp_name", self.exp_name),
@@ -417,10 +417,7 @@ class MainWindow(QMainWindow):
         """
         A function to send number of oscilloscopes
         """
-        if len( self.combo_num_osc.currentText() ) > 1:
-            self.cur_num_osc = 3
-        else:
-            self.cur_num_osc = int( self.combo_num_osc.currentText() )
+        self.cur_num_osc = NUM_OSC_VALUES[ self.combo_num_osc.currentText() ]
 
     def ave_offres(self):
         """
@@ -900,7 +897,7 @@ class Worker():
             #a2012.oscilloscope_start_acquisition()
 
             #if p9 == 1:
-            #    y = a2012.oscilloscope_get_curve('CH1')
+            #    y = a2012.oscilloscope_get_curve('CH4')
 
             conn.send(('Open', ''))
             
@@ -1028,21 +1025,21 @@ class Worker():
 
                     ##ch_time = np.random.randint(250, 500, 1)
                     if p9 == 1:
-                        y = a2012.oscilloscope_get_curve('CH1')
+                        y = a2012.oscilloscope_get_curve('CH4')
                         ##y = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
                         data[0, :, 0] = ( data[0, :, 0] * (j - 1) + y ) / j
                         data[1, :, 0] = ( data[0, :, 0] - data[0, :, 0] )
                         data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
 
                     elif p9 == 2:
-                        y = a2012.oscilloscope_get_curve('CH1')
+                        y = a2012.oscilloscope_get_curve('CH4')
                         ##y = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
                         data[0, :, 0] = ( data[0, :, 0] * (j - 1) + y ) / j
                         data[1, :, 0] = ( data[0, :, 0] - data[0, :, 0] )
                         data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
 
                     elif p9 == 3:
-                        y = a2012.oscilloscope_get_curve('CH1')
+                        y = a2012.oscilloscope_get_curve('CH4')
                         ##y = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
                         data[0, :, 0] = ( data[0, :, 0] * (j - 1) + y ) / j
                         data[1, :, 0] = ( data[0, :, 0] - data[0, :, 0] )
@@ -1083,7 +1080,7 @@ class Worker():
 
                         ##ch_time = np.random.randint(250, 500, 1)
                         if p9 == 1:
-                            y = a2012.oscilloscope_get_curve('CH1')
+                            y = a2012.oscilloscope_get_curve('CH4')
                             ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
 
                             data[0, :, i+1] = ( data[0, :, i+1] * (j - 1) + y ) / j
@@ -1091,7 +1088,7 @@ class Worker():
                             data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
 
                         elif p9 == 2:
-                            y = a2012.oscilloscope_get_curve('CH1')
+                            y = a2012.oscilloscope_get_curve('CH4')
                             ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
 
                             data[0, :, i+1] = ( data[0, :, i+1] * (j - 1) + y ) / j
@@ -1099,7 +1096,7 @@ class Worker():
                             data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
 
                         elif p9 == 3:
-                            y = a2012.oscilloscope_get_curve('CH1')
+                            y = a2012.oscilloscope_get_curve('CH4')
                             ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
                             y3 = a2012.oscilloscope_get_curve('CH2')
                             ##y3 = 1 + 100*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
@@ -1153,7 +1150,7 @@ class Worker():
 
                             ##ch_time = np.random.randint(250, 500, 1)
                             if p9 == 1:
-                                y = a2012.oscilloscope_get_curve('CH1')
+                                y = a2012.oscilloscope_get_curve('CH4')
                                 ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
 
                                 data[0, :, i+1] = ( data[0, :, i+1] * j + y ) / ( j + 1 )
@@ -1161,7 +1158,7 @@ class Worker():
                                 data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
 
                             elif p9 == 2:
-                                y = a2012.oscilloscope_get_curve('CH1')
+                                y = a2012.oscilloscope_get_curve('CH4')
                                 ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
 
                                 data[0, :, i+1] = ( data[0, :, i+1] * j + y ) / ( j + 1 )
@@ -1169,7 +1166,7 @@ class Worker():
                                 data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
 
                             elif p9 == 3:
-                                y = a2012.oscilloscope_get_curve('CH1')
+                                y = a2012.oscilloscope_get_curve('CH4')
                                 ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
                                 y3 = a2012.oscilloscope_get_curve('CH2')
                                 ##y3 = 1 + 100*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
@@ -1397,7 +1394,7 @@ class Worker():
             #a2012.oscilloscope_start_acquisition()
 
             #if p9 == 1:
-            #    y = a2012.oscilloscope_get_curve('CH1')
+            #    y = a2012.oscilloscope_get_curve('CH4')
 
             #conn.send(('Open', ''))
             
@@ -1522,21 +1519,21 @@ class Worker():
 
                     ##ch_time = np.random.randint(250, 500, 1)
                     if p9 == 1:
-                        y = a2012.oscilloscope_get_curve('CH1')
+                        y = a2012.oscilloscope_get_curve('CH4')
                         ##y = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
                         data[0, :, 0] = ( data[0, :, 0] * (j - 1) + y ) / j
                         data[1, :, 0] = ( data[0, :, 0] - data[0, :, 0] )
                         data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
 
                     elif p9 == 2:
-                        y = a2012.oscilloscope_get_curve('CH1')
+                        y = a2012.oscilloscope_get_curve('CH4')
                         ##y = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
                         data[0, :, 0] = ( data[0, :, 0] * (j - 1) + y ) / j
                         data[1, :, 0] = ( data[0, :, 0] - data[0, :, 0] )
                         data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
 
                     elif p9 == 3:
-                        y = a2012.oscilloscope_get_curve('CH1')
+                        y = a2012.oscilloscope_get_curve('CH4')
                         ##y = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
                         data[0, :, 0] = ( data[0, :, 0] * (j - 1) + y ) / j
                         data[1, :, 0] = ( data[0, :, 0] - data[0, :, 0] )
@@ -1577,7 +1574,7 @@ class Worker():
 
                         ##ch_time = np.random.randint(250, 500, 1)
                         if p9 == 1:
-                            y = a2012.oscilloscope_get_curve('CH1')
+                            y = a2012.oscilloscope_get_curve('CH4')
                             ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
 
                             data[0, :, i+1] = ( data[0, :, i+1] * (j - 1) + y ) / j
@@ -1585,7 +1582,7 @@ class Worker():
                             data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
 
                         elif p9 == 2:
-                            y = a2012.oscilloscope_get_curve('CH1')
+                            y = a2012.oscilloscope_get_curve('CH4')
                             ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
 
                             data[0, :, i+1] = ( data[0, :, i+1] * (j - 1) + y ) / j
@@ -1593,7 +1590,7 @@ class Worker():
                             data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
 
                         elif p9 == 3:
-                            y = a2012.oscilloscope_get_curve('CH1')
+                            y = a2012.oscilloscope_get_curve('CH4')
                             ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
                             y3 = a2012.oscilloscope_get_curve('CH2')
                             ##y3 = 1 + 100*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
@@ -1647,7 +1644,7 @@ class Worker():
 
                             ##ch_time = np.random.randint(250, 500, 1)
                             if p9 == 1:
-                                y = a2012.oscilloscope_get_curve('CH1')
+                                y = a2012.oscilloscope_get_curve('CH4')
                                 ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
 
                                 data[0, :, i+1] = ( data[0, :, i+1] * j + y ) / ( j + 1 )
@@ -1655,7 +1652,7 @@ class Worker():
                                 data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
 
                             elif p9 == 2:
-                                y = a2012.oscilloscope_get_curve('CH1')
+                                y = a2012.oscilloscope_get_curve('CH4')
                                 ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
 
                                 data[0, :, i+1] = ( data[0, :, i+1] * j + y ) / ( j + 1 )
@@ -1663,7 +1660,7 @@ class Worker():
                                 data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
 
                             elif p9 == 3:
-                                y = a2012.oscilloscope_get_curve('CH1')
+                                y = a2012.oscilloscope_get_curve('CH4')
                                 ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
                                 y3 = a2012.oscilloscope_get_curve('CH2')
                                 ##y3 = 1 + 100*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))

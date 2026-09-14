@@ -36,13 +36,13 @@ class Oscilloscope:
         self.scale = scale
         self.length = 3839
         self.averages = 10
-        self.trigger = 'CH2'
+        self.trigger = 'Ext'
         self.acquisition = 'Average'
         self.rng = np.random.default_rng()
 
     def oscilloscope_trigger_channel(self, channel=None):
         if channel is not None:
-            if channel not in ('CH1', 'CH2', 'Ext'):
+            if channel not in ('CH3', 'CH4', 'Ext'):
                 raise ValueError('Invalid simulated trigger channel.')
             self.trigger = channel
         return self.trigger
@@ -76,7 +76,7 @@ class Oscilloscope:
         pass
 
     def oscilloscope_get_curve(self, channel):
-        if channel not in ('CH1', 'CH2'):
+        if channel not in ('CH2', 'CH4'):
             raise ValueError('Invalid simulated signal channel.')
         axis = np.arange(self.length) * 2e-9
         baseline = 0.02 + 0.003 * np.sin(axis * 2e6)
@@ -134,7 +134,7 @@ def run_pair(tmp_path, *, reverse=False, num_osc=1, fmt='csv', stop_at=None):
     get_curve = scopes[0].oscilloscope_get_curve
 
     def record(channel):
-        if channel == 'CH1':
+        if channel == 'CH4':
             samples.append(state.field)
             if state.field == stop_at:
                 conn.queue.append('exit')
@@ -150,7 +150,7 @@ def run_pair(tmp_path, *, reverse=False, num_osc=1, fmt='csv', stop_at=None):
     acquire(worker, conn, general, Saver_Opener(), Magnet(state), scopes,
             TemperatureController(), ['2 ns'] * len(scopes),
             [3839] * len(scopes), [2e-9] * len(scopes),
-            (100, 'Pair', 128, 120, 1, 10, 2, 10, num_osc, 'CH2', 1, int(reverse)))
+            (100, 'Pair', 128, 120, 1, 10, 2, 10, num_osc, 'Ext', 1, int(reverse)))
     return conn, samples, plots, state
 
 
@@ -257,7 +257,7 @@ def test_native_preflight_checks_both_ranges_without_io(monkeypatch, tmp_path, n
 
         def curve(device, channel, get_curve=original):
             assert device.test_flag == 'test'
-            if channel == 'CH1':
+            if channel == 'CH4':
                 records.setdefault(id(device), []).append(current[0])
             return get_curve(device, channel)
 
@@ -266,7 +266,7 @@ def test_native_preflight_checks_both_ranges_without_io(monkeypatch, tmp_path, n
     worker.half_field = (110, 112, 0.5)
     conn = Connection()
     worker.exp_test_two_fields(conn, 100, 'Pair', 128, 120, 1, 10, 4, 10,
-                               num_osc, 'CH2', 1, int(reverse))
+                               num_osc, 'Ext', 1, int(reverse))
     assert conn.closed
     assert len(conn.sent) == 1 and conn.sent[0][0] == 'test', conn.sent
     half = [110, 110.5, 111, 111.5, 112]

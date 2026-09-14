@@ -72,7 +72,7 @@ def acquire(worker, conn, general, saver, magnet, scopes, temperature,
     def traces():
         for scope in scopes:
             scope.oscilloscope_start_acquisition()
-        result = [[scope.oscilloscope_get_curve('CH1')] for scope in scopes]
+        result = [[scope.oscilloscope_get_curve('CH4')] for scope in scopes]
         if num_osc == 3:
             result[0].append(scopes[0].oscilloscope_get_curve('CH2'))
         return result

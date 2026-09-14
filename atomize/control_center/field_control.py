@@ -81,7 +81,7 @@ class MainWindow(QMainWindow):
 
         # ---- Boxes ----
         double_boxes = [(QDoubleSpinBox, "Set_point", "field", self.set_field, 0, 15100, 0, 0.5, 2, " G"), 
-                        (QDoubleSpinBox, "box_ini", "initialization_step", self.set_ini, 0.1, 100, 10, 1, 1, " G")
+                        (QDoubleSpinBox, "box_ini", "initialization_step", self.set_ini, 0.1, 100, 100, 1, 1, " G")
                         ]
 
         for widget_class, attr_name, par_name, func, v_min, v_max, cur_val, v_step, dec, suf in double_boxes:
