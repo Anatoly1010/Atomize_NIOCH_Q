@@ -177,6 +177,8 @@ Function that returns a dialog to enter a name for a file;<br/>
 It can be used to manually saved your data inside the experimental
 script to specified file;<br/>
 directory is a path to preopened directory in the dialog window. This argument is optional, default value is shown above.<br/>
+Cancelling returns the string `'None'` and suspends `save_data()` and `save_header()` on the same `Saver_Opener` instance until another save dialog successfully selects a file. This also suppresses saves to derived filenames and explicitly specified paths. Use a separate `Saver_Opener` instance for independent saves that must continue after cancellation. Direct writes through Python or NumPy are not affected.
+
 ### create_file_parameters()
 ```python3
 create_file_parameters(add_name, directory = '')
@@ -184,6 +186,8 @@ create_file_parameters(add_name, directory = '')
 This function has the full functionality of the [create_file_dialog()](#create_file_dialog) function, but also returns a second file for saving parameters / header;<br/>
 add_name argument is a string that will be added to the second file instead of the first file '.csv' extension. For instance, create_file_parameters('.param') will create a second file with .param extension.<br/>
 directory is a path to preopened directory in the dialog window. This argument is optional, default value is shown above.<br/>
+Cancellation returns `('None', 'None')` and suspends saving on the same instance as described above.
+
 ### save_header()
 ```python3
 save_header(filename, header = '', mode = 'w')

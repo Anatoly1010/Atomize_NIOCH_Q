@@ -4888,6 +4888,7 @@ class Worker():
                             msg = conn.recv()
                             if msg.startswith('FL'):
                                 file_data = msg[2:]
+                                file_handler.save_cancelled = file_data in (None, '', 'None')
                                 break
                         general.wait('200 ms')
 
@@ -5580,6 +5581,7 @@ class Worker():
                             msg = conn.recv()
                             if msg.startswith('FL'):
                                 file_data = msg[2:]
+                                file_handler.save_cancelled = file_data in (None, '', 'None')
                                 break
                         general.wait('200 ms')
 
@@ -6077,6 +6079,7 @@ class Worker():
                             msg = conn.recv()
                             if msg.startswith('FL'):
                                 file_data = msg[2:]
+                                file_handler.save_cancelled = file_data in (None, '', 'None')
                                 break
                         general.wait('200 ms')
 
@@ -6655,6 +6658,7 @@ class Worker():
                             msg = conn.recv()
                             if msg.startswith('FL'):
                                 file_data = msg[2:]
+                                file_handler.save_cancelled = file_data in (None, '', 'None')
                                 break
                         general.wait('200 ms')
 
@@ -7192,6 +7196,7 @@ class Worker():
                             msg = conn.recv()
                             if msg.startswith('FL'):
                                 file_data = msg[2:]
+                                file_handler.save_cancelled = file_data in (None, '', 'None')
                                 break
                         general.wait('200 ms')
 
