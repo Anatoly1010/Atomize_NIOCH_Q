@@ -622,10 +622,10 @@ class MainWindow(QMainWindow):
         self.gridLayout.addWidget(hline(), 12, 0, 1, 10)
 
         link_controls = QWidget()
-        link_controls.setFixedSize(170, 26)
+        link_controls.setFixedSize(360, 26)
         link_layout = QHBoxLayout(link_controls)
         link_layout.setContentsMargins(0, 0, 0, 0)
-        link_layout.setSpacing(4)
+        link_layout.setSpacing(0)
         self.Combo_link_pulses = QComboBox()
         for parameter in ['Off', 'Length', 'Position']:
             self.Combo_link_pulses.addItem(f"Link: {parameter}", parameter)
@@ -639,6 +639,7 @@ class MainWindow(QMainWindow):
             "proportionally to its weight. Off keeps the pulse link factors.")
         self.Combo_link_pulses.currentIndexChanged.connect(self.link_param_changed)
         link_layout.addWidget(self.Combo_link_pulses)
+        link_layout.addSpacing(20)
         self.button_reset_links = QPushButton("×")
         self.button_reset_links.setFixedSize(26, 26)
         self.button_reset_links.setStyleSheet(
@@ -648,7 +649,8 @@ class MainWindow(QMainWindow):
             "Reset all links: set every factor to No and the parameter to Off. Pulse values stay unchanged.")
         self.button_reset_links.clicked.connect(self.reset_links)
         link_layout.addWidget(self.button_reset_links)
-        self.gridLayout.addWidget(link_controls, 13, 0)
+        link_layout.addSpacing(4)
+        self.gridLayout.addWidget(link_controls, 13, 0, 1, 2)
 
         for i in range(1, 10):
             combo = QComboBox()
@@ -658,7 +660,10 @@ class MainWindow(QMainWindow):
             combo.setStyleSheet(REFINED_STYLES['COMBO_STYLE'])
             setattr(self, f"P{i}_lk", combo)
             combo.currentTextChanged.connect(lambda _, idx = i: self.update_link_factor(idx))
-            self.gridLayout.addWidget(combo, 13, i)
+            if i == 1:
+                link_layout.addWidget(combo)
+            else:
+                self.gridLayout.addWidget(combo, 13, i)
 
         self.gridLayout.addWidget(hline(), 14, 0, 1, 10)
 
@@ -768,7 +773,7 @@ class MainWindow(QMainWindow):
 
         # ---- Labels & Inputs ----
         labels = [("Acquisitions", "label_17"), ("Integration Left", "label_18"), ("Integration Right", "label_19"), ("Detection Points", "label_20"), ("Horizontal Offset", "label_21"), ("Shift Together", "label_shift"), ("Points", "label_e1"), ("Scans", "label_e2"), ("Experiment Name", "label_e3"), ("Curve Name", "label_e4"), ("Start Field", "label_f1"), ("End Field", "label_f2"), ("Field Step", "label_f3"), ("Sweep Type", "label_c1"), ("Start Log Time", "label_e5"), ("End Log Time", "label_e6"),
-            ('X<sub style="font-size: 12pt;">0</sub>', "label_e7"), ("ΔX ", "label_e8"), ("Cycles", "label_cyc"), ("Save Each Cycle", "label_save_cyc")]
+            ('X<sub style="font-size: 12pt;">0</sub>', "label_e7"), ("ΔX ", "label_e8"), ("Cycles", "label_cyc"), ("Save Each Cycle", "label_save_cyc"), ("Auto Window", "label_aw")]
 
         for name, attr_name in labels:
             lbl = QLabel(name)
@@ -780,8 +785,9 @@ class MainWindow(QMainWindow):
         double_boxes = [(QSpinBox, "Acq_number", "number_averages", self.acq_number, 1, 1e4, 1, 1, 0, ""),
                       (SnapSpinBox, "Dec", "dig_points", self.decimat, 128, 32000, 512, 32, 0, ""),
                       (SnapSpinBox, "Hor_offset", "posttrigger", self.hor_offset, 0, 32000, 384, 32, 0, ""),
-                      (QDoubleSpinBox, "Win_left", "cur_win_left", self.win_left, 0, 6400, 0, 0.4, 1, " ns"),
-                      (QDoubleSpinBox, "Win_right", "cur_win_right", self.win_right, 0, 6400, 320, 0.4, 1, " ns"),
+                      (QDoubleSpinBox, "Win_left", "cur_win_left", self.win_left, 0, 6400, 0, 0.4, 2, " ns"),
+                      (QDoubleSpinBox, "Win_right", "cur_win_right", self.win_right, 0, 6400, 320, 0.4, 2, " ns"),
+                      (QDoubleSpinBox, "Win_width", "win_width", self.win_width_func, 0.01, 6400, 100, 2, 2, " ns"),
                       (QSpinBox, "box_points", "cur_points", self.points, 1, 20000, 500, 1, 0, ""),
                       (QSpinBox, "box_scan", "cur_scan", self.scan, 1, 100, 1, 1, 0, ""),
                       (QDoubleSpinBox, "box_st_field", "cur_start_field", self.st_field, 0, 15000, 3000, 1, 1, " G"),
@@ -950,8 +956,29 @@ class MainWindow(QMainWindow):
         self.shift_box.setToolTip('Shift Together: when changing Detection Points, shift Horizontal Offset by the same amount so the signal stays put.')
         right_grid.addWidget(self.label_shift, 4, 0)
         right_grid.addWidget(self.shift_box, 4, 1)
-        right_grid.addWidget(hline(), 5, 0, 1, 2)
-        right_grid.setRowStretch(6, 1)
+        aw_controls = QWidget()
+        aw_controls.setFixedSize(360, 26)
+        aw_layout = QHBoxLayout(aw_controls)
+        aw_layout.setContentsMargins(0, 0, 0, 0)
+        aw_layout.setSpacing(0)
+        self.label_aw.setFixedSize(140, 26)
+        aw_layout.addWidget(self.label_aw)
+        aw_layout.addSpacing(20)
+        self.button_auto_window = QPushButton("A")
+        self.button_auto_window.setFixedSize(26, 26)
+        self.button_auto_window.setStyleSheet(
+            REFINED_STYLES['DOCK_CLOSE_STYLE'] + "QPushButton { font-size: 15px; }")
+        self.button_auto_window.setAccessibleName("Auto window")
+        self.button_auto_window.setToolTip(
+            "Auto window: centre an integration window of the given width on the echo "
+            "maximum and update Integration Left/Right. Needs a running preview.")
+        self.button_auto_window.clicked.connect(self.auto_window)
+        aw_layout.addWidget(self.button_auto_window)
+        aw_layout.addSpacing(4)
+        aw_layout.addWidget(self.Win_width)
+        right_grid.addWidget(aw_controls, 5, 0, 1, 2)
+        right_grid.addWidget(hline(), 6, 0, 1, 2)
+        right_grid.setRowStretch(7, 1)
         right_grid.setColumnStretch(4, 1)
 
         third_grid = QGridLayout()
@@ -1020,8 +1047,8 @@ class MainWindow(QMainWindow):
         # ---- Boxes ----
         double_boxes = [(QSpinBox, "P_to_drop", "p_to_drop", self.p_to_drop_func, 0, 1e4, 0, 1, 0, ""),
                       (QDoubleSpinBox, "Zero_order", "zero_order", self.zero_order_func, -0.1, 360.1, 0, 0.1, 4, " deg"),
-                      (QDoubleSpinBox, "First_order", "first_order", self.first_order_func, -100, 100, 0, 0.001, 4, " deg/ns"),
-                      (QDoubleSpinBox, "Second_order", "second_order", self.second_order_func, -100, 100, 0, 0.001, 4, ' deg/ns²')
+                      (QDoubleSpinBox, "First_order", "first_order", self.first_order_func, -100, 100, 0, 0.001, 4, " deg/MHz"),
+                      (QDoubleSpinBox, "Second_order", "second_order", self.second_order_func, -100, 100, 0, 0.001, 4, ' deg/MHz²')
                         ]
 
         for widget_class, attr_name, par_name, func, v_min, v_max, cur_val, v_step, dec, suf in double_boxes:
@@ -1056,7 +1083,7 @@ class MainWindow(QMainWindow):
             else:
                 setattr(self, par_name, int(spin_box.value()))
 
-        self.P_to_drop.setToolTip('Time zero for the FFT calculation')
+        self.P_to_drop.setToolTip('Discard this many leading samples before the FFT in frequency-domain phase mode.')
         
         #if self.second_order != 0.0:
         #    self.second_order = self.sec_order_coef / ( float( self.Second_order.value() ) * 1000 )
@@ -1080,9 +1107,9 @@ class MainWindow(QMainWindow):
             setattr(self, attr_name, self._make_checkbox(func))
 
 
-        self.fft_box.setToolTip('Show amplitude FFT of raw I/Q data.')
+        self.fft_box.setToolTip('Show the FFT; Phase Correction selects amplitude or phase-corrected I/Q.')
         
-        self.Quad_cor.setToolTip('Apply phase correction in the frequency domain: exp(i·(φ₀ + φ₁·f + φ₂·f²))')
+        self.Quad_cor.setToolTip('Unchecked: Zero Order on the time trace, with Auto phase. Checked: orders 0–2 on the FFT after Points to Drop; Auto phase is disabled.')
 
         # ---- Separators ----
         def hline():
@@ -1103,8 +1130,27 @@ class MainWindow(QMainWindow):
         
         gridLayout.addWidget(self.label_11, 3, 0)
         gridLayout.addWidget(self.P_to_drop, 3, 1)
-        gridLayout.addWidget(self.label_12, 4, 0)
-        gridLayout.addWidget(self.Zero_order, 4, 1)
+        zo_controls = QWidget()
+        zo_controls.setFixedSize(360, 26)
+        zo_layout = QHBoxLayout(zo_controls)
+        zo_layout.setContentsMargins(0, 0, 0, 0)
+        zo_layout.setSpacing(0)
+        self.label_12.setFixedSize(140, 26)
+        zo_layout.addWidget(self.label_12)
+        zo_layout.addSpacing(20)
+        self.button_auto_phase = QPushButton("A")
+        self.button_auto_phase.setFixedSize(26, 26)
+        self.button_auto_phase.setStyleSheet(
+            REFINED_STYLES['DOCK_CLOSE_STYLE'] + "QPushButton { font-size: 15px; }")
+        self.button_auto_phase.setAccessibleName("Auto phase")
+        self.button_auto_phase.setToolTip(
+            "Auto phase: set Zero Order so the I/Q integral over the Integration Left/Right "
+            "window falls on the I axis. Needs a running preview with Phase Correction unchecked.")
+        self.button_auto_phase.clicked.connect(self.auto_phase)
+        zo_layout.addWidget(self.button_auto_phase)
+        zo_layout.addSpacing(4)
+        zo_layout.addWidget(self.Zero_order)
+        gridLayout.addWidget(zo_controls, 4, 0, 1, 2)
         gridLayout.addWidget(self.label_13, 5, 0)
         gridLayout.addWidget(self.First_order, 5, 1)
         gridLayout.addWidget(self.label_14, 6, 0)
@@ -1120,6 +1166,7 @@ class MainWindow(QMainWindow):
         self.fft = 0
         self.quad = 0
         self.double_change = 0
+        self.quad_online()
 
     def design_tab_4(self):
         laser_setting_page = QWidget()
@@ -1607,13 +1654,18 @@ class MainWindow(QMainWindow):
 
     def quad_online(self):
         """
-        Turn on/off Quadrature phase correction
+        Select time-domain zero order or frequency-domain orders 0–2
         """
         if self.Quad_cor.checkState().value == 2: # checked
             self.quad = 1
         elif self.Quad_cor.checkState().value == 0: # unchecked
             self.quad = 0
         
+        self.button_auto_phase.setEnabled(self.quad == 0)
+        self.First_order.setEnabled(self.quad == 1)
+        self.Second_order.setEnabled(self.quad == 1)
+        self.P_to_drop.setEnabled(self.quad == 1)
+
         try:
             self.parent_conn_dig.send( 'QC' + str( self.quad ) )
         except AttributeError:
@@ -1643,6 +1695,29 @@ class MainWindow(QMainWindow):
                 self.parent_conn_dig.send( 'ZO' + str( self.zero_order ) )
             except AttributeError:
                 pass
+
+    def auto_phase(self):
+        """Ask the running preview for the zero-order phase of its integrated I/Q."""
+        if getattr(self, 'is_experiment', False):
+            self.message('Auto phase works only in the preview, not during an experiment.')
+            return
+        if not self._live_run_alive():
+            self.message('Auto phase: start the preview first.')
+            return
+        if self.Quad_cor.isChecked():
+            self.message('Auto phase: uncheck Phase Correction to use time-domain Zero Order.')
+            return
+        self.parent_conn_dig.send('AP')
+
+    def auto_window(self):
+        """Ask the running preview to centre the integration window on the echo."""
+        if getattr(self, 'is_experiment', False):
+            self.message('Auto window works only in the preview, not during an experiment.')
+            return
+        if not self._live_run_alive():
+            self.message('Auto window: start the preview first.')
+            return
+        self.parent_conn_dig.send('AW' + str(self.win_width))
 
     def first_order_func(self):
         """
@@ -1699,15 +1774,11 @@ class MainWindow(QMainWindow):
         """
         A function to change left integration window
         """
-        self.cur_win_left = int( float( self.Win_left.value() ) / self.time_per_point )
-        # Bound the integration window to the digitizer RECORD length (Det.
-        # Points), not the detection-pulse length: the Spectrum card records
-        # dig_points samples regardless of the pulse sequence (the old p1_length
-        # bound was an Insys-era leftover that snapped every window wider than P1
-        # back to the same value, so the integral never changed).
-        if self.cur_win_left > self.dig_points:
-            self.cur_win_left = int( self.dig_points )
-            self.Win_left.setValue( round( self.cur_win_left * self.time_per_point, 1) )
+        self.cur_win_left = int( round( float( self.Win_left.value() ) / self.time_per_point ) )
+        record_points = getattr(self, 'preview_points', self.dig_points)
+        if self.cur_win_left > record_points:
+            self.cur_win_left = int( record_points )
+            self.Win_left.setValue( round( self.cur_win_left * self.time_per_point, 2) )
 
         if self.opened == 0:
             try:
@@ -1716,16 +1787,23 @@ class MainWindow(QMainWindow):
                 pass
 
     def win_right(self):
-        self.cur_win_right = int( float( self.Win_right.value() ) / self.time_per_point )
-        if self.cur_win_right > self.dig_points:
-            self.cur_win_right = int( self.dig_points )
-            self.Win_right.setValue( round( self.cur_win_right * self.time_per_point, 1) )
+        self.cur_win_right = int( round( float( self.Win_right.value() ) / self.time_per_point ) )
+        record_points = getattr(self, 'preview_points', self.dig_points)
+        if self.cur_win_right > record_points:
+            self.cur_win_right = int( record_points )
+            self.Win_right.setValue( round( self.cur_win_right * self.time_per_point, 2) )
 
         if self.opened == 0:
             try:
                 self.parent_conn_dig.send( 'WR' + str( self.cur_win_right ) )
             except AttributeError:
                 pass
+
+    def win_width_func(self):
+        """
+        A function to change the auto window width
+        """
+        self.win_width = float( self.Win_width.value() )
 
     def acq_number(self):
         """
@@ -1836,6 +1914,14 @@ class MainWindow(QMainWindow):
         text = open(filename).read()
         lines = text.split('\n')
 
+        for line in lines:
+            if line.startswith('Auto window:'):
+                try:
+                    self.Win_width.setValue( float( line.split(':  ')[1] ) )
+                except (IndexError, ValueError):
+                    pass
+                break
+
         try:
             self.P_to_drop.setValue( int( lines[16].split(':  ')[1] ) )
             self.Zero_order.setValue( float( lines[17].split(':  ')[1] ) )
@@ -1861,8 +1947,8 @@ class MainWindow(QMainWindow):
         #self.live_mode.setCheckState(Qt.CheckState.Unchecked)
         #self.fft_box.setCheckState(Qt.CheckState.Unchecked)
         #self.Quad_cor.setCheckState(Qt.CheckState.Unchecked)
-        self.Win_left.setValue( round(float( lines[13].split(':  ')[1] ), 1) )
-        self.Win_right.setValue( round(float( lines[14].split(':  ')[1] ), 1) )
+        self.Win_left.setValue( round(float( lines[13].split(':  ')[1] ), 2) )
+        self.Win_right.setValue( round(float( lines[14].split(':  ')[1] ), 2) )
         self.Acq_number.setValue( int( lines[15].split(':  ')[1] ) )
         self.Dec.setValue( int( lines[21].split(':  ')[1] ) )
         self.Hor_offset.setValue( int( float( lines[12].split(':  ')[1] ) ) )
@@ -2034,6 +2120,7 @@ class MainWindow(QMainWindow):
             # ESEEM-averaging settings (appended at the end for backward compat)
             file.write( 'Cycles:  ' + str( self.box_cycles.value() ) + '\n' )
             file.write( 'Save Each Cycle:  ' + str( self.Save_each.checkState().value ) + '\n' )
+            file.write( 'Auto window:  ' + str( self.Win_width.value() ) + '\n' )
 
     def phase_converted(self, ph_str):
         if ph_str == '+x':
@@ -2139,7 +2226,6 @@ class MainWindow(QMainWindow):
         Pushes PO/HO live if a run is in progress.
         """
         new_points = int( self.Dec.value() )
-        self.time_per_point = 2  # nominal ns/point for the integration-window (Win L/R) ns<->point map; scope t_res is dynamic
         old_points = self.dig_points   # card's current record length, before we change it
         if self.shift_together == 1:
             # Shift Together: keep the gap (record length - posttrigger)
@@ -2571,6 +2657,28 @@ class MainWindow(QMainWindow):
             self.update_count_nip(data)
         elif msg_type == 'PulseList':
             self.update_pulse_list_display(data)
+        elif msg_type == 'DigitizerTiming':
+            self.time_per_point, self.preview_points = data
+            for box in (self.Win_left, self.Win_right, self.Win_width):
+                box.blockSignals(True)
+                box.setSingleStep(self.time_per_point)
+                box.setMaximum(self.preview_points * self.time_per_point)
+                box.blockSignals(False)
+            self.Win_width.setMinimum(self.time_per_point)
+            self.win_width_func()
+            self.win_left()
+            self.win_right()
+        elif msg_type == 'AutoWindow':
+            left_ns, right_ns, peak_ns = data
+            self.Win_left.setValue(round(left_ns, 2))
+            self.Win_right.setValue(round(right_ns, 2))
+            self.errors.appendPlainText(f'Auto window: {left_ns:.1f} to {right_ns:.1f} ns, peak at {peak_ns:.1f} ns')
+        elif msg_type == 'AutoPhase':
+            if self.Quad_cor.isChecked():
+                return
+            phase_deg, magnitude = data
+            self.Zero_order.setValue(round(phase_deg, 4))
+            self.errors.appendPlainText(f'Auto phase: Zero Order = {phase_deg:.1f} deg, |I+iQ| = {magnitude:.1f}')
         elif msg_type == 'LiveReject':
             # The worker's test-mode rebuild found the live edit invalid (e.g. an
             # overlap the AMP_ON/LNA_PROTECT join cannot resolve). The running
@@ -2996,6 +3104,8 @@ class Worker():
 
             rep_rate = float(rep_rate)
             PHASES = len( rect1[3] )
+            auto_phase_req = False
+            auto_window_ns = 0
 
             # scope returns quadratures separately; x-axis built once (us)
             x_axis = np.linspace(0, real_length * t_res, num = real_length, endpoint = False)
@@ -3010,6 +3120,7 @@ class Worker():
             # in place from the 'PU' handler below. This replaces the old preflight
             # 'test' pulse table so only one live block is shown.
             if not script_test:
+                conn.send(('DigitizerTiming', (t_res * 1000, WIN_ADC)))
                 conn.send( ('PulseList', pb.pulser_pulse_list()) )
 
             # the idea of automatic and dynamic changing is
@@ -3030,6 +3141,8 @@ class Worker():
                     x_axis = np.linspace(0, real_length * t_res, num = real_length, endpoint = False)
                     cycle_data_x = np.zeros( ( PHASES, WIN_ADC ) )
                     cycle_data_y = np.zeros( ( PHASES, WIN_ADC ) )
+                    if not script_test:
+                        conn.send(('DigitizerTiming', (t_res * 1000, WIN_ADC)))
 
                 elif self.command[0:2] == 'HO':
                     posttrigger_value = int( self.command[2:] )
@@ -3063,6 +3176,10 @@ class Worker():
                     quad = int( self.command[2:] )
                 elif self.command[0:2] == 'ZO':
                     zero_order = float( self.command[2:] )
+                elif self.command[0:2] == 'AP':
+                    auto_phase_req = True
+                elif self.command[0:2] == 'AW':
+                    auto_window_ns = float( self.command[2:] )
                 elif self.command[0:2] == 'FO':
                     first_order = float( self.command[2:] )
                 elif self.command[0:2] == 'SO':
@@ -3181,6 +3298,9 @@ class Worker():
 
                 data_x, data_y = pb.pulser_acquisition_cycle( cycle_data_x, cycle_data_y, acq_cycle = rect1[3] )
 
+                if quad == 0:
+                    data_x, data_y = t3104.oscilloscope_demodulate(data_x, data_y, 0, zero_order, 0, 0)
+
                 if script_test and fft_flag == 1:
                     # FFT mode in test: omit the I/Q text on the Dig plot since FFT is shown
                     general.plot_1d('Dig', x_axis, ( data_x, data_y ),
@@ -3215,18 +3335,42 @@ class Worker():
                             yscale = 'Arb. U.', text = 'Max ' + str(m_val)
                             )
                     else:
-                        if p_to_drop > len( data_x ) - 2:
-                            p_to_drop = len( data_x ) - 4
+                        if p_to_drop > max(0, len(data_x) - 2):
+                            p_to_drop = max(0, len(data_x) - 2)
                             general.message('Maximum length of the data achieved. A number of drop points was corrected.')
                         # scope t_res is in us; fft wants ns -> *1000
                         freq, fft_x, fft_y = fft.fft( x_axis[p_to_drop:] , data_x[p_to_drop:], data_y[p_to_drop:], t_res * 1000, re = 'True' )
-                        data_fft = fft.ph_correction( freq, fft_x, fft_y, zero_order, first_order, second_order )
-                        # ph_correction uses freq in MHz; the axis auto-SI-prefixes, so plot Hz
+                        data_fft = fft.ph_correction( freq, fft_x, fft_y, zero_order, first_order * 1e-9, second_order * 1e-18 )
                         general.wait('1 ms')
                         general.plot_1d('FFT', freq * 1e6, ( data_fft[0], data_fft[1] ),
                             xname = 'Freq Offset', xscale = 'Hz',
                             yscale = 'Arb. U.', label = 'FFT'
                             )
+
+                if auto_phase_req:
+                    auto_phase_req = False
+                    if quad == 0 and win_right > win_left:
+                        integral = np.sum(data_x[win_left:win_right] + 1j * data_y[win_left:win_right])
+                        if np.isfinite(integral) and integral != 0:
+                            phase = (zero_order + np.angle(integral)) % (2 * np.pi)
+                            conn.send(('AutoPhase', (float(np.degrees(phase)), float(np.abs(integral) * t_res * 1000))))
+                        else:
+                            conn.send(('Message', 'Auto phase: no signal in the integration window.'))
+                    else:
+                        conn.send(('Message', 'Auto phase needs time-domain mode and a non-empty integration window.'))
+
+                if auto_window_ns > 0:
+                    width = min(max(1, int(round(auto_window_ns / (t_res * 1000)))), WIN_ADC)
+                    auto_window_ns = 0
+                    envelope = np.abs(data_x + 1j * data_y)
+                    if np.isfinite(envelope).all() and np.any(envelope > 0):
+                        smooth = np.convolve(envelope, np.ones(width) / width, mode = 'same')
+                        centre = int(np.argmax(smooth))
+                        left = min(max(centre - width // 2, 0), WIN_ADC - width)
+                        right = left + width
+                        conn.send(('AutoWindow', (left * t_res * 1000, right * t_res * 1000, centre * t_res * 1000)))
+                    else:
+                        conn.send(('Message', 'Auto window: no signal in the detection window.'))
 
                 if not script_test:
                     self.command = 'start'
