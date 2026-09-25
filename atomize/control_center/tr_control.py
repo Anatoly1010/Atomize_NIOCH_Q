@@ -3,19 +3,18 @@
 
 import os
 import sys
+import math
 from atomize.general_modules.gui_style import REFINED_STYLES, style_file_dialog, apply_app_style
 import time
 import numpy as np
 from multiprocessing import Process, Pipe
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QLabel, QDoubleSpinBox, QSpinBox, QComboBox, QPushButton, QTextEdit, QGridLayout, QFrame, QCheckBox, QProgressBar, QFileDialog,  QTreeView, QHeaderView, QSizeGrip, QLineEdit, QFileIconProvider
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QLabel, QDoubleSpinBox, QSpinBox, QComboBox, QPushButton, QTextEdit, QGridLayout, QFrame, QCheckBox, QProgressBar, QFileDialog,  QTreeView, QHeaderView, QSizeGrip, QLineEdit, QFileIconProvider, QTabWidget
 from PyQt6.QtGui import QIcon, QAction
 from PyQt6.QtCore import Qt, QTimer
 import atomize.general_modules.csv_opener_saver as openfile
 import atomize.general_modules.last_dir as ldir
 import atomize.control_center.field_param as field_param
 from atomize.general_modules.gui_style import CHECKBOX_STYLE
-
-NUM_OSC_VALUES = {'No 2 scope': 1, '2 scope + THz option': 3}
 
 class MainWindow(QMainWindow):
     """
@@ -57,18 +56,22 @@ class MainWindow(QMainWindow):
         self.setWindowIcon( QIcon(icon_path) )
         self.path = os.path.join(path_to_main, '..', '..', '..', '..', 'experimental_data')
 
-        centralwidget = QWidget(self)
-        self.setCentralWidget(centralwidget)
+        self.tabs = QTabWidget()
+        self.tabs.setTabShape(QTabWidget.TabShape.Rounded)
+        self.tabs.setStyleSheet(REFINED_STYLES['TAB_STYLE'])
+        self.setCentralWidget(self.tabs)
+        self.tr_tab = QWidget()
+        self.tabs.addTab(self.tr_tab, 'TR EPR')
 
         gridLayout = QGridLayout()
-        gridLayout.setContentsMargins(15, 10, 10, 10)
+        gridLayout.setContentsMargins(14, 10, 7, 10)
         gridLayout.setVerticalSpacing(4)
         gridLayout.setHorizontalSpacing(20)
 
-        centralwidget.setLayout(gridLayout)
+        self.tr_tab.setLayout(gridLayout)
 
         # ---- Labels & Inputs ----
-        labels = [("Start Field", "label_1"), ("End Field", "label_2"), ("Field Step", "label_3"), ("Off-Resonance Field", "label_4"), ("Off-Resonance Acquisitions", "label_5"), ("Acquisitions", "label_6"), ("Number of Scans", "label_7"), ("Save Each Scan", "label_8"), ("Two-Side Measurement", "label_9"), ("Number of Oscilloscopes", "label_10"), ("Trigger Channel", "label_11"), ("Experiment Name", "label_12"), ("Progress", "label_13"), ("Save as HDF5", "label_14")]
+        labels = [("Start Field", "label_1"), ("End Field", "label_2"), ("Field Step", "label_3"), ("Off-Resonance Field", "label_4"), ("Off-Resonance Acquisitions", "label_5"), ("Acquisitions", "label_6"), ("Number of Scans", "label_7"), ("Save Each Scan", "label_8"), ("Two-Side Measurement", "label_9"), ("Trigger Channel", "label_11"), ("Experiment Name", "label_12"), ("Progress", "label_13"), ("Save as HDF5", "label_14")]
 
         for name, attr_name in labels:
             lbl = QLabel(name)
@@ -115,13 +118,9 @@ class MainWindow(QMainWindow):
 
 
         # ---- Combo boxes----
-        combo_boxes = [("No 2 scope", "combo_num_osc", "cur_num_osc", self.num_osc, 
+        combo_boxes = [("CH3", "combo_trig_ch", "cur_trig_ch", self.trig_ch,
                         [
-                        "No 2 scope", "2 scope + THz option"
-                        ]),
-                      ("CH3", "combo_trig_ch", "cur_trig_ch", self.trig_ch, 
-                        [
-                        "CH3", "Ext"
+                        "CH1", "CH2", "CH3", "CH4", "Ext"
                         ])
                       ]
 
@@ -134,9 +133,6 @@ class MainWindow(QMainWindow):
             combo.setCurrentText(cur_text)            
             combo.setFixedSize(130, 26)
             combo.setStyleSheet(REFINED_STYLES['COMBO_STYLE'])
-
-            if par_name == 'cur_num_osc':
-                self.cur_num_osc = NUM_OSC_VALUES[ combo.currentText() ]
 
         # ---- Text Edits ----
         text_edit = [("TR", "text_edit_exp_name", "cur_exp_name", self.exp_name),
@@ -225,8 +221,6 @@ class MainWindow(QMainWindow):
 
         gridLayout.addWidget(hline(), 11, 0, 1, 2)
 
-        gridLayout.addWidget(self.label_10, 12, 0)
-        gridLayout.addWidget(self.combo_num_osc, 12, 1)
         gridLayout.addWidget(self.label_11, 13, 0)
         gridLayout.addWidget(self.combo_trig_ch, 13, 1)
 
@@ -250,8 +244,14 @@ class MainWindow(QMainWindow):
         gridLayout.setColumnStretch(21, 2)
         self.design_half_field()
 
+        self.scope_tab = ScopeTab(self)
+        self.tabs.addTab(self.scope_tab, 'Scope')
+        self.tabs.currentChanged.connect(self.fit_tab)
+        self.fit_tab(0)
+        QTimer.singleShot(0, lambda: self.fit_tab(self.tabs.currentIndex()))
+
     def design_half_field(self):
-        grid = self.centralWidget().layout()
+        grid = self.tr_tab.layout()
         items = []
         while grid.count():
             position = grid.getItemPosition(0)
@@ -293,13 +293,22 @@ class MainWindow(QMainWindow):
     def toggle_half(self):
         for widget in self.half_boxes + self.half_labels:
             widget.setVisible(self.enable_half.isChecked())
-        self.centralWidget().layout().activate()
-        self.adjustSize()
+        self.fit_tab(self.tabs.currentIndex())
 
     def set_half_editable(self, editable):
         self.enable_half.setEnabled(editable)
         for box in self.half_boxes:
             box.setEnabled(editable)
+
+    def fit_tab(self, index):
+        """Fix the window height to the visible tab, like a single-page tool; the window manager honours a fixed size."""
+        page = self.tabs.widget(index)
+        page.layout().activate()
+        pages = [self.tabs.widget(i).sizeHint().height() for i in range(self.tabs.count())]
+        tab_bar = self.tabs.tabBar().sizeHint().height()
+        frame = self.tabs.sizeHint().height() - tab_bar - max(pages)
+        height = self.menuBar().sizeHint().height() + tab_bar + frame + page.sizeHint().height()
+        self.setFixedSize(self.sizeHint().width(), height)
 
     def menu(self):
         menubar = self.menuBar()
@@ -366,6 +375,8 @@ class MainWindow(QMainWindow):
         """
         self.cur_trig_ch = str( self.combo_trig_ch.currentText() )
         #print(self.cur_end_field)
+        if hasattr(self, 'scope_tab'):
+            self.scope_tab.combo_source.setCurrentText(self.cur_trig_ch)
 
     def end_field(self):
         """
@@ -414,12 +425,6 @@ class MainWindow(QMainWindow):
         self.cur_ave = int( self.box_ave.value() )
         #print(self.cur_ave)
 
-    def num_osc(self):
-        """
-        A function to send number of oscilloscopes
-        """
-        self.cur_num_osc = NUM_OSC_VALUES[ self.combo_num_osc.currentText() ]
-
     def ave_offres(self):
         """
         A function to send a number of averages for off-resonance
@@ -433,6 +438,8 @@ class MainWindow(QMainWindow):
         """
         self.exit_clicked = 1
         self.stop_requested = True
+        self.pending_start = False
+        self.scope_tab.request_exit()
         try:
             self.parent_conn.send( 'exit' )
             self.monitor_timer.start(200)
@@ -441,12 +448,21 @@ class MainWindow(QMainWindow):
             #self.message('Experimental script is not running')
 
     def check_process_status(self):
+        if getattr(self, 'pending_start', False):
+            if self.scope_tab.is_alive():
+                return
+            self.pending_start = False
+            self.monitor_timer.stop()
+            self.start()
+            return
+
         if self.exp_process.is_alive():
             return
-        
+
         self.monitor_timer.stop()
         self.set_half_editable(True)
-        self.exp_process.join() 
+        self.scope_tab.setEnabled(True)
+        self.exp_process.join()
         #self.timer.stop()
         self.progress_bar.setValue(0)
         self.button_start.setStyleSheet(REFINED_STYLES['BUTTON_STYLE'])
@@ -483,6 +499,13 @@ class MainWindow(QMainWindow):
         except AttributeError:
             pass
 
+        if self.scope_tab.is_alive():
+            self.scope_tab.request_exit()
+            self.pending_start = True
+            if not self.monitor_timer.isActive():
+                self.monitor_timer.start(200)
+            return
+
         self.stop_requested = False
         self.last_error = False
         if self.cur_start_field >= self.cur_end_field:
@@ -507,11 +530,12 @@ class MainWindow(QMainWindow):
             self.pending_half_field = half
 
         worker.half_field = self.pending_half_field
+        worker.trigger_timeout_s = self.scope_tab.trigger_timeout()
         test_target = worker.exp_test_two_fields if worker.half_field is not None else worker.exp_test
         self.parent_conn, self.child_conn = Pipe()
-        # a process for running function script 
+        # a process for running function script
         # sending parameters for initial initialization
-        self.exp_process = Process( target = test_target, args = ( self.child_conn, self.cur_offres_field, self.cur_exp_name, self.cur_end_field, self.cur_start_field, self.cur_step, self.cur_ave_offres, self.cur_scan, self.cur_ave, self.cur_num_osc, self.cur_trig_ch, self.save_scan, self.two_side, ) )
+        self.exp_process = Process( target = test_target, args = ( self.child_conn, self.cur_offres_field, self.cur_exp_name, self.cur_end_field, self.cur_start_field, self.cur_step, self.cur_ave_offres, self.cur_scan, self.cur_ave, 1, self.cur_trig_ch, self.save_scan, self.two_side, ) )
             
 
         self.button_start.setStyleSheet(REFINED_STYLES['PRIMARY_BUTTON_STYLE'])
@@ -523,8 +547,9 @@ class MainWindow(QMainWindow):
         self.parent_conn.send('start')
         field_param.set_lock('tr_control')
 
-        self.is_testing = True 
+        self.is_testing = True
         self.set_half_editable(False)
+        self.scope_tab.setEnabled(False)
         self.timer.start(300)
 
     def message(self, *text):
@@ -542,6 +567,8 @@ class MainWindow(QMainWindow):
             self.progress_bar.setToolTip(f'Completed scans: {data}')
         elif msg_type == 'Open':
             self.open_dialog()
+        elif msg_type == 'Message':
+            self.message(data)
         elif msg_type == 'Error':
             self.last_error = True
             self.timer.stop()
@@ -600,6 +627,7 @@ class MainWindow(QMainWindow):
 
         if not self.exp_process.is_alive() and not getattr(self, 'is_testing', False):
             self.set_half_editable(True)
+            self.scope_tab.setEnabled(True)
 
     def open_dialog(self):
         file_data = self.file_handler.create_file_dialog(multiprocessing = True,
@@ -618,10 +646,11 @@ class MainWindow(QMainWindow):
 
         worker = Worker()
         worker.half_field = getattr(self, 'pending_half_field', None)
+        worker.trigger_timeout_s = self.scope_tab.trigger_timeout()
 
         self.parent_conn, self.child_conn = Pipe()
 
-        self.exp_process = Process( target = worker.exp_on, args = ( self.child_conn, self.cur_offres_field, self.cur_exp_name, self.cur_end_field, self.cur_start_field, self.cur_step, self.cur_ave_offres, self.cur_scan, self.cur_ave, self.cur_num_osc, self.cur_trig_ch, self.save_scan, self.two_side, ) )
+        self.exp_process = Process( target = worker.exp_on, args = ( self.child_conn, self.cur_offres_field, self.cur_exp_name, self.cur_end_field, self.cur_start_field, self.cur_step, self.cur_ave_offres, self.cur_scan, self.cur_ave, 1, self.cur_trig_ch, self.save_scan, self.two_side, ) )
             
         self.exp_process.start()
         self.parent_conn.send('start')
@@ -730,13 +759,14 @@ class MainWindow(QMainWindow):
         else:
             self.checkbox_back_scan.setCheckState(Qt.CheckState.Unchecked)
 
-        self.combo_num_osc.setCurrentText( str( lines[9].split(':  ')[1] ) )
-        self.combo_trig_ch.setCurrentText( str( lines[10].split(':  ')[1] ) )
-        extra = dict(line.split(':  ', 1) for line in lines[11:] if ':  ' in line)
+        extra = dict(line.split(':  ', 1) for line in lines[9:] if ':  ' in line)
+        if 'Trigger Channel' in extra:
+            self.combo_trig_ch.setCurrentText( extra['Trigger Channel'].strip() )
         self.enable_half.setChecked(extra.get('Half Field Enabled', '0') == '1')
         for box, key in zip(self.half_boxes, ('Half Start Field', 'Half End Field', 'Half Field Step')):
             if key in extra:
                 box.setValue(float(extra[key]))
+        self.scope_tab.load(extra)
 
     def save_file(self, filename):
         """
@@ -757,12 +787,419 @@ class MainWindow(QMainWindow):
             file.write( 'Scans:  ' + str(self.box_scan.value()) + '\n' )
             file.write( 'Save Each Scan:  ' + str(self.check_scan.checkState().value) + '\n' )
             file.write( 'Two-Side:  ' + str(self.checkbox_back_scan.checkState().value) + '\n' )
-            file.write( 'Number of Oscilloscopes:  ' + str(self.combo_num_osc.currentText()) + '\n' )
             file.write( 'Trigger Channel:  ' + str(self.combo_trig_ch.currentText()) + '\n' )
             if self.enable_half.isChecked():
                 file.write('Half Field Enabled:  1\n')
                 for box, key in zip(self.half_boxes, ('Half Start Field', 'Half End Field', 'Half Field Step')):
                     file.write(f'{key}:  {box.value()}\n')
+            for key, value in self.scope_tab.save():
+                file.write(f'{key}:  {value}\n')
+
+def _step_125(value, steps, v_min, v_max):
+    """The 1-2-5 value |steps| places above (steps > 0) or below value, clamped to [v_min, v_max]."""
+    for _ in range(abs(steps)):
+        decade = math.floor(math.log10(max(value, 1e-12)))
+        grid = [m * 10.0 ** e for e in range(decade - 1, decade + 2) for m in (1, 2, 5)]
+        if steps > 0:
+            value = min(v for v in grid if v > value * (1 + 1e-9))
+        else:
+            value = max(v for v in grid if v < value * (1 - 1e-9))
+        value = min(max(round(value, 12), v_min), v_max)
+    return value
+
+class _Step125:
+    def stepBy(self, steps):
+        value = _step_125(self.value(), steps, self.minimum(), self.maximum())
+        self.setValue(value if isinstance(self, QDoubleSpinBox) else int(round(value)))
+
+class DoubleSpin125(_Step125, QDoubleSpinBox):
+    pass
+
+class Spin125(_Step125, QSpinBox):
+    pass
+
+class ScopeTab(QWidget):
+    """
+    Settings and live preview of the Keysight scope. The scope is driven only by
+    a Worker.scope_on child process between Connect and Disconnect; this widget
+    never imports the device module, whose constructor exits when the scope is absent.
+    Mode switches the same scope between TR EPR averaging and XY resonator tuning.
+    """
+    CHANNELS = ('ch1', 'ch2', 'ch3', 'ch4')
+    FIELDS = (('window_us', 'Window'), ('trigger_pos_us', 'Trigger Position'), ('trigger_source', 'Trigger Source'),
+              *((f'{channel}_{kind}_mv', f'{channel.upper()} {label}') for channel in CHANNELS for kind, label in (('scale', 'Scale'), ('offset', 'Offset'))),
+              ('live_averages', 'Live Acquisitions'), ('trigger_timeout_s', 'Trigger Timeout'))
+
+    def __init__(self, main):
+        super().__init__()
+        self.main = main
+        self.process = None
+        self.conn = None
+        self.connected = False
+        self.finished = False
+        self.scope_timer = QTimer()
+        self.scope_timer.timeout.connect(self.check_session)
+
+        tb_min, tb_max, sens_min, sens_max, self.address = self.read_limits()
+
+        grid = QGridLayout()
+        grid.setContentsMargins(14, 10, 7, 10)
+        grid.setVerticalSpacing(4)
+        grid.setHorizontalSpacing(20)
+        self.setLayout(grid)
+
+        def label(text):
+            lbl = QLabel(text)
+            lbl.setFixedSize(190, 26)
+            lbl.setStyleSheet(REFINED_STYLES['LABEL_STYLE'])
+            return lbl
+
+        def hline():
+            line = QFrame()
+            line.setFrameShape(QFrame.Shape.HLine)
+            line.setFrameShadow(QFrame.Shadow.Sunken)
+            line.setLineWidth(2)
+            return line
+
+        def button(text, func):
+            btn = QPushButton(text)
+            btn.setFixedSize(140, 40)
+            btn.clicked.connect(func)
+            btn.setStyleSheet(REFINED_STYLES['BUTTON_STYLE'])
+            return btn
+
+        boxes = [(DoubleSpin125, 'window_us', math.ceil(tb_min * 1e7) / 10, tb_max * 1e6, 500, 10, 1, ' us'),
+                 (QDoubleSpinBox, 'trigger_pos_us', -500, 500, 50, 50, 1, ' us')]
+        for channel in self.CHANNELS:
+            boxes += [(Spin125, f'{channel}_scale_mv', max(1, math.ceil(sens_min * 1000)), sens_max * 1000, 200, 10, 0, ' mV'),
+                      (QSpinBox, f'{channel}_offset_mv', -2000, 2000, 0, 40, 0, ' mV')]
+        boxes += [(Spin125, 'live_averages', 2, 2000, 2, 1, 0, ''),
+                  (QDoubleSpinBox, 'trigger_timeout_s', 1.5, 60, 2.0, 0.5, 1, ' s')]
+        self.boxes = {}
+        for widget_class, name, v_min, v_max, cur_val, v_step, dec, suf in boxes:
+            spin_box = widget_class()
+            if isinstance(spin_box, QDoubleSpinBox):
+                spin_box.setDecimals(dec)
+                spin_box.setRange(v_min, v_max)
+            else:
+                spin_box.setRange(int(v_min), int(v_max))
+            spin_box.setStyleSheet(REFINED_STYLES['COMPACT_FIELD_STYLE'])
+            spin_box.setSingleStep(v_step)
+            spin_box.setValue(cur_val)
+            spin_box.setSuffix(suf)
+            spin_box.setFixedSize(130, 26)
+            spin_box.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.PlusMinus)
+            spin_box.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+            spin_box.setKeyboardTracking(False)
+            spin_box.valueChanged.connect(lambda value, name = name: self.box_changed(name, value))
+            self.boxes[name] = spin_box
+        self.fit_ranges()
+
+        self.combo_source = QComboBox()
+        self.combo_source.addItems(['CH1', 'CH2', 'CH3', 'CH4', 'Ext'])
+        self.combo_source.setCurrentText('CH3')
+        self.combo_source.setFixedSize(130, 26)
+        self.combo_source.setStyleSheet(REFINED_STYLES['COMBO_STYLE'])
+        self.combo_source.currentTextChanged.connect(self.source_changed)
+
+        self.combo_mode = QComboBox()
+        self.combo_mode.addItems(['TR EPR', 'Tuning'])
+        self.combo_mode.setFixedSize(130, 26)
+        self.combo_mode.setStyleSheet(REFINED_STYLES['COMBO_STYLE'])
+        self.combo_mode.setToolTip('Tuning: trigger on CH1, XY display. TR EPR: restores the trigger source and averaging.')
+        self.combo_mode.currentTextChanged.connect(self.mode_changed)
+
+        self.status = QLabel('Not connected')
+        self.status.setFixedSize(130, 26)
+        self.status.setStyleSheet(REFINED_STYLES['LABEL_STYLE'])
+        self.button_connect = button('Connect', self.connect_clicked)
+        self.button_read = button('Read', lambda: self.send(('READ', )))
+        self.button_run = button('Run', lambda: self.send(('RUN', )))
+        self.button_stop = button('Stop', lambda: self.send(('STOP', )))
+        self.check_live = QCheckBox('')
+        self.check_live.setFixedSize(130, 26)
+        self.check_live.setStyleSheet(CHECKBOX_STYLE)
+        self.check_live.toggled.connect(lambda checked: self.send(('LIVE', int(checked))))
+        self.check_live.toggled.connect(self.fit_run_stop)
+
+        grid.addWidget(label('Status'), 0, 0)
+        grid.addWidget(self.status, 0, 1)
+        grid.addWidget(label('Mode'), 1, 0)
+        grid.addWidget(self.combo_mode, 1, 1)
+        grid.addWidget(hline(), 2, 0, 1, 2)
+        row = 3
+        widgets = {**self.boxes, 'trigger_source': self.combo_source}
+        channel_names = tuple(f'{channel}_{kind}_mv' for channel in self.CHANNELS for kind in ('scale', 'offset'))
+        for group in (('window_us', 'trigger_pos_us', 'trigger_source'), channel_names, ('live_averages', 'trigger_timeout_s')):
+            for name in group:
+                grid.addWidget(label(dict(self.FIELDS)[name]), row, 0)
+                grid.addWidget(widgets[name], row, 1)
+                row += 1
+            if name != 'trigger_timeout_s':
+                grid.addWidget(hline(), row, 0, 1, 2)
+                row += 1
+        grid.addWidget(label('Live'), row, 0)
+        grid.addWidget(self.check_live, row, 1)
+        grid.addWidget(hline(), row + 1, 0, 1, 2)
+        for offset, btn in enumerate((self.button_connect, self.button_read, self.button_run, self.button_stop), 2):
+            grid.addWidget(btn, row + offset, 0)
+        grid.setRowStretch(row + 6, 2)
+        grid.setColumnStretch(2, 2)
+        self.reset()
+
+    def read_limits(self):
+        """Box ranges and the scope address from the module config; no instrument is touched."""
+        address = '192.168.2.22'
+        try:
+            import atomize.main.local_config as lconf
+            import atomize.device_modules.config.config_utils as cutil
+            path = cutil.config_path(lconf.load_config_device(), 'Keysight_2000_Xseries_config.ini', legacy = 'Keysight_2012a_config.ini')
+            specific = cutil.read_specific_parameters(path)
+            limits = [float(specific[key]) for key in ('timebase_min', 'timebase_max', 'sensitivity_min', 'sensitivity_max')]
+            address = cutil.read_conf_util(path)['ethernet_address'].split('::')[1]
+        except (OSError, KeyError, ValueError, IndexError):
+            limits = [5e-9, 50, 0.001, 5]
+        return (*limits, address)
+
+    def settings(self):
+        values = {name: box.value() for name, box in self.boxes.items()}
+        values['trigger_source'] = self.trigger_source()
+        return values
+
+    def trigger_timeout(self):
+        return float(self.boxes['trigger_timeout_s'].value())
+
+    def fit_run_stop(self, live):
+        for widget in (self.button_run, self.button_stop):
+            widget.setEnabled(self.connected and not live)
+
+    def fit_mode(self):
+        self.check_live.setEnabled(self.connected and self.combo_mode.currentText() == 'TR EPR')
+
+    def trigger_source(self):
+        return self.combo_source.currentText()
+
+    def fit_ranges(self):
+        """Trigger Position spans ±Window in one-division steps; an offset steps by 0.2 division of its scale."""
+        self.window_us = self.boxes['window_us'].value()
+        dependent = [('trigger_pos_us', -self.window_us, self.window_us, self.window_us / 10)]
+        for channel in self.CHANNELS:
+            scale = self.boxes[f'{channel}_scale_mv'].value()
+            limit = 2000 if scale <= 200 else 50000
+            dependent.append((f'{channel}_offset_mv', -limit, limit, max(1, round(scale / 5))))
+        for name, v_min, v_max, step in dependent:
+            box = self.boxes[name]
+            box.blockSignals(True)
+            box.setRange(v_min, v_max)
+            box.setSingleStep(step)
+            box.blockSignals(False)
+
+    def box_changed(self, name, value):
+        if name != 'window_us':
+            self.fit_ranges()
+            self.send(('SET', name, value))
+            return
+        position = self.boxes['trigger_pos_us']
+        fraction = position.value() / self.window_us
+        self.fit_ranges()
+        position.blockSignals(True)
+        position.setValue(fraction * value)
+        position.blockSignals(False)
+        self.send(('SET', 'window_us', value))
+        self.send(('SET', 'trigger_pos_us', position.value()))
+
+    def source_changed(self, text):
+        self.main.combo_trig_ch.setCurrentText(text)
+        self.send(('SET', 'trigger_source', text))
+
+    def mode_changed(self, text):
+        self.send(('MODE', text))
+        self.fit_mode()
+
+    def is_alive(self):
+        return self.process is not None and self.process.is_alive()
+
+    def send(self, command):
+        if self.connected and self.is_alive():
+            self.conn.send(command)
+
+    def request_exit(self):
+        if self.is_alive():
+            self.conn.send('exit')
+            self.status.setText('Disconnecting…')
+
+    def connect_clicked(self):
+        if self.is_alive():
+            self.request_exit()
+            return
+
+        worker = Worker()
+        parent_conn, child_conn = Pipe()
+        test_process = Process(target = worker.scope_on, args = (child_conn, self.settings(), True))
+        test_process.start()
+        test_process.join(30)
+        if test_process.is_alive():
+            test_process.terminate()
+            test_process.join()
+        replies = []
+        while parent_conn.poll():
+            replies.append(parent_conn.recv())
+        if not any(kind == 'test' for kind, data in replies):
+            for kind, data in replies:
+                self.main.message(data)
+            if not replies:
+                self.main.message('scope: settings check did not finish')
+            return
+
+        self.conn, child_conn = Pipe()
+        self.process = Process(target = worker.scope_on, args = (child_conn, self.settings()))
+        self.finished = False
+        self.process.start()
+        self.status.setText('Connecting…')
+        self.button_connect.setText('Disconnect')
+        self.scope_timer.start(200)
+
+    def check_session(self):
+        while self.conn.poll():
+            try:
+                kind, data = self.conn.recv()
+            except (EOFError, OSError):
+                break
+            if kind == 'Settings':
+                self.write_boxes(data)
+                if not self.connected:
+                    self.connected = True
+                    self.status.setText('Connected')
+                    for widget in (self.button_read, self.button_run, self.button_stop, self.combo_mode):
+                        widget.setEnabled(True)
+                    self.fit_mode()
+            elif kind == 'Mode':
+                self.combo_mode.blockSignals(True)
+                self.combo_mode.setCurrentText(data)
+                self.combo_mode.blockSignals(False)
+                self.fit_mode()
+            elif kind == 'Live':
+                self.check_live.blockSignals(True)
+                self.check_live.setChecked(bool(data))
+                self.check_live.blockSignals(False)
+                self.fit_run_stop(bool(data))
+            elif kind == 'Message':
+                self.main.message(data)
+            else:
+                self.finished = True
+                self.main.message(data)
+
+        if self.process.is_alive():
+            return
+        self.process.join()
+        if not self.finished:
+            self.main.message(f'scope did not answer — check power and network of {self.address}')
+        self.reset()
+
+    def write_boxes(self, values):
+        for name, value in values.items():
+            if name == 'trigger_source':
+                self.combo_source.blockSignals(True)
+                self.combo_source.setCurrentText(value)
+                self.combo_source.blockSignals(False)
+                self.main.combo_trig_ch.setCurrentText(value)
+            elif name in self.boxes:
+                box = self.boxes[name]
+                box.blockSignals(True)
+                box.setValue(float(value) if isinstance(box, QDoubleSpinBox) else int(round(value)))
+                box.blockSignals(False)
+                self.fit_ranges()
+
+    def reset(self):
+        self.scope_timer.stop()
+        self.connected = False
+        self.process = None
+        self.status.setText('Not connected')
+        self.button_connect.setText('Connect')
+        self.check_live.blockSignals(True)
+        self.check_live.setChecked(False)
+        self.check_live.blockSignals(False)
+        for widget in (self.button_read, self.button_run, self.button_stop, self.check_live, self.combo_mode):
+            widget.setEnabled(False)
+
+    def save(self):
+        return [(f'Scope {label}', self.trigger_source() if name == 'trigger_source' else self.boxes[name].value()) for name, label in self.FIELDS]
+
+    def load(self, extra):
+        for name, label in self.FIELDS:
+            key = f'Scope {label}'
+            if key not in extra:
+                continue
+            if name == 'trigger_source':
+                self.combo_source.setCurrentText(extra[key].strip())
+            else:
+                self.boxes[name].setValue(float(extra[key]) if isinstance(self.boxes[name], QDoubleSpinBox) else int(float(extra[key])))
+
+def _arm(scope):
+    """
+    Starts one :DIGitize accumulation of :ACQuire:COUNt shots and stores the
+    count and arm time on the scope; *ESE 1 makes completion set ESB in the status byte.
+    """
+    scope.oscilloscope_command(':WAVeform:FORMat WORD')
+    if getattr(scope, 'test_flag', None) == 'test':
+        return
+    scope.tr_count = int(scope.oscilloscope_query('*CLS;*ESE 1;:ACQuire:COUNt?'))
+    scope.oscilloscope_command(':DIGitize;*OPC')
+    scope.tr_armed = time.monotonic()
+
+def _abort(scope):
+    """Ends a running :DIGitize; a device clear is needed because the parser is blocked."""
+    if getattr(scope, 'test_flag', None) != 'test':
+        scope.device.clear()
+    scope.oscilloscope_command(':STOP')
+
+def _wait_armed(scopes, conn, trigger_timeout_s, poll_s = 0.05):
+    """
+    Serial-polls the armed scopes until every accumulation is complete (ESB).
+    Returns 'done', 'exit', ('command', value) for any other pipe command, or
+    ('no_trigger', index, reason) after aborting a scope that saw no trigger
+    (TRG) for trigger_timeout_s or ran past twice its calibrated duration.
+    """
+    if any(getattr(scope, 'test_flag', None) == 'test' for scope in scopes):
+        return 'done'
+
+    running = set(range(len(scopes)))
+    triggered = set()
+    while True:
+        if conn.poll():
+            command = conn.recv()
+            if command == 'exit':
+                for scope in scopes:
+                    _abort(scope)
+                return 'exit'
+            return ('command', command)
+
+        for index in sorted(running):
+            scope = scopes[index]
+            elapsed = time.monotonic() - scope.tr_armed
+            stb = scope.device.read_stb()
+            if stb & 32:
+                running.discard(index)
+                scope.tr_shot_s = elapsed / scope.tr_count
+                continue
+            if stb & 1:
+                triggered.add(index)
+            shot_s = getattr(scope, 'tr_shot_s', None)
+            reason = None
+            if index not in triggered and elapsed > trigger_timeout_s:
+                reason = f'no trigger for {trigger_timeout_s:g} s'
+            elif shot_s is not None:
+                limit = 2 * scope.tr_count * shot_s + trigger_timeout_s
+                if elapsed > limit:
+                    reason = f'accumulation ran past {limit:.1f} s'
+            if reason is not None:
+                scope.tr_shot_s = None
+                _abort(scope)
+                return ('no_trigger', index, reason)
+
+        if not running:
+            return 'done'
+        time.sleep(poll_s)
 
 # The worker class that run the digitizer in a different thread
 class Worker():
@@ -773,6 +1210,7 @@ class Worker():
         self.command = 'start'
         self.half_field = None
         self.testing_two_fields = False
+        self.trigger_timeout_s = 2.0
 
     def _append_scan_h5(self, filename, matrix, scan):
         """
@@ -800,6 +1238,39 @@ class Worker():
             scans.resize(scan, axis = 0)
             scans[scan - 1] = matrix
 
+    def _acquire_point(self, scopes, conn, field, on_command = None):
+        """
+        Arms every scope and waits for the accumulation; a lost trigger is retried
+        once, then the run stops through the normal Stop path (ramp-back and save).
+        Returns False when the run is stopping.
+        """
+        for attempt in range(2):
+            for scope in scopes:
+                _arm(scope)
+            result = _wait_armed(scopes, conn, self.trigger_timeout_s)
+            while isinstance(result, tuple) and result[0] == 'command':
+                if on_command is None:
+                    self.command = result[1]
+                else:
+                    on_command(result[1])
+                result = _wait_armed(scopes, conn, self.trigger_timeout_s)
+
+            if result == 'done':
+                return True
+            if result == 'exit':
+                self.command = 'exit'
+                return False
+
+            text = f'scope {result[1] + 1}: {result[2]} at field {field} G'
+            for index, scope in enumerate(scopes):
+                if index != result[1]:
+                    _abort(scope)
+            if attempt == 1:
+                conn.send( ('Message', text + '; second loss, stopping the measurement') )
+                self.command = 'exit'
+                return False
+            conn.send( ('Message', text + '; retrying the point') )
+
     def exp_test_two_fields(self, conn, *parameters):
         """Check the two-range acquisition through native device test modes."""
         sys.argv = ['', 'test']
@@ -807,6 +1278,179 @@ class Worker():
         general.test_flag = 'test'
         self.testing_two_fields = True
         self.exp_on(conn, *parameters)
+
+    def scope_on(self, conn, settings, script_test = False):
+        """
+        Scope-tab session: owns the scope between Connect and Disconnect, applies
+        and reads back settings, switches TR EPR / Tuning mode and streams live
+        traces. With script_test it only pushes the tab values through the
+        test-mode setters and returns.
+        """
+        import traceback
+
+        if script_test:
+            sys.argv = ['', 'test']
+        scope = None
+        closing = False
+        tuning = False
+        try:
+            import atomize.general_modules.general_functions as general
+            if script_test:
+                general.test_flag = 'test'
+            import pyqtgraph as pg
+            import atomize.device_modules.Keysight_2000_Xseries as key
+
+            scope = key.Keysight_2000_Xseries()
+            scope.oscilloscope_timeout('5 s')
+            test_mode = scope.test_flag == 'test'
+            state = dict(settings)
+            setters = {
+                'window_us': lambda v: scope.oscilloscope_timebase(f'{float(v)} us'),
+                'trigger_pos_us': lambda v: scope.oscilloscope_horizontal_offset(f"{float(state['window_us']) / 2 - float(v)} us"),
+                'trigger_source': lambda v: scope.oscilloscope_trigger_channel(v),
+            }
+            def source():
+                answer = str(scope.oscilloscope_trigger_channel()).strip().upper()
+                return {'CHAN1': 'CH1', 'CHAN2': 'CH2', 'CHAN3': 'CH3', 'CHAN4': 'CH4'}.get(answer, 'Ext' if answer.startswith('EXT') else answer)
+
+            getters = {
+                'window_us': lambda: pg.siEval(scope.oscilloscope_timebase()) * 1e6,
+                'trigger_pos_us': lambda: getters['window_us']() / 2 - pg.siEval(scope.oscilloscope_horizontal_offset()) * 1e6,
+                'trigger_source': source,
+            }
+            linked = {'window_us': ('trigger_pos_us', )}
+            for channel in ('CH1', 'CH2', 'CH3', 'CH4'):
+                scale, offset = f'{channel.lower()}_scale_mv', f'{channel.lower()}_offset_mv'
+                setters[scale] = lambda v, ch = channel: scope.oscilloscope_sensitivity(ch, f'{int(v)} mV')
+                setters[offset] = lambda v, ch = channel: scope.oscilloscope_offset(ch, f'{int(v)} mV')
+                getters[scale] = lambda ch = channel: pg.siEval(scope.oscilloscope_sensitivity(ch)) * 1e3
+                getters[offset] = lambda ch = channel: pg.siEval(scope.oscilloscope_offset(ch)) * 1e3
+                linked[scale] = (offset, )
+
+            if script_test:
+                for name, setter in setters.items():
+                    setter(settings[name])
+                scope.oscilloscope_number_of_averages(int(settings['live_averages']))
+                conn.send( ('test', 'scope settings ok') )
+                return
+
+            def read(names):
+                # in Tuning the scope triggers on CH1; keep the TR trigger source
+                values = {name: getters[name]() for name in names if not (tuning and name == 'trigger_source')}
+                state.update(values)
+                conn.send( ('Settings', values) )
+
+            tuning = str(scope.oscilloscope_query(':TIMebase:MODE?')).strip().upper().startswith('XY')
+            read(getters)
+            conn.send( ('Mode', 'Tuning' if tuning else 'TR EPR') )
+
+            live = False
+            averages_set = False
+            losses = 0
+
+            def handle(command):
+                nonlocal live, averages_set, losses, tuning
+                if command == 'exit':
+                    return False
+                kind = command[0]
+                if kind == 'SET':
+                    name, value = command[1], command[2]
+                    state[name] = value
+                    if name == 'trigger_source' and tuning:
+                        conn.send( ('Settings', {name: value}) )
+                    elif name in setters:
+                        setters[name](value)
+                        read((name, *linked.get(name, ())))
+                    else:
+                        averages_set = False
+                        conn.send( ('Settings', {name: value}) )
+                elif kind == 'READ':
+                    read(getters)
+                elif kind == 'LIVE':
+                    live = bool(command[1])
+                    averages_set = False
+                    losses = 0
+                elif kind == 'MODE':
+                    tuning = command[1] == 'Tuning'
+                    if tuning:
+                        live = False
+                        conn.send( ('Live', 0) )
+                        scope.oscilloscope_trigger_channel('CH1')
+                        scope.oscilloscope_acquisition_type('Normal')
+                        scope.oscilloscope_command(':TIMebase:MODE XY')
+                        scope.oscilloscope_run()
+                    else:
+                        scope.oscilloscope_command(':TIMebase:MODE MAIN')
+                        scope.oscilloscope_trigger_channel(state['trigger_source'])
+                        scope.oscilloscope_acquisition_type('Average')
+                        averages_set = False
+                        read(getters)
+                elif kind == 'RUN':
+                    scope.oscilloscope_run()
+                elif kind == 'STOP':
+                    scope.oscilloscope_stop()
+                return True
+
+            while True:
+                if not live:
+                    if conn.poll(0.2) and not handle(conn.recv()):
+                        break
+                    continue
+
+                if conn.poll():
+                    if not handle(conn.recv()):
+                        break
+                    continue
+
+                if not averages_set:
+                    scope.oscilloscope_number_of_averages(int(state['live_averages']))
+                    averages_set = True
+                _arm(scope)
+                result = _wait_armed([scope], conn, float(state['trigger_timeout_s']))
+                if result == 'exit':
+                    break
+                if isinstance(result, tuple) and result[0] == 'command':
+                    _abort(scope)
+                    if not handle(result[1]):
+                        break
+                    continue
+                if isinstance(result, tuple):
+                    losses += 1
+                    conn.send( ('Message', f'scope: {result[2]}') )
+                    if losses >= 3:
+                        live = False
+                        conn.send( ('Live', 0) )
+                        conn.send( ('Message', 'scope: live stopped after three trigger losses') )
+                    else:
+                        conn.poll(1.0)
+                    continue
+
+                losses = 0
+                if test_mode:
+                    time.sleep(0.2)
+                y = scope.oscilloscope_get_curve('CH4')
+                preamble = scope.oscilloscope_preamble('CH4')
+                t = preamble[5] + np.arange(len(y)) * preamble[4]
+                general.plot_1d('TR Live', t, y, xname = 'Time', xscale = 's', yname = 'Signal', yscale = 'V', label = 'Scope CH4')
+
+            closing = True
+
+        except SystemExit:
+            pass
+        except BaseException as e:
+            exc_info = f"{type(e)} \n{str(e)} \n{traceback.format_exc()}"
+            conn.send( ('Error', exc_info) )
+        finally:
+            if scope is not None:
+                try:
+                    # a scope left in Tuning keeps running for the resonator tuning
+                    if not tuning:
+                        scope.oscilloscope_stop()
+                    scope.close_connection()
+                except Exception:
+                    pass
+            if closing:
+                conn.send( ('', 'scope session closed') )
 
     def exp_on(self, conn, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12):
         """
@@ -838,6 +1482,8 @@ class Worker():
             process = 'None'
             ls335 = ls.Lakeshore_335()
             a2012 = key.Keysight_2000_Xseries()
+            a2012.oscilloscope_timeout('5 s')
+            a2012.oscilloscope_command(':TIMebase:MODE MAIN')
             #bh15 = itc.BH_15()
             bh15 = itc.ITC_FC()
 
@@ -877,12 +1523,7 @@ class Worker():
 
             #bh15.magnet_setup( 100, FIELD_STEP)
 
-            if p9 == 1:
-                data = np.zeros( (2, real_length, points + 1) )
-            elif p9 == 2:
-                data = np.zeros( (2, real_length, points + 1) )
-            else:
-                data = np.zeros( (4, real_length, points + 1) )
+            data = np.zeros( (2, real_length, points + 1) )
 
             # row 0 of the saved matrix is the off-resonance trace; the axis
             # labels the sweep rows that follow it, from START_FIELD up
@@ -913,13 +1554,6 @@ class Worker():
 
             # the derived files follow whatever format the chosen name carries
             base_name, ext = os.path.splitext(file_save_1)
-
-            if p9 == 1:
-                pass
-            elif p9 == 2:
-                pass
-            elif p9 == 3:
-                file_save_3 = f"{base_name}_pulse{ext}"
 
             # the idea of automatic and dynamic changing is
             # sending a new value of repetition rate via self.command
@@ -985,33 +1619,6 @@ class Worker():
 
                     file_handler.save_header(file_save_1, header = header, mode = 'w')
 
-                elif p9 == 3:
-
-                    now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
-                    temp_end = str( ls335.tc_temperature('A') )
-
-                    header = (
-                        f"{'Date:':<{w}} {now}\n"
-                        f"{'Experiment:':<{w}} Time Resolved EPR Spectrum\n"
-                        f"{'Start Field:':<{w}} {START_FIELD} G\n"
-                        f"{'End Field:':<{w}} {END_FIELD} G\n"
-                        f"{'Field Step:':<{w}} {FIELD_STEP} G\n"
-                        f"{'Off-Resonance Field:':<{w}} {OFFRES_FIELD} G\n"
-                        f"{'Off-Resonance Averages:':<{w}} {p6}\n"
-                        f"{'Number of Averages:':<{w}} {p8}\n"
-                        f"{'Number of Scans:':<{w}} {SCANS}\n"
-                        f"{'Temp Start Exp:':<{w}} {temp_start} K\n"
-                        f"{'Temp End Exp:':<{w}} {temp_end} K\n"
-                        f"{'Temperature Cernox:':<{w}} {ls335.tc_temperature('B')} K\n"
-                        f"{'Record Length:':<{w}} {real_length} Points\n"
-                        f"{'Time Resolution:':<{w}} {t_res}\n"
-                        f"{'-'*50}\n"
-                        f"2D Data"
-                    )
-
-                    file_handler.save_header(file_save_1, header = header, mode = 'w')
-                    file_handler.save_header(file_save_3, header = header, mode = 'w')
-
                 while j <= SCANS:
                     if self.command == 'exit':
                         break
@@ -1023,7 +1630,8 @@ class Worker():
 
                     a2012.oscilloscope_number_of_averages(p6)
 
-                    a2012.oscilloscope_start_acquisition()
+                    if not self._acquire_point([a2012], conn, OFFRES_FIELD):
+                        break
 
                     ##ch_time = np.random.randint(250, 500, 1)
                     if p9 == 1:
@@ -1039,17 +1647,6 @@ class Worker():
                         data[0, :, 0] = ( data[0, :, 0] * (j - 1) + y ) / j
                         data[1, :, 0] = ( data[0, :, 0] - data[0, :, 0] )
                         data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
-
-                    elif p9 == 3:
-                        y = a2012.oscilloscope_get_curve('CH4')
-                        ##y = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
-                        data[0, :, 0] = ( data[0, :, 0] * (j - 1) + y ) / j
-                        data[1, :, 0] = ( data[0, :, 0] - data[0, :, 0] )
-                        data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
-
-                        y3 = a2012.oscilloscope_get_curve('CH2')
-                        ##y3 = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
-                        data[2, :, 0] = ( data[2, :, 0] * (j - 1) + y3 ) / j
 
                     #while field < START_FIELD:
                     #    field = bh15.magnet_field( field + initialization_step)
@@ -1077,8 +1674,8 @@ class Worker():
 
                         general.wait('80 ms')
 
-                        a2012.oscilloscope_start_acquisition()
-                        a2012.oscilloscope_wait_acquisition()
+                        if not self._acquire_point([a2012], conn, field):
+                            break
 
                         field_next = round( (FIELD_STEP + field), 3 )
                         bh15.magnet_field(field_next)
@@ -1100,17 +1697,6 @@ class Worker():
                             data[0, :, i+1] = ( data[0, :, i+1] * (j - 1) + y ) / j
                             data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
                             data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
-
-                        elif p9 == 3:
-                            y = a2012.oscilloscope_get_curve('CH4')
-                            ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
-                            y3 = a2012.oscilloscope_get_curve('CH2')
-                            ##y3 = 1 + 100*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
-
-                            data[0, :, i+1] = ( data[0, :, i+1] * (j - 1) + y ) / j
-                            data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
-                            data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
-                            data[3, :, i+1] = ( data[3, :, i+1] * (j - 1) + y3 ) / j
 
                         #start_time = time.time()
 
@@ -1151,8 +1737,8 @@ class Worker():
                             i -= 1
                             general.wait('80 ms')
 
-                            a2012.oscilloscope_start_acquisition()
-                            a2012.oscilloscope_wait_acquisition()
+                            if not self._acquire_point([a2012], conn, field):
+                                break
 
                             if i > 0:
                                 field_next = round( (-FIELD_STEP + field), 3 )
@@ -1176,17 +1762,6 @@ class Worker():
                                 data[0, :, i+1] = ( data[0, :, i+1] * j + y ) / ( j + 1 )
                                 data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
                                 data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
-
-                            elif p9 == 3:
-                                y = a2012.oscilloscope_get_curve('CH4')
-                                ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
-                                y3 = a2012.oscilloscope_get_curve('CH2')
-                                ##y3 = 1 + 100*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
-
-                                data[0, :, i+1] = ( data[0, :, i+1] * j + y ) / ( j + 1 )
-                                data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
-                                data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
-                                data[3, :, i+1] = ( data[3, :, i+1] * j + y3 ) / ( j + 1 )
 
                             #start_time = time.time()
                             conn.send( ('Status', int( 100 * (( j ) * points - i + points) / points / SCANS / 2)) )
@@ -1287,32 +1862,6 @@ class Worker():
                     )
 
                     file_handler.save_data(file_save_1, np.transpose( data[0, :, :] ), header = header, axes = axes_2d, axes_units = axes_units_2d)
-                elif p9 == 3:
-
-                    now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
-                    temp_end = str( ls335.tc_temperature('A') )
-
-                    header = (
-                        f"{'Date:':<{w}} {now}\n"
-                        f"{'Experiment:':<{w}} Time Resolved EPR Spectrum\n"
-                        f"{'Start Field:':<{w}} {START_FIELD} G\n"
-                        f"{'End Field:':<{w}} {END_FIELD} G\n"
-                        f"{'Field Step:':<{w}} {FIELD_STEP} G\n"
-                        f"{'Off-Resonance Field:':<{w}} {OFFRES_FIELD} G\n"
-                        f"{'Off-Resonance Averages:':<{w}} {p6}\n"
-                        f"{'Number of Averages:':<{w}} {p8}\n"
-                        f"{'Number of Scans:':<{w}} {SCANS}\n"
-                        f"{'Temperature Start Exp:':<{w}} {temp_start} K\n"
-                        f"{'Temperature End Exp:':<{w}} {temp_end} K\n"
-                        f"{'Temperature Cernox:':<{w}} {ls335.tc_temperature('B')} K\n"
-                        f"{'Record Length:':<{w}} {real_length} Points\n"
-                        f"{'Time Resolution:':<{w}} {t_res}\n"
-                        f"{'-'*50}\n"
-                        f"2D Data"
-                    )
-
-                    file_handler.save_data(file_save_1, np.transpose( data[0, :, :] ), header = header, axes = axes_2d, axes_units = axes_units_2d)
-                    file_handler.save_data(file_save_3, np.transpose( data[3, :, :] ), header = header, axes = axes_2d, axes_units = axes_units_2d)
 
                 #while field > OFFRES_FIELD:
                 #    field = bh15.magnet_field( field - initialization_step)
@@ -1359,6 +1908,8 @@ class Worker():
             process = 'None'
             ls335 = ls.Lakeshore_335()
             a2012 = key.Keysight_2000_Xseries()
+            a2012.oscilloscope_timeout('5 s')
+            a2012.oscilloscope_command(':TIMebase:MODE MAIN')
             #bh15 = itc.BH_15()
             bh15 = itc.ITC_FC()
 
@@ -1391,12 +1942,7 @@ class Worker():
 
             #bh15.magnet_setup( 100, FIELD_STEP)
 
-            if p9 == 1:
-                data = np.zeros( (2, real_length, points + 1) )
-            elif p9 == 2:
-                data = np.zeros( (2, real_length, points + 1) )
-            else:
-                data = np.zeros( (4, real_length, points + 1) )
+            data = np.zeros( (2, real_length, points + 1) )
 
             temp_start = str( ls335.tc_temperature('A') )
 
@@ -1489,33 +2035,6 @@ class Worker():
 
                     #file_handler.save_header(file_save_1, header = header, mode = 'w')
 
-                elif p9 == 3:
-
-                    now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
-                    temp_end = str( ls335.tc_temperature('A') )
-
-                    header = (
-                        f"{'Date:':<{w}} {now}\n"
-                        f"{'Experiment:':<{w}} Time Resolved EPR Spectrum\n"
-                        f"{'Start Field:':<{w}} {START_FIELD} G\n"
-                        f"{'End Field:':<{w}} {END_FIELD} G\n"
-                        f"{'Field Step:':<{w}} {FIELD_STEP} G\n"
-                        f"{'Off-Resonance Field:':<{w}} {OFFRES_FIELD} G\n"
-                        f"{'Off-Resonance Averages:':<{w}} {p6}\n"
-                        f"{'Number of Averages:':<{w}} {p8}\n"
-                        f"{'Number of Scans:':<{w}} {SCANS}\n"
-                        f"{'Temp Start Exp:':<{w}} {temp_start} K\n"
-                        f"{'Temp End Exp:':<{w}} {temp_end} K\n"
-                        f"{'Temperature Cernox:':<{w}} {ls335.tc_temperature('B')} K\n"
-                        f"{'Record Length:':<{w}} {real_length} Points\n"
-                        f"{'Time Resolution:':<{w}} {t_res}\n"
-                        f"{'-'*50}\n"
-                        f"2D Data"
-                    )
-
-                    #file_handler.save_header(file_save_1, header = header, mode = 'w')
-                    #file_handler.save_header(file_save_3, header = header, mode = 'w')
-
                 for j in general.scans(SCANS):
                     if self.command == 'exit':
                         break
@@ -1527,7 +2046,8 @@ class Worker():
 
                     a2012.oscilloscope_number_of_averages(p6)
 
-                    a2012.oscilloscope_start_acquisition()
+                    if not self._acquire_point([a2012], conn, OFFRES_FIELD):
+                        break
 
                     ##ch_time = np.random.randint(250, 500, 1)
                     if p9 == 1:
@@ -1543,17 +2063,6 @@ class Worker():
                         data[0, :, 0] = ( data[0, :, 0] * (j - 1) + y ) / j
                         data[1, :, 0] = ( data[0, :, 0] - data[0, :, 0] )
                         data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
-
-                    elif p9 == 3:
-                        y = a2012.oscilloscope_get_curve('CH4')
-                        ##y = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
-                        data[0, :, 0] = ( data[0, :, 0] * (j - 1) + y ) / j
-                        data[1, :, 0] = ( data[0, :, 0] - data[0, :, 0] )
-                        data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
-
-                        y3 = a2012.oscilloscope_get_curve('CH2')
-                        ##y3 = 1 + 10*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
-                        data[2, :, 0] = ( data[2, :, 0] * (j - 1) + y3 ) / j
 
                     #while field < START_FIELD:
                     #    field = bh15.magnet_field( field + initialization_step)
@@ -1581,8 +2090,8 @@ class Worker():
 
                         general.wait('80 ms')
 
-                        a2012.oscilloscope_start_acquisition()
-                        a2012.oscilloscope_wait_acquisition()
+                        if not self._acquire_point([a2012], conn, field):
+                            break
 
                         field_next = round( (FIELD_STEP + field), 3 )
                         bh15.magnet_field(field_next)
@@ -1604,17 +2113,6 @@ class Worker():
                             data[0, :, i+1] = ( data[0, :, i+1] * (j - 1) + y ) / j
                             data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
                             data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
-
-                        elif p9 == 3:
-                            y = a2012.oscilloscope_get_curve('CH4')
-                            ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
-                            y3 = a2012.oscilloscope_get_curve('CH2')
-                            ##y3 = 1 + 100*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
-
-                            data[0, :, i+1] = ( data[0, :, i+1] * (j - 1) + y ) / j
-                            data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
-                            data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
-                            data[3, :, i+1] = ( data[3, :, i+1] * (j - 1) + y3 ) / j
 
                         #start_time = time.time()
 
@@ -1655,8 +2153,8 @@ class Worker():
                             i -= 1
                             general.wait('80 ms')
 
-                            a2012.oscilloscope_start_acquisition()
-                            a2012.oscilloscope_wait_acquisition()
+                            if not self._acquire_point([a2012], conn, field):
+                                break
 
                             if i > 0:
                                 field_next = round( (-FIELD_STEP + field), 3 )
@@ -1680,17 +2178,6 @@ class Worker():
                                 data[0, :, i+1] = ( data[0, :, i+1] * j + y ) / ( j + 1 )
                                 data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
                                 data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
-
-                            elif p9 == 3:
-                                y = a2012.oscilloscope_get_curve('CH4')
-                                ##y = 1 + 100*np.exp(-axis_x/ch_time) + 7*np.random.normal(size = (4000))
-                                y3 = a2012.oscilloscope_get_curve('CH2')
-                                ##y3 = 1 + 100*np.exp(-axis_x/ch_time) + 50*np.random.normal(size = (4000))
-
-                                data[0, :, i+1] = ( data[0, :, i+1] * j + y ) / ( j + 1 )
-                                data[1, :, i+1] = ( data[0, :, i+1] - data[0, :, 0] )
-                                data[1, :, :] = ( data[1, :, :] - data[1, 0, :] )
-                                data[3, :, i+1] = ( data[3, :, i+1] * j + y3 ) / ( j + 1 )
 
                             #start_time = time.time()
                             #conn.send( ('Status', int( 100 * (( j ) * points - i + points) / points / SCANS / 2)) )
@@ -1785,32 +2272,6 @@ class Worker():
                     )
 
                     #file_handler.save_data(file_save_1, np.transpose( data[0, :, :] ), header = header)
-                elif p9 == 3:
-
-                    now = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
-                    temp_end = str( ls335.tc_temperature('A') )
-
-                    header = (
-                        f"{'Date:':<{w}} {now}\n"
-                        f"{'Experiment:':<{w}} Time Resolved EPR Spectrum\n"
-                        f"{'Start Field:':<{w}} {START_FIELD} G\n"
-                        f"{'End Field:':<{w}} {END_FIELD} G\n"
-                        f"{'Field Step:':<{w}} {FIELD_STEP} G\n"
-                        f"{'Off-Resonance Field:':<{w}} {OFFRES_FIELD} G\n"
-                        f"{'Off-Resonance Averages:':<{w}} {p6}\n"
-                        f"{'Number of Averages:':<{w}} {p8}\n"
-                        f"{'Number of Scans:':<{w}} {SCANS}\n"
-                        f"{'Temperature Start Exp:':<{w}} {temp_start} K\n"
-                        f"{'Temperature End Exp:':<{w}} {temp_end} K\n"
-                        f"{'Temperature Cernox:':<{w}} {ls335.tc_temperature('B')} K\n"
-                        f"{'Record Length:':<{w}} {real_length} Points\n"
-                        f"{'Time Resolution:':<{w}} {t_res}\n"
-                        f"{'-'*50}\n"
-                        f"2D Data"
-                    )
-
-                    #file_handler.save_data(file_save_1, np.transpose( data[0, :, :] ), header = header)
-                    #file_handler.save_data(file_save_3, np.transpose( data[3, :, :] ), header = header)
 
                 #while field > OFFRES_FIELD:
                 #    field = bh15.magnet_field( field - initialization_step)

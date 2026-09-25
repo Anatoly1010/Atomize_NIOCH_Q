@@ -256,8 +256,7 @@ class MainExtended(MainWindow):
         path_to_main = Path(__file__).parent
         self.path_to_main = os.path.join(path_to_main, '..', '..', 'libs')
 
-        # Q-band endstation: the pulsed tools PLUS CW / TR / temperature /
-        # oscilloscope control windows (the Q-band machine has these too).
+        # Q-band endstation: the pulsed tools PLUS CW / TR / temperature control windows.
         self.process_field = QtCore.QProcess(self)
         self.process_mw = QtCore.QProcess(self)
         self.process_tune_preset = QtCore.QProcess(self)
@@ -272,14 +271,13 @@ class MainExtended(MainWindow):
         self.process_cw = QtCore.QProcess(self)
         self.process_tr = QtCore.QProcess(self)
         self.process_temp = QtCore.QProcess(self)
-        self.process_osc = QtCore.QProcess(self)
 
         self.all_processes = [
             self.process_field, self.process_mw, self.process_tune_preset,
             self.process_phasing, self.process_awg_phasing, self.process_sequence_calc,
             self.process_excitation, self.process_treatment, self.process_treatment_2d,
             self.process_deer, self.process_spin_sim,
-            self.process_cw, self.process_tr, self.process_temp, self.process_osc
+            self.process_cw, self.process_tr, self.process_temp
         ]
 
         for process in self.all_processes:
@@ -438,7 +436,6 @@ class MainExtended(MainWindow):
             ]),
             ('Instrument controls', [
                 ('Pulsed MW Bridge', self.start_mw_control, 'mw'),
-                ('Oscilloscope', self.start_osc_control, 'osc20'),
                 ('Set Temperature', self.start_temp_control, 'temp'),
                 ('Set Magnetic Field', self.start_field_control, 'field'),
             ]),
@@ -499,7 +496,7 @@ class MainExtended(MainWindow):
             self.process_phasing, self.process_awg_phasing, self.process_sequence_calc,
             self.process_excitation, self.process_treatment, self.process_treatment_2d,
             self.process_deer, self.process_spin_sim,
-            self.process_cw, self.process_tr, self.process_temp, self.process_osc
+            self.process_cw, self.process_tr, self.process_temp
         ]
 
         active_processes = []
@@ -750,13 +747,6 @@ class MainExtended(MainWindow):
         """
         self.process_temp.setArguments([os.path.join('..','atomize/control_center/temp_control.py')])
         self.process_temp.start()
-
-    def start_osc_control(self):
-        """
-        A function to run the oscilloscope control window.
-        """
-        self.process_osc.setArguments([os.path.join('..','atomize/control_center/osc_control.py')])
-        self.process_osc.start()
 
 def main():
     """

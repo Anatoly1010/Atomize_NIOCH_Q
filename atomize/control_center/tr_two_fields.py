@@ -24,11 +24,9 @@ def acquire(worker, conn, general, saver, magnet, scopes, temperature,
     axes = [field_axis(*region) for region in ranges]
     if ranges[0][1] >= start:
         raise ValueError('Half-field range must be below the main-field range.')
-    data = [[np.zeros((4 if num_osc == 3 and scope == 0 else 2, length, len(axis) + 1))
-             for scope, length in enumerate(lengths)] for axis in axes]
+    data = [[np.zeros((2, length, len(axis) + 1)) for length in lengths] for axis in axes]
     counts = [np.zeros(len(axis), dtype=int) for axis in axes]
-    background = [np.zeros((2 if num_osc == 3 and scope == 0 else 1, length))
-                  for scope, length in enumerate(lengths)]
+    background = [np.zeros((1, length)) for length in lengths]
     field = 100.0
     completed = 0
     measured = 0
@@ -43,17 +41,19 @@ def acquire(worker, conn, general, saver, magnet, scopes, temperature,
     class Cancelled(Exception):
         pass
 
-    def poll():
+    def handle(command):
         nonlocal scans
+        if command == 'exit':
+            worker.command = 'exit'
+            raise Cancelled()
+        if command.startswith('SC') and not test_mode:
+            scans = max(int(command[2:]), completed + 1)
+
+    def poll():
         if worker.command == 'exit':
             raise Cancelled()
         while conn.poll():
-            command = conn.recv()
-            if command == 'exit':
-                worker.command = 'exit'
-                raise Cancelled()
-            if command.startswith('SC') and not test_mode:
-                scans = max(int(command[2:]), completed + 1)
+            handle(conn.recv())
 
     def wait(milliseconds):
         while milliseconds > 0:
@@ -70,12 +70,9 @@ def acquire(worker, conn, general, saver, magnet, scopes, temperature,
         magnet.magnet_field(target)
 
     def traces():
-        for scope in scopes:
-            scope.oscilloscope_start_acquisition()
-        result = [[scope.oscilloscope_get_curve('CH4')] for scope in scopes]
-        if num_osc == 3:
-            result[0].append(scopes[0].oscilloscope_get_curve('CH2'))
-        return result
+        if not worker._acquire_point(scopes, conn, field, on_command=handle):
+            raise Cancelled()
+        return [[scope.oscilloscope_get_curve('CH4')] for scope in scopes]
 
     def header(region, scope, number):
         start_field, end_field, field_step = ranges[region]
@@ -109,8 +106,6 @@ def acquire(worker, conn, general, saver, magnet, scopes, temperature,
         for region, blocks in enumerate(data):
             for scope, block in enumerate(blocks):
                 channels = [(0, '_osc2' if scope else '')]
-                if num_osc == 3 and scope == 0:
-                    channels.append((3, '_pulse'))
                 for channel, suffix in channels:
                     range_suffix = '_half' if region == 0 else ''
                     scan_suffix = f'_{snapshot}_scans' if snapshot and snapshot > 1 and not hdf5 else ''
@@ -166,8 +161,6 @@ def acquire(worker, conn, general, saver, magnet, scopes, temperature,
             for region, axis in enumerate(axes):
                 for scope, block in enumerate(data[region]):
                     block[0, :, 0] = background[scope][0]
-                    if num_osc == 3 and scope == 0:
-                        block[3, :, 0] = background[scope][1]
                 ramp(axis[0])
                 wait(4000)
                 for scope in scopes:
@@ -187,8 +180,6 @@ def acquire(worker, conn, general, saver, magnet, scopes, temperature,
                             block[0, :, index + 1] += (values[0] - block[0, :, index + 1]) / count
                             block[1, :, index + 1] = block[0, :, index + 1] - background[scope][0]
                             block[1, :, index + 1] -= block[1, 0, index + 1]
-                            if num_osc == 3 and scope == 0:
-                                block[3, :, index + 1] += (values[1] - block[3, :, index + 1]) / count
                             draw(region, scope, completed + 1)
                         counts[region][index] += 1
                         measured += 1

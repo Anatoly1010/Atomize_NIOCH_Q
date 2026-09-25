@@ -31,6 +31,8 @@ class Magnet:
 
 
 class Oscilloscope:
+    test_flag = 'test'
+
     def __init__(self, state, scale=1):
         self.state = state
         self.scale = scale
@@ -72,7 +74,7 @@ class Oscilloscope:
     def oscilloscope_run_stop(self):
         pass
 
-    def oscilloscope_start_acquisition(self):
+    def oscilloscope_command(self, command):
         pass
 
     def oscilloscope_get_curve(self, channel):
@@ -201,8 +203,8 @@ def test_stop_between_ranges_does_not_count_pair(tmp_path):
 
 @pytest.mark.parametrize('fmt', ['csv', 'h5'])
 def test_save_all_channels_and_completed_scan_snapshots(tmp_path, fmt):
-    run_pair(tmp_path, reverse=True, num_osc=3, fmt=fmt)
-    for suffix in ('', '_half', '_pulse', '_half_pulse'):
+    run_pair(tmp_path, reverse=True, fmt=fmt)
+    for suffix in ('', '_half'):
         path = tmp_path / f'pair{suffix}.{fmt}'
         rows = 6 if '_half' in suffix else 10
         if fmt == 'csv':
@@ -288,7 +290,7 @@ def test_real_gui_half_field_roundtrip(monkeypatch, tmp_path):
     assert not window.enable_half.isChecked()
     assert all(box.isHidden() for box in window.half_boxes)
     window.save_file(str(tmp_path / 'old'))
-    assert len((tmp_path / 'old.tr').read_text().splitlines()) == 11
+    assert len((tmp_path / 'old.tr').read_text().splitlines()) == 10 + len(window.scope_tab.FIELDS)
     window.enable_half.setChecked(True)
     for box, value in zip(window.half_boxes, (110, 112, 0.5)):
         box.setValue(value)

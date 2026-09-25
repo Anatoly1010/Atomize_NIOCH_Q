@@ -87,7 +87,7 @@ There is no unit-test suite; the project's pre-flight check is **test mode**.
 
 The GUI is **one Qt process that spawns many `QProcess` children**, not a monolithic event loop:
 
-- `atomize/main/main.py:MainExtended` extends the upstream `MainWindow` with a third tab. Each control-center button (`start_rect_phasing`, `start_awg_phasing`, `start_sequence_calculator`, `start_excitation_profile`, `start_tune_preset`, `start_mw_control`, `start_treatment_control`, `start_treatment_2d_control`, `start_deer_analysis`, `start_spin_sim`, `start_field_control`, `start_cw_control`, `start_tr_control`, `start_temp_control`, `start_osc_control`) launches a script under `atomize/control_center/` via its own `QProcess`.
+- `atomize/main/main.py:MainExtended` extends the upstream `MainWindow` with a third tab. Each control-center button (`start_rect_phasing`, `start_awg_phasing`, `start_sequence_calculator`, `start_excitation_profile`, `start_tune_preset`, `start_mw_control`, `start_treatment_control`, `start_treatment_2d_control`, `start_deer_analysis`, `start_spin_sim`, `start_field_control`, `start_cw_control`, `start_tr_control`, `start_temp_control`) launches a script under `atomize/control_center/` via its own `QProcess`.
 - `start_experiment` spawns the user's experimental script in `self.process_python`.
 - Children communicate **upward** by writing `print "..."` to stdout; the parent's `handle_output*` parses lines prefixed with `print `, `before `, `closing ` or `ret = 0` and routes them to the in-app log.
 - The parent communicates **downward** by writing to the child's stdin when the child prints `create_file_dialog` / `open_file_dialog` — this is how scripts trigger native file pickers.
