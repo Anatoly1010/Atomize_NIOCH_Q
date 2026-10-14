@@ -8,7 +8,8 @@ from math import exp, sqrt
 import datetime
 from threading import Thread
 from PyQt6 import QtWidgets, uic #, QtCore, QtGui
-from PyQt6.QtWidgets import QWidget 
+from PyQt6.QtWidgets import QWidget
+from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QIcon
 import atomize.general_modules.general_functions as general
 import atomize.device_modules.Micran_Q_band_MW_bridge as mwBridge
@@ -52,6 +53,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.label_7.setStyleSheet(REFINED_STYLES['LABEL_STYLE'])
         self.label_8.setStyleSheet(REFINED_STYLES['LABEL_STYLE'])
         self.label_9.setStyleSheet(REFINED_STYLES['LABEL_STYLE'])
+
+        self.label_timer = QTimer(self)
+        self.label_timer.setSingleShot(True)
+        self.label_timer.timeout.connect(lambda: self.label_9.setStyleSheet(REFINED_STYLES['LABEL_STYLE']))
 
         self.telemetry_text.setStyleSheet(REFINED_STYLES['COMPACT_TEXT_STYLE']) # rgb(193, 202, 227)
         
@@ -181,10 +186,11 @@ class MainWindow(QtWidgets.QMainWindow):
         answer = 'Frequency: ' + str( answer_raw ) + ' MHz'
         self.telemetry_text.appendPlainText( str(answer) )
 
-    def pause_and_label(self, time):
+    def show_vane_moving(self, ms):
+        # painted here because the window is busy waiting for the bridge reply while the vane turns
         self.label_9.setStyleSheet("QLabel { color : rgb(255, 0, 0); font-weight: bold; }")
-        general.wait( time )
-        self.label_9.setStyleSheet(REFINED_STYLES['LABEL_STYLE'])
+        self.label_9.repaint()
+        self.label_timer.start(int(ms))
     
     def pause_and_label_exit(self, time):
         general.wait( time )
@@ -208,7 +214,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # 60 is a manual calibration
         time_to_wait = abs( 60 * step )
 
-        self.p1 = Thread(target = self.pause_and_label, args = (str(time_to_wait) + ' ms', ) )
+        self.show_vane_moving(time_to_wait)
+        self.p1 = Thread(target = self.pause_and_label_exit, args = (str(time_to_wait) + ' ms', ) )
         self.p1.start()
         
         answer = self.mw.mw_bridge_rotary_vane( )
@@ -237,7 +244,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # Rotary vane to 60 dB
         self.mw.mw_bridge_rotary_vane(60, mode = 'Limit')
 
-        self.p1 = Thread(target = self.pause_and_label, args = ( '5 s', ) )
+        self.show_vane_moving(5000)
+        self.p1 = Thread(target = self.pause_and_label_exit, args = ( '5 s', ) )
         self.p1.start()
             
         self.curr_dB = 60
